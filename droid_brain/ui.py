@@ -54,7 +54,16 @@ def _doc_types_tab(brain: store.Brain) -> None:
     doc_types = brain.list_doc_types()
     if doc_types:
         st.dataframe(
-            [{"doc_type": dt["name"], "boost": dt["boost"], "entities": dt["entities"], "description": dt["description"]} for dt in doc_types],
+            [
+                {
+                    "doc_type": dt["name"],
+                    "boost": dt["boost"],
+                    "entities": dt["entities"],
+                    "description": dt["description"],
+                    "schema fields": ", ".join(store.schema_field_paths(dt["schema"])),
+                }
+                for dt in doc_types
+            ],
             use_container_width=True,
             hide_index=True,
         )
@@ -67,10 +76,17 @@ def _doc_types_tab(brain: store.Brain) -> None:
         description = st.text_input("Description", placeholder="A production service and its operational metadata")
         boost = st.slider("Type booster", 0.1, 5.0, 1.0, 0.1,
                           help="Entities of this type are ranked boost x higher in search results")
+        schema_text = st.text_area(
+            "Schema (optional, nested JSON)",
+            placeholder='{"properties": {"team": {"type": "string"}, "spec": {"type": "object", "properties": {"replicas": {"type": "integer"}}}}, "required": ["team"]}',
+            height=120,
+            help="JSON-Schema-ish structure for this doc_type's entities. Nested objects/arrays allowed. 'required' fields are enforced when saving entities.",
+        )
         if st.form_submit_button("Create doc_type", type="primary"):
             try:
-                brain.create_doc_type(name, description=description, boost=boost)
-            except ValueError as e:
+                schema = json.loads(schema_text) if schema_text.strip() else None
+                brain.create_doc_type(name, description=description, boost=boost, schema=schema)
+            except (ValueError, json.JSONDecodeError) as e:
                 st.error(str(e))
             else:
                 st.success(f"Created doc_type '{name}'")
@@ -88,10 +104,12 @@ def _entities_tab(brain: store.Brain) -> None:
         return
 
     st.subheader("New entity")
+    doc_type = st.selectbox("doc_type", doc_types)
+    schema = (brain.get_doc_type(doc_type) or {}).get("schema")
+    template = json.dumps(store.entity_template(schema) if schema else {"description": ""}, indent=2)
     with st.form("create_entity"):
-        doc_type = st.selectbox("doc_type", doc_types)
         name = st.text_input("Entity name", placeholder="api-gateway")
-        data = st.text_area("Data (JSON object)", value='{\n  "description": ""\n}', height=140)
+        data = st.text_area("Data (JSON object)", value=template, height=180, key=f"entity-data-{doc_type}")
         if st.form_submit_button("Save entity", type="primary"):
             try:
                 parsed = json.loads(data)

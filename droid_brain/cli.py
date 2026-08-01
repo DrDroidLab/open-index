@@ -6,6 +6,7 @@
     droid-brain search acme "kafka"  # query a brain from the terminal
     droid-brain ui [acme]            # open the Streamlit UI
     droid-brain mcp [acme]           # serve the brain to any LLM over MCP (stdio)
+    droid-brain extract acme --demo  # pull entities from (fake) MCP servers into the brain
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+from typing import Any
 
 from . import store
 
@@ -46,6 +48,11 @@ def main(argv: list[str] | None = None) -> int:
     p_mcp = sub.add_parser("mcp", help="Run an MCP server (stdio) for a brain")
     p_mcp.add_argument("brain", nargs="?", help="Brain to serve (default: most recent)")
 
+    p_extract = sub.add_parser("extract", help="Extract entities from MCP servers into a brain")
+    p_extract.add_argument("brain")
+    p_extract.add_argument("config", nargs="?", help="JSON config listing sources (MCP server commands + tool specs)")
+    p_extract.add_argument("--demo", action="store_true", help="Use the bundled fake MCP servers (grafana/github/aws)")
+
     args = parser.parse_args(argv)
 
     if args.command in (None, "ui"):
@@ -59,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_search(args)
     if args.command == "mcp":
         return _cmd_mcp(args)
+    if args.command == "extract":
+        return _cmd_extract(args)
     parser.print_help()
     return 1
 
@@ -144,6 +153,35 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
+    return 0
+
+
+def _cmd_extract(args: argparse.Namespace) -> int:
+    from . import extract as extract_mod
+
+    sources: Any = extract_mod.DEMO_SOURCES if args.demo else None
+    if sources is None:
+        if not args.config:
+            print("error: pass a config.json or --demo", file=sys.stderr)
+            return 1
+        try:
+            with open(args.config) as f:
+                sources = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"error: cannot read config: {e}", file=sys.stderr)
+            return 1
+    if not isinstance(sources, list) or not all(isinstance(s, dict) for s in sources):
+        print("error: config must be a JSON list of source objects", file=sys.stderr)
+        return 1
+    try:
+        with store.open_brain(args.brain) as brain:
+            summary = extract_mod.extract(brain, sources)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    breakdown = ", ".join(f"{count} {doc_type}" for doc_type, count in sorted(summary["by_doc_type"].items()))
+    print(f"Extracted {summary['entities']} entities ({breakdown}) from {summary['sources']} MCP server(s) into '{args.brain}'")
+    print(f"Next: droid-brain search {args.brain} \"<query>\"   # or: droid-brain ui {args.brain}")
     return 0
 
 

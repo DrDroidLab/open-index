@@ -51,14 +51,14 @@ class StoreTestCase(unittest.TestCase):
 
     def test_upsert_get_update_delete_entity(self):
         with self._seeded() as brain:
-            eid = brain.upsert_entity("service", "  orders-api  ", {"team": "ops"})
+            eid = brain.upsert_entity("service", "  orders-api  ", {"description": "Orders API", "team": "ops"})
             entity = brain.get_entity("service", "orders-api")  # name stripped
             self.assertEqual(entity["id"], eid)
-            self.assertEqual(entity["data"], {"team": "ops"})
+            self.assertEqual(entity["data"], {"description": "Orders API", "team": "ops"})
 
-            eid2 = brain.upsert_entity("service", "orders-api", {"team": "core"})
+            eid2 = brain.upsert_entity("service", "orders-api", {"description": "Orders API v2", "team": "core"})
             self.assertEqual(eid2, eid)  # same entity updated, not duplicated
-            self.assertEqual(brain.get_entity("service", "orders-api")["data"], {"team": "core"})
+            self.assertEqual(brain.get_entity("service", "orders-api")["data"], {"description": "Orders API v2", "team": "core"})
 
             hits = brain.search("orders")
             self.assertEqual(len([h for h in hits if h["name"] == "orders-api"]), 1)
@@ -75,7 +75,7 @@ class StoreTestCase(unittest.TestCase):
             with self.assertRaises(ValueError):
                 brain.upsert_entity("service", "x", ["not", "a", "dict"])
             with self.assertRaises(ValueError):
-                brain.upsert_entity("service", "x", {"bad": object()})
+                brain.upsert_entity("service", "x", {"description": "d", "team": "t", "bad": object()})
 
     def test_type_booster_ranks_boosted_type_first(self):
         with self._seeded() as brain:  # service boost=2.0, dashboard boost=1.0
@@ -108,8 +108,8 @@ class StoreTestCase(unittest.TestCase):
         with self._seeded() as brain:
             other = store.open_brain("acme")  # second connection, WAL mode
             try:
-                brain.upsert_entity("service", "svc-a", {"n": 1})
-                other.upsert_entity("service", "svc-b", {"n": 2})
+                brain.upsert_entity("service", "svc-a", {"description": "a", "team": "ops"})
+                other.upsert_entity("service", "svc-b", {"description": "b", "team": "ops"})
                 names = {e["name"] for e in brain.list_entities(doc_type="service")}
                 self.assertTrue({"svc-a", "svc-b"} <= names)
             finally:

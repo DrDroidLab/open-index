@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS doc_types (
     name TEXT PRIMARY KEY,
     description TEXT NOT NULL DEFAULT '',
     boost REAL NOT NULL DEFAULT 1.0,
+    schema_json TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS entities (
@@ -126,6 +127,48 @@ def _tokens(query: str) -> list[str]:
     return re.findall(r"[\w.-]+", query)
 
 
+def schema_field_paths(schema: dict[str, Any] | None, prefix: str = "") -> list[str]:
+    """Dotted paths of a doc_type schema's fields: ['team', 'spec.replicas', ...].
+
+    Nested objects recurse via ``properties``; arrays recurse into ``items``.
+    """
+    if not isinstance(schema, dict):
+        return []
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return []
+    paths = []
+    for key, subschema in properties.items():
+        path = f"{prefix}{key}"
+        paths.append(path)
+        if isinstance(subschema, dict):
+            if subschema.get("type") == "array":
+                paths.extend(schema_field_paths(subschema.get("items"), f"{path}[]."))
+            else:
+                paths.extend(schema_field_paths(subschema, f"{path}."))
+    return paths
+
+
+def entity_template(schema: dict[str, Any] | None) -> dict[str, Any]:
+    """Skeleton entity data built from a doc_type schema (empty values per type)."""
+    template: dict[str, Any] = {}
+    for key, subschema in (schema or {}).get("properties", {}).items():
+        field_type = (subschema or {}).get("type") if isinstance(subschema, dict) else None
+        if field_type == "object":
+            template[key] = entity_template(subschema)
+        elif field_type == "array":
+            template[key] = []
+        elif field_type in ("number", "integer"):
+            template[key] = 0
+        elif field_type == "boolean":
+            template[key] = False
+        elif field_type == "string" or field_type is None:
+            template[key] = ""
+        else:
+            template[key] = None
+    return template
+
+
 def _fts_query(user_query: str) -> str:
     """Build a safe FTS5 MATCH expression: ANDed prefix-quoted tokens."""
     return " ".join(f'"{t}"*' for t in _tokens(user_query))
@@ -145,7 +188,14 @@ class Brain:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(_SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Bring brains created by older versions up to date."""
+        columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(doc_types)")}
+        if "schema_json" not in columns:
+            self.conn.execute("ALTER TABLE doc_types ADD COLUMN schema_json TEXT NOT NULL DEFAULT ''")
 
     def close(self) -> None:
         self.conn.close()
@@ -172,27 +222,53 @@ class Brain:
 
     # ---- doc types ----
 
-    def create_doc_type(self, name: str, description: str = "", boost: float = 1.0) -> None:
+    def create_doc_type(
+        self,
+        name: str,
+        description: str = "",
+        boost: float = 1.0,
+        schema: dict[str, Any] | None = None,
+    ) -> None:
+        """Create a doc_type. ``schema`` is an optional nested JSON object
+        (conventionally JSON-Schema-ish: ``{"properties": {...}, "required": [...]}``)
+        describing the structure of its entities."""
         _validate_name("doc_type", name)
         if boost <= 0:
             raise ValueError("boost must be > 0")
+        if schema is not None and not isinstance(schema, dict):
+            raise ValueError("schema must be a JSON object")
         try:
             self.conn.execute(
-                "INSERT INTO doc_types (name, description, boost, created_at) VALUES (?, ?, ?, ?)",
-                (name, description, float(boost), _now()),
+                "INSERT INTO doc_types (name, description, boost, schema_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (name, description, float(boost), json.dumps(schema) if schema else "", _now()),
             )
         except sqlite3.IntegrityError:
             self.conn.rollback()
             raise ValueError(f"doc_type {name!r} already exists") from None
         self.conn.commit()
 
+    def get_doc_type(self, name: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT name, description, boost, schema_json FROM doc_types WHERE name = ?", (name,)
+        ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["schema"] = json.loads(result.pop("schema_json")) if result["schema_json"] else None
+        return result
+
     def list_doc_types(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(
-            "SELECT dt.name, dt.description, dt.boost, COUNT(e.id) AS entities "
+            "SELECT dt.name, dt.description, dt.boost, dt.schema_json, COUNT(e.id) AS entities "
             "FROM doc_types dt LEFT JOIN entities e ON e.doc_type = dt.name "
             "GROUP BY dt.name ORDER BY dt.name"
         ).fetchall()
-        return [dict(r) for r in rows]
+        doc_types = []
+        for row in rows:
+            dt = dict(row)
+            dt["schema"] = json.loads(dt.pop("schema_json")) if dt["schema_json"] else None
+            doc_types.append(dt)
+        return doc_types
 
     def doc_type_exists(self, name: str) -> bool:
         return (
@@ -203,13 +279,18 @@ class Brain:
     # ---- entities ----
 
     def upsert_entity(self, doc_type: str, name: str, data: dict[str, Any]) -> int:
-        if not self.doc_type_exists(doc_type):
+        dt = self.get_doc_type(doc_type)
+        if dt is None:
             raise ValueError(f"doc_type {doc_type!r} does not exist in brain {self.name!r}")
         name = name.strip()
         if not name:
             raise ValueError("entity name cannot be empty")
         if not isinstance(data, dict):
             raise ValueError("entity data must be a JSON object")
+        required = (dt["schema"] or {}).get("required") or []
+        missing = [key for key in required if key not in data]
+        if missing:
+            raise ValueError(f"entity is missing required field(s) from the {doc_type!r} schema: {', '.join(missing)}")
         try:
             payload = json.dumps(data)
         except TypeError:
@@ -321,6 +402,7 @@ class Brain:
             lines.append(
                 f"- {dt['name']} (boost {dt['boost']:g}): {dt['entities']} entities. "
                 f"{dt['description'] or 'No description.'}"
+                + (f" Schema fields: {', '.join(schema_field_paths(dt['schema']))}." if dt["schema"] else "")
                 + (f" Examples: {examples}" if examples else "")
             )
         return "\n".join(lines)

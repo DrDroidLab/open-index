@@ -15,16 +15,51 @@ DEMO_DOC_TYPES: list[dict[str, Any]] = [
         "name": "service",
         "description": "A production service: ownership, stack and operational metadata.",
         "boost": 2.0,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "description": {"type": "string"},
+                "team": {"type": "string"},
+                "language": {"type": "string"},
+                "tier": {"type": "string"},
+                "runtime": {
+                    "type": "object",
+                    "properties": {
+                        "replicas": {"type": "integer"},
+                        "regions": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+                "dependencies": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["description", "team"],
+        },
     },
     {
         "name": "runbook",
         "description": "Operational runbook for mitigating a class of incidents.",
         "boost": 1.0,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "service": {"type": "string"},
+                "trigger": {"type": "string"},
+                "steps": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["service", "steps"],
+        },
     },
     {
         "name": "dashboard",
         "description": "A monitoring dashboard and the panels it contains.",
         "boost": 1.0,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string"},
+                "panels": {"type": "array", "items": {"type": "string"}},
+                "owner": {"type": "string"},
+            },
+        },
     },
 ]
 
@@ -114,7 +149,7 @@ def seed_demo(brain: Brain) -> dict[str, int]:
     seeded_doc_types = 0
     for dt in DEMO_DOC_TYPES:
         if not brain.doc_type_exists(dt["name"]):
-            brain.create_doc_type(dt["name"], dt["description"], dt["boost"])
+            brain.create_doc_type(dt["name"], dt["description"], dt["boost"], schema=dt.get("schema"))
             seeded_doc_types += 1
     seeded_entities = 0
     for entity in DEMO_ENTITIES:

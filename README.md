@@ -35,7 +35,7 @@ droid-brain ui acme-infra                # open it in the UI
 ```
 
 ### Creating your first doc_type
-Then you create the first few types of doc_types (from the Doc Types tab in the UI). Sample doc types:
+Then you create the first few types of doc_types (from the Doc Types tab in the UI). A doc_type can also declare its structure as a nested JSON schema (JSON-Schema-ish: `{"properties": {...}, "required": [...]}`) — nested objects and arrays are allowed, `required` fields are enforced when saving entities, and the entity form pre-fills from the schema. Sample doc types:
 - software infrastructure brain: dashboards, metrics, panels, services, products, alert_definitions, runbooks, skills, releases, etc.
 - sales brain: leads, deals, accounts, opportunities, meetings, etc.
 - lending brain: loans, borrowers, brokers, applications, etc.
@@ -48,6 +48,35 @@ You can create instances of doc_types either manually or programmatically:
 4. Through a recurring cron defined in the brain configuration
 
 Read more about this in [Entity Management](./entity-management.md)
+
+### Extracting entities from MCP servers
+Instead of creating entities by hand, you can pull them from any MCP server: the extractor calls one or more tools on each server, applies your field mapping, and upserts the results as entities (doc_types are auto-created). Try it against the bundled fake Grafana/GitHub/AWS servers:
+
+```bash
+droid-brain extract acme-infra --demo
+```
+
+Or write a config for your own MCP servers and run `droid-brain extract acme-infra config.json`:
+
+```json
+[
+  {
+    "name": "grafana",
+    "command": ["python3", "-m", "droid_brain.demo_servers", "grafana"],
+    "tools": [
+      {
+        "tool": "list_dashboards",
+        "doc_type": "dashboard",
+        "name_field": "title",
+        "fields": {"url": "url", "owner": "owner", "panels": "panels"},
+        "constants": {"source": "grafana"}
+      }
+    ]
+  }
+]
+```
+
+Per tool spec: `name_field` (dotted path to the entity name), optional `fields` remapping (dotted paths into nested results), `constants` added to every entity, `items_path` when the tool result wraps the list in an object, and `arguments` for the tool call.
 
 # Enabling your LLM/agent to use your brain:
 
