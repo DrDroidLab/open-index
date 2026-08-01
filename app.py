@@ -6,14 +6,11 @@ Run with: streamlit run app.py
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime
 
 import streamlit as st
 
 from droid_brain.core import DroidBrain
-
-OPENSEARCH_URL = os.environ.get("DROID_BRAIN_OPENSEARCH_URL", "http://localhost:9200")
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -28,7 +25,7 @@ st.set_page_config(
 # Session state init
 # ---------------------------------------------------------------------------
 if "db" not in st.session_state:
-    st.session_state.db = DroidBrain(opensearch_url=OPENSEARCH_URL)
+    st.session_state.db = DroidBrain()
 if "selected_brain" not in st.session_state:
     st.session_state.selected_brain = None
 if "refresh_counter" not in st.session_state:
@@ -420,9 +417,6 @@ with tab_mcp:
         st.code(cmd, language="bash")
 
     st.markdown("---")
-    st.markdown("### OpenSearch Index")
-    st.markdown(f"Entities are stored in the OpenSearch index `droid_brain__{brain_name}`.")
-    st.code(
-        f'curl -s "http://localhost:9200/droid_brain__{brain_name}/_search" | python3 -m json.tool | head -40',
-        language="bash",
-    )
+    st.markdown("### Storage")
+    st.markdown(f"By default, brains are stored in SQLite at `~/.droid_brain/brains.db`.")
+    st.markdown("Set `DROID_BRAIN_BACKEND=opensearch` for production OpenSearch deployments.")

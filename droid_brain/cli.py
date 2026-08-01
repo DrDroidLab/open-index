@@ -21,22 +21,12 @@ import click
 
 from droid_brain.core import DroidBrain
 
-OPENSEARCH_URL = "http://localhost:9200"
-
-
 @click.group()
-@click.option(
-    "--opensearch-url",
-    default=OPENSEARCH_URL,
-    envvar="DROID_BRAIN_OPENSEARCH_URL",
-    help="OpenSearch URL",
-)
 @click.pass_context
-def cli(ctx: click.Context, opensearch_url: str) -> None:
+def cli(ctx: click.Context) -> None:
     """Droid Brain — structured organisational knowledge for AI agents."""
     ctx.ensure_object(dict)
-    ctx.obj["opensearch_url"] = opensearch_url
-    ctx.obj["db"] = DroidBrain(opensearch_url=opensearch_url)
+    ctx.obj["db"] = DroidBrain()
 
 
 # ---------------------------------------------------------------------------
@@ -265,11 +255,8 @@ def structure(ctx: click.Context, brain: str) -> None:
 @click.option("--port", default=8000, help="Port for SSE transport")
 @click.pass_context
 def mcp_server(ctx: click.Context, transport: str, port: int) -> None:
-    """Start the MCP server for a brain."""
+    """Start the MCP server."""
     from droid_brain.mcp_server import main as mcp_main
-
-    # Capture the OpenSearch URL from the parent context
-    opensearch_url = ctx.obj.get("opensearch_url", OPENSEARCH_URL)
 
     sys.argv = [
         "mcp-server",
@@ -277,8 +264,6 @@ def mcp_server(ctx: click.Context, transport: str, port: int) -> None:
         transport,
         "--port",
         str(port),
-        "--opensearch-url",
-        opensearch_url,
     ]
     mcp_main()
 

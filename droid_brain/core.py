@@ -1,118 +1,128 @@
-"""Core DroidBrain client — wraps OpenSearch for brain/entity management."""
+"""Core DroidBrain client — SQLite backend (default, zero-setup).
+
+For OpenSearch, set DROID_BRAIN_BACKEND=opensearch and install opensearch-py.
+"""
 
 from __future__ import annotations
 
+import json
+import os
+import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
-
-from opensearchpy import OpenSearch, exceptions
 
 from droid_brain.models import Brain, BrainStructure, DocType, Entity, SchemaField
 
-META_INDEX = "droid_brain_meta"
+DEFAULT_DB_PATH = os.environ.get(
+    "DROID_BRAIN_DB_PATH",
+    str(Path.home() / ".droid_brain" / "brains.db"),
+)
 
 
 class DroidBrain:
-    """Client for creating/querying Droid Brains backed by OpenSearch."""
+    """Client for creating/querying Droid Brains backed by SQLite + FTS5."""
 
-    def __init__(self, opensearch_url: str = "http://localhost:9200"):
-        self.client = OpenSearch(opensearch_url)
-        self._ensure_meta_index()
+    def __init__(self, db_path: str | None = None):
+        self.db_path = db_path or DEFAULT_DB_PATH
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(self.db_path)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._ensure_tables()
+
+    def close(self) -> None:
+        self._conn.close()
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _ensure_meta_index(self) -> None:
-        """Create the meta index if it doesn't exist."""
-        if not self.client.indices.exists(index=META_INDEX):
-            self.client.indices.create(
-                index=META_INDEX,
-                body={
-                    "mappings": {
-                        "properties": {
-                            "brain_name": {"type": "keyword"},
-                            "record_type": {"type": "keyword"},  # "brain" | "doctype"
-                            "doc_type_name": {"type": "keyword"},
-                            "data": {"type": "object", "enabled": False},
-                        }
-                    }
-                },
-            )
+    def _ensure_tables(self) -> None:
+        self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS brains (
+                name TEXT PRIMARY KEY,
+                description TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            );
 
-    def _entity_index(self, brain_name: str) -> str:
-        """Return the index name for a brain's entities."""
-        return f"droid_brain__{brain_name}"
+            CREATE TABLE IF NOT EXISTS doctypes (
+                brain_name TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                schema_fields TEXT DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (brain_name, name),
+                FOREIGN KEY (brain_name) REFERENCES brains(name) ON DELETE CASCADE
+            );
 
-    def _ensure_entity_index(self, brain_name: str) -> None:
-        idx = self._entity_index(brain_name)
-        if not self.client.indices.exists(index=idx):
-            self.client.indices.create(
-                index=idx,
-                body={
-                    "mappings": {
-                        "properties": {
-                            "entity_id": {"type": "keyword"},
-                            "doc_type": {"type": "keyword"},
-                            "created_at": {"type": "date"},
-                            "updated_at": {"type": "date"},
-                        }
-                    }
-                },
-            )
+            CREATE TABLE IF NOT EXISTS entities (
+                entity_id TEXT PRIMARY KEY,
+                brain_name TEXT NOT NULL,
+                doc_type TEXT NOT NULL,
+                data TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (brain_name) REFERENCES brains(name) ON DELETE CASCADE
+            );
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
+                brain_name,
+                doc_type,
+                data,
+                content='entities',
+                content_rowid='rowid'
+            );
+        """)
+        # Triggers to keep FTS in sync
+        self._conn.executescript("""
+            CREATE TRIGGER IF NOT EXISTS entities_ai AFTER INSERT ON entities BEGIN
+                INSERT INTO entities_fts(rowid, brain_name, doc_type, data)
+                VALUES (new.rowid, new.brain_name, new.doc_type, new.data);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS entities_ad AFTER DELETE ON entities BEGIN
+                INSERT INTO entities_fts(entities_fts, rowid, brain_name, doc_type, data)
+                VALUES ('delete', old.rowid, old.brain_name, old.doc_type, old.data);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS entities_au AFTER UPDATE ON entities BEGIN
+                INSERT INTO entities_fts(entities_fts, rowid, brain_name, doc_type, data)
+                VALUES ('delete', old.rowid, old.brain_name, old.doc_type, old.data);
+                INSERT INTO entities_fts(rowid, brain_name, doc_type, data)
+                VALUES (new.rowid, new.brain_name, new.doc_type, new.data);
+            END;
+        """)
+        self._conn.commit()
+
+    def _now(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
 
     # ------------------------------------------------------------------
     # Brain management
     # ------------------------------------------------------------------
 
     def create_brain(self, name: str, description: str = "") -> dict:
-        """Create a new brain (logical namespace)."""
-        brain = Brain(name=name, description=description)
-        doc = {
-            "brain_name": name,
-            "record_type": "brain",
-            "data": brain.model_dump(),
-        }
-        self.client.index(index=META_INDEX, id=f"brain__{name}", body=doc, refresh=True)
-        self._ensure_entity_index(name)
-        return brain.model_dump()
+        now = self._now()
+        self._conn.execute(
+            "INSERT INTO brains (name, description, created_at) VALUES (?, ?, ?)",
+            (name, description, now),
+        )
+        self._conn.commit()
+        return {"name": name, "description": description, "created_at": now}
 
     def list_brains(self) -> list[dict]:
-        """List all brains."""
-        try:
-            res = self.client.search(
-                index=META_INDEX,
-                body={"query": {"term": {"record_type": "brain"}}},
-            )
-            return [hit["_source"]["data"] for hit in res["hits"]["hits"]]
-        except exceptions.NotFoundError:
-            return []
+        rows = self._conn.execute("SELECT * FROM brains ORDER BY created_at DESC").fetchall()
+        return [dict(r) for r in rows]
 
     def delete_brain(self, name: str) -> None:
-        """Delete a brain and all its entities."""
-        try:
-            self.client.delete(index=META_INDEX, id=f"brain__{name}", refresh=True)
-        except exceptions.NotFoundError:
+        cur = self._conn.execute("DELETE FROM brains WHERE name = ?", (name,))
+        if cur.rowcount == 0:
             raise ValueError(f"Brain '{name}' does not exist.")
-        # Delete all doctype records for this brain
-        try:
-            self.client.delete_by_query(
-                index=META_INDEX,
-                body={
-                    "query": {
-                        "bool": {
-                            "must": [
-                                {"term": {"record_type": "doctype"}},
-                                {"term": {"brain_name": name}},
-                            ]
-                        }
-                    }
-                },
-            )
-        except exceptions.NotFoundError:
-            pass
-        self.client.indices.delete(index=self._entity_index(name), ignore=[404])
+        # CASCADE deletes doctypes and entities. FTS triggers handle cleanup.
+        self._conn.commit()
 
     # ------------------------------------------------------------------
     # DocType management
@@ -125,55 +135,48 @@ class DroidBrain:
         description: str = "",
         fields: Optional[list[dict]] = None,
     ) -> dict:
-        """Define a new doc_type within a brain."""
         fields = fields or []
         schema_fields = [
             SchemaField(**f) if isinstance(f, dict) else f for f in fields
         ]
-        dt = DocType(name=name, description=description, schema_fields=schema_fields)
-        doc = {
-            "brain_name": brain_name,
-            "record_type": "doctype",
-            "doc_type_name": name,
-            "data": dt.model_dump(),
-        }
-        self.client.index(
-            index=META_INDEX,
-            id=f"doctype__{brain_name}__{name}",
-            body=doc,
-            refresh=True,
+        now = self._now()
+        dt = DocType(
+            name=name,
+            description=description,
+            schema_fields=schema_fields,
+            created_at=now,
+            updated_at=now,
         )
+        self._conn.execute(
+            "INSERT OR REPLACE INTO doctypes (brain_name, name, description, schema_fields, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (brain_name, name, description, json.dumps([f.model_dump() for f in schema_fields]), now, now),
+        )
+        self._conn.commit()
         return dt.model_dump()
 
     def get_doctype(self, brain_name: str, name: str) -> Optional[dict]:
-        """Get a single doc_type definition."""
-        try:
-            res = self.client.get(
-                index=META_INDEX, id=f"doctype__{brain_name}__{name}"
-            )
-            return res["_source"]["data"]
-        except exceptions.NotFoundError:
+        row = self._conn.execute(
+            "SELECT * FROM doctypes WHERE brain_name = ? AND name = ?",
+            (brain_name, name),
+        ).fetchone()
+        if not row:
             return None
+        d = dict(row)
+        d["schema_fields"] = json.loads(d["schema_fields"])
+        return d
 
     def list_doctypes(self, brain_name: str) -> list[dict]:
-        """List all doc_types in a brain."""
-        try:
-            res = self.client.search(
-                index=META_INDEX,
-                body={
-                    "query": {
-                        "bool": {
-                            "must": [
-                                {"term": {"record_type": "doctype"}},
-                                {"term": {"brain_name": brain_name}},
-                            ]
-                        }
-                    }
-                },
-            )
-            return [hit["_source"]["data"] for hit in res["hits"]["hits"]]
-        except exceptions.NotFoundError:
-            return []
+        rows = self._conn.execute(
+            "SELECT * FROM doctypes WHERE brain_name = ? ORDER BY name",
+            (brain_name,),
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["schema_fields"] = json.loads(d["schema_fields"])
+            result.append(d)
+        return result
 
     # ------------------------------------------------------------------
     # Entity management
@@ -182,79 +185,79 @@ class DroidBrain:
     def create_entity(
         self, brain_name: str, doc_type: str, data: dict[str, Any]
     ) -> dict:
-        """Create a new entity instance."""
-        self._ensure_entity_index(brain_name)
-        entity = Entity(
-            entity_id=str(uuid.uuid4()),
-            doc_type=doc_type,
-            data=data,
+        entity_id = str(uuid.uuid4())
+        now = self._now()
+        data_json = json.dumps(data)
+        self._conn.execute(
+            "INSERT INTO entities (entity_id, brain_name, doc_type, data, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (entity_id, brain_name, doc_type, data_json, now, now),
         )
-        body = entity.model_dump()
-        self.client.index(
-            index=self._entity_index(brain_name),
-            id=entity.entity_id,
-            body=body,
-            refresh=True,
-        )
-        return entity.model_dump()
+        self._conn.commit()
+        return {
+            "entity_id": entity_id,
+            "doc_type": doc_type,
+            "data": data,
+            "created_at": now,
+            "updated_at": now,
+        }
 
     def get_entity(self, brain_name: str, entity_id: str) -> Optional[dict]:
-        """Fetch a single entity by ID."""
-        try:
-            res = self.client.get(
-                index=self._entity_index(brain_name), id=entity_id
-            )
-            return res["_source"]
-        except exceptions.NotFoundError:
+        row = self._conn.execute(
+            "SELECT * FROM entities WHERE brain_name = ? AND entity_id = ?",
+            (brain_name, entity_id),
+        ).fetchone()
+        if not row:
             return None
+        d = dict(row)
+        d["data"] = json.loads(d["data"])
+        return d
 
     def update_entity(
         self, brain_name: str, entity_id: str, data: dict[str, Any]
     ) -> Optional[dict]:
-        """Update an entity's data."""
         existing = self.get_entity(brain_name, entity_id)
         if not existing:
             return None
-        existing["data"] = data
-        existing["updated_at"] = datetime.utcnow().isoformat()
-        self.client.index(
-            index=self._entity_index(brain_name),
-            id=entity_id,
-            body=existing,
-            refresh=True,
+        now = self._now()
+        self._conn.execute(
+            "UPDATE entities SET data = ?, updated_at = ? WHERE entity_id = ?",
+            (json.dumps(data), now, entity_id),
         )
+        self._conn.commit()
+        existing["data"] = data
+        existing["updated_at"] = now
         return existing
 
     def delete_entity(self, brain_name: str, entity_id: str) -> bool:
-        """Delete an entity."""
-        try:
-            self.client.delete(
-                index=self._entity_index(brain_name),
-                id=entity_id,
-                refresh=True,
-            )
-            return True
-        except exceptions.NotFoundError:
-            return False
+        cur = self._conn.execute(
+            "DELETE FROM entities WHERE brain_name = ? AND entity_id = ?",
+            (brain_name, entity_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
 
     def list_entities(
         self, brain_name: str, doc_type: Optional[str] = None, size: int = 50
     ) -> list[dict]:
-        """List entities, optionally filtered by doc_type."""
-        idx = self._entity_index(brain_name)
-        if not self.client.indices.exists(index=idx):
-            return []
-        query: dict = {"match_all": {}}
         if doc_type:
-            query = {"term": {"doc_type": doc_type}}
-        try:
-            res = self.client.search(
-                index=idx,
-                body={"query": query, "size": size, "sort": [{"created_at": "desc"}]},
-            )
-            return [hit["_source"] for hit in res["hits"]["hits"]]
-        except exceptions.NotFoundError:
-            return []
+            rows = self._conn.execute(
+                "SELECT * FROM entities WHERE brain_name = ? AND doc_type = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (brain_name, doc_type, size),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM entities WHERE brain_name = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (brain_name, size),
+            ).fetchall()
+        return [self._row_to_entity(r) for r in rows]
+
+    def _row_to_entity(self, row: sqlite3.Row) -> dict:
+        d = dict(row)
+        d["data"] = json.loads(d["data"])
+        return d
 
     # ------------------------------------------------------------------
     # Search
@@ -267,88 +270,63 @@ class DroidBrain:
         doc_type: Optional[str] = None,
         size: int = 20,
     ) -> list[dict]:
-        """Full-text search across entities in a brain."""
-        idx = self._entity_index(brain_name)
-        if not self.client.indices.exists(index=idx):
-            return []
-
-        must_clauses: list[dict] = [
-            {
-                "multi_match": {
-                    "query": query_text,
-                    "fields": ["data.*"],
-                }
-            }
-        ]
+        raw_query = self._escape_fts(query_text)
         if doc_type:
-            must_clauses.append({"term": {"doc_type": doc_type}})
+            rows = self._conn.execute(
+                "SELECT e.* FROM entities e "
+                "JOIN entities_fts fts ON e.rowid = fts.rowid "
+                "WHERE entities_fts MATCH ? AND e.brain_name = ? AND e.doc_type = ? "
+                "ORDER BY rank LIMIT ?",
+                (raw_query, brain_name, doc_type, size),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT e.* FROM entities e "
+                "JOIN entities_fts fts ON e.rowid = fts.rowid "
+                "WHERE entities_fts MATCH ? AND e.brain_name = ? "
+                "ORDER BY rank LIMIT ?",
+                (raw_query, brain_name, size),
+            ).fetchall()
+        return [self._row_to_entity(r) for r in rows]
 
-        try:
-            res = self.client.search(
-                index=idx,
-                body={
-                    "query": {"bool": {"must": must_clauses}},
-                    "size": size,
-                },
-            )
-            return [hit["_source"] for hit in res["hits"]["hits"]]
-        except exceptions.NotFoundError:
-            return []
+    @staticmethod
+    def _escape_fts(query: str) -> str:
+        """Build a safe FTS5 query from raw user input."""
+        # Split into tokens, quote each, join with implicit AND
+        tokens = query.strip().split()
+        if not tokens:
+            return '""'
+        return " ".join(f'"{t}"' for t in tokens)
 
     # ------------------------------------------------------------------
     # Brain structure (for MCP tool)
     # ------------------------------------------------------------------
 
     def get_brain_structure(self, brain_name: str) -> BrainStructure:
-        """Return a summary of the brain: doc_types, counts, examples."""
         doctypes = self.list_doctypes(brain_name)
-        idx = self._entity_index(brain_name)
-        total = 0
+
+        # Counts per doc_type
+        counts = {}
+        rows = self._conn.execute(
+            "SELECT doc_type, COUNT(*) as cnt FROM entities WHERE brain_name = ? GROUP BY doc_type",
+            (brain_name,),
+        ).fetchall()
+        for r in rows:
+            counts[r["doc_type"]] = r["cnt"]
+        total = sum(counts.values())
+
         dt_stats: list[dict] = []
-
-        if self.client.indices.exists(index=idx):
-            # Get counts per doc_type via aggregation
-            try:
-                agg_res = self.client.search(
-                    index=idx,
-                    body={
-                        "size": 0,
-                        "aggs": {
-                            "by_doctype": {
-                                "terms": {"field": "doc_type", "size": 100}
-                            }
-                        },
-                    },
-                )
-                buckets = agg_res["aggregations"]["by_doctype"]["buckets"]
-                counts = {b["key"]: b["doc_count"] for b in buckets}
-                total = sum(counts.values())
-            except exceptions.NotFoundError:
-                counts = {}
-        else:
-            counts = {}
-
         for dt in doctypes:
             dt_name = dt["name"]
             dt_count = counts.get(dt_name, 0)
 
-            # Fetch 2 example entities for this doc_type
-            examples = []
+            examples: list[dict] = []
             if dt_count > 0:
-                try:
-                    ex_res = self.client.search(
-                        index=idx,
-                        body={
-                            "query": {"term": {"doc_type": dt_name}},
-                            "size": 2,
-                        },
-                    )
-                    examples = [
-                        e["_source"].get("data", {})
-                        for e in ex_res["hits"]["hits"]
-                    ]
-                except exceptions.NotFoundError:
-                    pass
+                ex_rows = self._conn.execute(
+                    "SELECT data FROM entities WHERE brain_name = ? AND doc_type = ? LIMIT 2",
+                    (brain_name, dt_name),
+                ).fetchall()
+                examples = [json.loads(r["data"]) for r in ex_rows]
 
             dt_stats.append(
                 {
@@ -365,3 +343,13 @@ class DroidBrain:
             doc_types=dt_stats,
             total_entities=total,
         )
+
+
+def _droid_brain_factory(**kwargs: Any) -> DroidBrain:
+    """Factory that respects DROID_BRAIN_BACKEND env var."""
+    backend = os.environ.get("DROID_BRAIN_BACKEND", "sqlite")
+    if backend == "opensearch":
+        from droid_brain.opensearch_backend import DroidBrain as OSDroidBrain
+
+        return OSDroidBrain(**kwargs)
+    return DroidBrain(**kwargs)

@@ -5,14 +5,17 @@ The Droid Brain helps you build and maintain accurate organisational information
 ## Quick Start
 
 ```bash
-# Option 1: Docker Compose (recommended)
-docker compose up          # starts OpenSearch + seeds demo brain + launches Streamlit on :8501
-
-# Option 2: Local dev
 pip install --break-system-packages -e .
 droid-brain seed-demo                                    # seed with sample infrastructure data
 streamlit run app.py                                     # UI at http://localhost:8501
 droid-brain mcp-server --transport stdio                 # MCP server for Claude, Cursor, etc.
+```
+
+No Docker, no external services — SQLite by default.
+
+For production with OpenSearch:
+```bash
+DROID_BRAIN_BACKEND=opensearch docker compose up
 ```
 
 ### CLI

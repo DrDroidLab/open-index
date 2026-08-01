@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 from typing import Any
 
 from mcp.server import Server
@@ -30,16 +29,13 @@ from mcp.types import (
 
 from droid_brain.core import DroidBrain
 
-OPENSEARCH_URL = os.environ.get("DROID_BRAIN_OPENSEARCH_URL", "http://localhost:9200")
-
-_DB_URL = OPENSEARCH_URL
 _DB: DroidBrain | None = None
 
 
 def _get_db() -> DroidBrain:
     global _DB
     if _DB is None:
-        _DB = DroidBrain(opensearch_url=_DB_URL)
+        _DB = DroidBrain()
     return _DB
 
 
@@ -276,14 +272,8 @@ async def _run_sse(port: int = 8000) -> None:
 
 def main() -> None:
     """Entry point for `droid-brain-mcp` console script."""
-    global _DB_URL
 
     parser = argparse.ArgumentParser(description="Droid Brain MCP Server")
-    parser.add_argument(
-        "--opensearch-url",
-        default=OPENSEARCH_URL,
-        help="OpenSearch URL (default: http://localhost:9200)",
-    )
     parser.add_argument(
         "--transport",
         default="stdio",
@@ -297,8 +287,6 @@ def main() -> None:
         help="Port for SSE transport (default: 8000)",
     )
     args = parser.parse_args()
-
-    _DB_URL = args.opensearch_url
 
     if args.transport == "sse":
         asyncio.run(_run_sse(port=args.port))
