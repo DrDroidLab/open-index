@@ -83,9 +83,9 @@ if st.sidebar.button("Create Brain", width="stretch"):
 # Seed demo brain button
 st.sidebar.markdown("---")
 if st.sidebar.button("🌱 Seed Demo Brain", width="stretch"):
-    from droid_brain.cli import seed_demo as _seed
+    from droid_brain.cli import seed_demo_data
 
-    _seed.callback(_seed.make_context("seed-demo", ["demo"]))
+    seed_demo_data(db, "demo")
     st.session_state.selected_brain = "demo"
     refresh()
     st.rerun()

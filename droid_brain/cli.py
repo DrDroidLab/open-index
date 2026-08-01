@@ -8,7 +8,7 @@ Usage:
   droid-brain list-brains
   droid-brain structure <brain>
   droid-brain mcp-server [--transport stdio|sse]
-  droid-brain connect
+  droid-brain seed-demo [brain_name]
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ OPENSEARCH_URL = "http://localhost:9200"
 def cli(ctx: click.Context, opensearch_url: str) -> None:
     """Droid Brain — structured organisational knowledge for AI agents."""
     ctx.ensure_object(dict)
+    ctx.obj["opensearch_url"] = opensearch_url
     ctx.obj["db"] = DroidBrain(opensearch_url=opensearch_url)
 
 
@@ -267,49 +268,33 @@ def mcp_server(ctx: click.Context, transport: str, port: int) -> None:
     """Start the MCP server for a brain."""
     from droid_brain.mcp_server import main as mcp_main
 
-    # Forward arguments to the MCP server
+    # Capture the OpenSearch URL from the parent context
+    opensearch_url = ctx.obj.get("opensearch_url", OPENSEARCH_URL)
+
     sys.argv = [
         "mcp-server",
         "--transport",
         transport,
         "--port",
         str(port),
+        "--opensearch-url",
+        opensearch_url,
     ]
     mcp_main()
 
 
 # ---------------------------------------------------------------------------
-# Connect (experimental)
+# Shared seed helper — callable from both CLI and Streamlit
 # ---------------------------------------------------------------------------
 
 
-@cli.command("connect")
-@click.pass_context
-def connect(ctx: click.Context) -> None:
-    """Connect CLI to the Droid Brain platform (experimental)."""
-    click.echo("🔑 Generate an API key in the Droid Brain platform, then run:")
-    click.echo("   export DROID_BRAIN_API_KEY=<your-key>")
-    click.echo("   droid-brain connect --key $DROID_BRAIN_API_KEY")
+def seed_demo_data(db: DroidBrain, brain_name: str = "demo") -> None:
+    """Seed a brain with demo infrastructure data (services, dashboards, runbooks).
 
-
-# ---------------------------------------------------------------------------
-# Seed dummy data
-# ---------------------------------------------------------------------------
-
-
-@cli.command("seed-demo")
-@click.argument("brain_name", default="demo")
-@click.pass_context
-def seed_demo(ctx: click.Context, brain_name: str) -> None:
-    """Seed a brain with demo data (infrastructure example)."""
-    db: DroidBrain = ctx.obj["db"]
-
-    click.echo(f"🌱 Seeding demo brain '{brain_name}'...")
-
-    # Create brain
+    Can be called directly with any DroidBrain instance — no Click dependency.
+    """
     db.create_brain(brain_name, "Demo infrastructure brain")
 
-    # Create doc_types
     db.create_doctype(
         brain_name,
         "service",
@@ -347,7 +332,6 @@ def seed_demo(ctx: click.Context, brain_name: str) -> None:
         ],
     )
 
-    # Create entities
     services = [
         {"name": "api-gateway", "team": "platform", "repo_url": "https://github.com/acme/api-gateway", "tier": "tier-0", "description": "Main API gateway handling all external traffic. Uses NGINX + Lua for routing and authentication. Handles approximately 50k requests per second at peak."},
         {"name": "user-service", "team": "backend", "repo_url": "https://github.com/acme/user-service", "tier": "tier-1", "description": "User management service — handles registration, authentication, and profile management. Backed by PostgreSQL."},
@@ -374,9 +358,22 @@ def seed_demo(ctx: click.Context, brain_name: str) -> None:
     for r in runbooks:
         db.create_entity(brain_name, "runbook", r)
 
-    # Print summary
+
+# ---------------------------------------------------------------------------
+# Seed CLI command (thin wrapper around the shared helper)
+# ---------------------------------------------------------------------------
+
+
+@cli.command("seed-demo")
+@click.argument("brain_name", default="demo")
+@click.pass_context
+def seed_demo(ctx: click.Context, brain_name: str) -> None:
+    """Seed a brain with demo data (infrastructure example)."""
+    db: DroidBrain = ctx.obj["db"]
+    seed_demo_data(db, brain_name)
+
     structure = db.get_brain_structure(brain_name)
-    click.echo(f"\n✅ Demo brain '{brain_name}' seeded!")
+    click.echo(f"✅ Demo brain '{brain_name}' seeded!")
     click.echo(f"   Doc types: {len(structure.doc_types)}")
     for dt in structure.doc_types:
         click.echo(f"     • {dt['name']}: {dt['entity_count']} entities")

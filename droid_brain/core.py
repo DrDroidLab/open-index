@@ -16,8 +16,6 @@ META_INDEX = "droid_brain_meta"
 class DroidBrain:
     """Client for creating/querying Droid Brains backed by OpenSearch."""
 
-    OPENSEARCH_BODY_FIELD = "brain_data"
-
     def __init__(self, opensearch_url: str = "http://localhost:9200"):
         self.client = OpenSearch(opensearch_url)
         self._ensure_meta_index()
@@ -93,7 +91,10 @@ class DroidBrain:
 
     def delete_brain(self, name: str) -> None:
         """Delete a brain and all its entities."""
-        self.client.delete(index=META_INDEX, id=f"brain__{name}", refresh=True)
+        try:
+            self.client.delete(index=META_INDEX, id=f"brain__{name}", refresh=True)
+        except exceptions.NotFoundError:
+            raise ValueError(f"Brain '{name}' does not exist.")
         # Delete all doctype records for this brain
         try:
             self.client.delete_by_query(
@@ -183,39 +184,19 @@ class DroidBrain:
     ) -> dict:
         """Create a new entity instance."""
         self._ensure_entity_index(brain_name)
-        entity_id = str(uuid.uuid4())[:8]
-        now = datetime.utcnow().isoformat()
         entity = Entity(
-            entity_id=entity_id,
+            entity_id=str(uuid.uuid4()),
             doc_type=doc_type,
             data=data,
-            created_at=now,
-            updated_at=now,
         )
         body = entity.model_dump()
-        # Flatten data fields into the document body for OpenSearch indexing
-        body[self.OPENSEARCH_BODY_FIELD] = data
         self.client.index(
             index=self._entity_index(brain_name),
-            id=entity_id,
+            id=entity.entity_id,
             body=body,
             refresh=True,
         )
         return entity.model_dump()
-
-    def bulk_create_entities(
-        self, brain_name: str, entities: list[dict]
-    ) -> list[dict]:
-        """Create multiple entities at once."""
-        results = []
-        for e in entities:
-            result = self.create_entity(
-                brain_name=brain_name,
-                doc_type=e["doc_type"],
-                data=e["data"],
-            )
-            results.append(result)
-        return results
 
     def get_entity(self, brain_name: str, entity_id: str) -> Optional[dict]:
         """Fetch a single entity by ID."""
@@ -235,7 +216,6 @@ class DroidBrain:
         if not existing:
             return None
         existing["data"] = data
-        existing[self.OPENSEARCH_BODY_FIELD] = data
         existing["updated_at"] = datetime.utcnow().isoformat()
         self.client.index(
             index=self._entity_index(brain_name),
@@ -296,7 +276,7 @@ class DroidBrain:
             {
                 "multi_match": {
                     "query": query_text,
-                    "fields": ["*"],
+                    "fields": ["data.*"],
                 }
             }
         ]

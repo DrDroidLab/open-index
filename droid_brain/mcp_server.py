@@ -33,10 +33,14 @@ from droid_brain.core import DroidBrain
 OPENSEARCH_URL = os.environ.get("DROID_BRAIN_OPENSEARCH_URL", "http://localhost:9200")
 
 _DB_URL = OPENSEARCH_URL
+_DB: DroidBrain | None = None
 
 
 def _get_db() -> DroidBrain:
-    return DroidBrain(opensearch_url=_DB_URL)
+    global _DB
+    if _DB is None:
+        _DB = DroidBrain(opensearch_url=_DB_URL)
+    return _DB
 
 
 # ---------------------------------------------------------------------------
@@ -212,10 +216,14 @@ async def _on_call_tool(request: Any, params: CallToolRequestParams) -> CallTool
         elif name == "fetch_entity":
             text = await _tool_fetch_entity(arguments)
         else:
-            text = f"Unknown tool: {name}"
+            return CallToolResult(
+                content=[TextContent(type="text", text=f"Unknown tool: {name}")],
+                is_error=True,
+            )
     except Exception as exc:
         return CallToolResult(
             content=[TextContent(type="text", text=f"Error: {exc}")],
+            is_error=True,
         )
 
     return CallToolResult(
