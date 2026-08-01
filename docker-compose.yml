@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  opensearch:
+    image: opensearchproject/opensearch:latest
+    container_name: droid-brain-opensearch
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9200/_cluster/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build: .
+    container_name: droid-brain-app
+    ports:
+      - "8501:8501"
+    environment:
+      - DROID_BRAIN_OPENSEARCH_URL=http://opensearch:9200
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    command: >
+      sh -c "droid-brain seed-demo &&
+             streamlit run /app/app.py --server.address 0.0.0.0 --server.port 8501"
+
+volumes:
+  opensearch-data:
