@@ -35,7 +35,7 @@ droid-brain ui acme-infra                # open it in the UI
 ```
 
 ### Creating your first doc_type
-Then you create the first few types of doc_types (from the Doc Types tab in the UI). A doc_type can also declare its structure as a nested JSON schema (JSON-Schema-ish: `{"properties": {...}, "required": [...]}`) — nested objects and arrays are allowed, `required` fields are enforced when saving entities, and the entity form pre-fills from the schema. Sample doc types:
+Then you create the first few types of doc_types (from the Doc Types tab in the UI). A doc_type can also declare its structure as a nested JSON schema (JSON-Schema-ish: `{"properties": {...}, "required": [...]}`) — nested objects and arrays are allowed, top-level `required` fields are enforced when saving entities, and the entity form pre-fills from the schema. Sample doc types:
 - software infrastructure brain: dashboards, metrics, panels, services, products, alert_definitions, runbooks, skills, releases, etc.
 - sales brain: leads, deals, accounts, opportunities, meetings, etc.
 - lending brain: loans, borrowers, brokers, applications, etc.
@@ -76,7 +76,7 @@ Or write a config for your own MCP servers and run `droid-brain extract acme-inf
 ]
 ```
 
-Per tool spec: `name_field` (dotted path to the entity name), optional `fields` remapping (dotted paths into nested results), `constants` added to every entity, `items_path` when the tool result wraps the list in an object, and `arguments` for the tool call.
+Per tool spec: `name_field` (dotted path to the entity name), optional `fields` remapping (dotted paths into nested results; missing paths become `null`), `constants` added to every entity, `items_path` when the tool result wraps the list in an object, and `arguments` for the tool call. Items without a usable name are skipped and counted. If one server fails, the others still extract (already-extracted entities stay committed); failures are printed as warnings and the command exits non-zero.
 
 # Enabling your LLM/agent to use your brain:
 

@@ -43,6 +43,23 @@ class SchemaTestCase(unittest.TestCase):
             with self.assertRaises(ValueError):
                 brain.create_doc_type("bad", schema=["not", "an", "object"])
 
+    def test_schema_shape_validated_at_creation(self):
+        with store.create_brain("acme") as brain:
+            with self.assertRaisesRegex(ValueError, "required.*list"):
+                brain.create_doc_type("bad1", schema={"required": "team"})  # string, not list
+            with self.assertRaisesRegex(ValueError, "properties"):
+                brain.create_doc_type("bad2", schema={"properties": ["team"]})
+            with self.assertRaisesRegex(ValueError, "serializable"):
+                brain.create_doc_type("bad3", schema={"f": object()})
+
+    def test_corrupt_schema_row_degrades_to_none(self):
+        with store.create_brain("acme") as brain:
+            brain.create_doc_type("service", schema=SERVICE_SCHEMA)
+            brain.conn.execute("UPDATE doc_types SET schema_json = '{not json' WHERE name = 'service'")
+            brain.conn.commit()
+            self.assertIsNone(brain.get_doc_type("service")["schema"])  # no crash
+            self.assertIsNone(brain.list_doc_types()[0]["schema"])
+
     def test_required_fields_enforced(self):
         with store.create_brain("acme") as brain:
             brain.create_doc_type("service", schema=SERVICE_SCHEMA)

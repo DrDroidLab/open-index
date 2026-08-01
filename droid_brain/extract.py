@@ -119,66 +119,116 @@ def transform_item(item: dict[str, Any], spec: dict[str, Any]) -> tuple[str, dic
 
 
 def _parse_items(result_text: str, spec: dict[str, Any]) -> list[dict[str, Any]]:
-    result = json.loads(result_text)
+    try:
+        result = json.loads(result_text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"tool result is not valid JSON: {e}") from None
     if isinstance(result, list):
         items = result
-    elif isinstance(result, dict) and spec.get("items_path"):
-        items = _dig(result, spec["items_path"])
     else:
-        raise ValueError(
-            "tool result is a JSON object; set 'items_path' in the tool spec to locate the list"
-        )
+        items_path = spec.get("items_path")
+        if not items_path:
+            raise ValueError(
+                "tool result is a JSON object; set 'items_path' in the tool spec to locate the list"
+            )
+        items = _dig(result, items_path)
     if not isinstance(items, list):
         raise ValueError(f"items at {spec.get('items_path')!r} are not a list")
+    if not all(isinstance(item, dict) for item in items):
+        raise ValueError("tool result items must be JSON objects")
     return items
 
 
-async def extract_async(brain: Brain, sources: list[dict[str, Any]]) -> dict[str, Any]:
+def _result_text(result: Any) -> str:
+    """Concatenate text from a tool result's content items."""
+    texts = [getattr(item, "text", None) for item in (result.content or [])]
+    texts = [t for t in texts if t]
+    if not texts:
+        raise ValueError("tool returned no text content to extract from")
+    return "\n".join(texts)
+
+
+def _validate_source(source: dict[str, Any], index: int) -> None:
+    name = source.get("name", f"#{index}")
+    command = source.get("command")
+    if not isinstance(command, list) or not command or not all(isinstance(c, str) for c in command):
+        raise ValueError(f"source {name!r}: 'command' must be a non-empty list of strings")
+    tools = source.get("tools")
+    if not isinstance(tools, list) or not tools:
+        raise ValueError(f"source {name!r}: 'tools' must be a non-empty list")
+    for spec in tools:
+        if not isinstance(spec, dict):
+            raise ValueError(f"source {name!r}: each tool spec must be an object")
+        for key in ("tool", "doc_type", "name_field"):
+            if not spec.get(key):
+                raise ValueError(f"source {name!r}: tool spec is missing {key!r}")
+        if "fields" in spec and not isinstance(spec["fields"], dict):
+            raise ValueError(f"source {name!r}: 'fields' must be an object of target: dotted_path")
+
+
+def _unwrap(exc: BaseException) -> BaseException:
+    """Unwrap anyio task-group wrapping to the underlying error."""
+    while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
+        exc = exc.exceptions[0]
+    return exc
+
+
+async def _extract_source(brain: Brain, source: dict[str, Any], summary: dict[str, Any]) -> None:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
-    summary: dict[str, Any] = {"sources": 0, "entities": 0, "skipped": 0, "by_doc_type": {}}
+    command = source["command"]
+    params = StdioServerParameters(command=command[0], args=command[1:], env=dict(os.environ))
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            available = {t.name for t in (await session.list_tools()).tools}
+            for spec in source["tools"]:
+                if spec["tool"] not in available:
+                    raise ValueError(
+                        f"server has no tool {spec['tool']!r} (available: {', '.join(sorted(available))})"
+                    )
+                result = await session.call_tool(spec["tool"], spec.get("arguments") or {})
+                if result.is_error:
+                    raise ValueError(f"tool {spec['tool']!r} failed: {_result_text(result)}")
+                items = _parse_items(_result_text(result), spec)
 
-    for source in sources:
-        command = source["command"]
-        params = StdioServerParameters(
-            command=command[0], args=command[1:], env=dict(os.environ)
-        )
-        async with stdio_client(params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                available = {t.name for t in (await session.list_tools()).tools}
-                for spec in source.get("tools", []):
-                    if spec["tool"] not in available:
-                        raise ValueError(
-                            f"server {source['name']!r} has no tool {spec['tool']!r} "
-                            f"(available: {', '.join(sorted(available))})"
-                        )
-                    result = await session.call_tool(spec["tool"], spec.get("arguments") or {})
-                    if result.is_error:
-                        raise ValueError(
-                            f"tool {spec['tool']!r} on {source['name']!r} failed: {result.content[0].text}"
-                        )
-                    items = _parse_items(result.content[0].text, spec)
-
-                    doc_type = spec["doc_type"]
-                    if not brain.doc_type_exists(doc_type):
+                doc_type = spec["doc_type"]
+                if not brain.doc_type_exists(doc_type):
+                    try:
                         brain.create_doc_type(
                             doc_type,
                             description=spec.get("doc_type_description", f"Extracted from {source['name']}:{spec['tool']}"),
                             boost=spec.get("boost", 1.0),
                             schema=spec.get("schema"),
                         )
-                    for item in items:
-                        try:
-                            name, data = transform_item(item, spec)
-                        except ItemSkipped:
-                            summary["skipped"] += 1
-                            continue
-                        brain.upsert_entity(doc_type, name, data)
-                        summary["entities"] += 1
-                        summary["by_doc_type"][doc_type] = summary["by_doc_type"].get(doc_type, 0) + 1
-        summary["sources"] += 1
+                    except ValueError as e:
+                        if "already exists" not in str(e):  # created concurrently
+                            raise
+                for item in items:
+                    try:
+                        name, data = transform_item(item, spec)
+                    except ItemSkipped:
+                        summary["skipped"] += 1
+                        continue
+                    brain.upsert_entity(doc_type, name, data)
+                    summary["entities"] += 1
+                    summary["by_doc_type"][doc_type] = summary["by_doc_type"].get(doc_type, 0) + 1
+
+
+async def extract_async(brain: Brain, sources: list[dict[str, Any]]) -> dict[str, Any]:
+    for index, source in enumerate(sources):
+        _validate_source(source, index)
+
+    summary: dict[str, Any] = {"sources": 0, "entities": 0, "skipped": 0, "by_doc_type": {}, "errors": []}
+    for source in sources:
+        try:
+            await _extract_source(brain, source, summary)
+            summary["sources"] += 1
+        except Exception as e:
+            # One failing server must not lose the others; entities already
+            # extracted stay committed. Errors surface in the summary/CLI.
+            summary["errors"].append(f"{source['name']}: {_unwrap(e)}")
     return summary
 
 
@@ -186,9 +236,4 @@ def extract(brain: Brain, sources: list[dict[str, Any]]) -> dict[str, Any]:
     try:
         return asyncio.run(extract_async(brain, sources))
     except BaseExceptionGroup as group:
-        # anyio task groups wrap errors raised inside client sessions; unwrap
-        # to the underlying error for a clean message.
-        exc: BaseException = group
-        while isinstance(exc, BaseExceptionGroup):
-            exc = exc.exceptions[0]
-        raise exc from None
+        raise _unwrap(group) from None

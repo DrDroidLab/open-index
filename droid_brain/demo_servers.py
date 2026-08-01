@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from typing import Any, Callable
+from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -98,7 +98,7 @@ AWS_DATABASES = [
     },
 ]
 
-_TOOLS: dict[str, dict[str, tuple[Tool, Callable[[], Any]]]] = {
+_TOOLS: dict[str, dict[str, tuple[Tool, Any]]] = {
     "grafana": {
         "list_dashboards": (
             Tool(
@@ -133,6 +133,8 @@ _TOOLS: dict[str, dict[str, tuple[Tool, Callable[[], Any]]]] = {
 
 
 def serve(vendor: str) -> None:
+    if vendor not in _TOOLS:
+        raise ValueError(f"unknown fake server {vendor!r}: choose from {', '.join(_TOOLS)}")
     tools = _TOOLS[vendor]
 
     async def _on_list_tools(ctx: Any, params: Any) -> ListToolsResult:

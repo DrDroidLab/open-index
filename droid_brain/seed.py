@@ -56,7 +56,8 @@ DEMO_DOC_TYPES: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "url": {"type": "string"},
-                "panels": {"type": "array", "items": {"type": "string"}},
+                # panels arrive as strings from seed and as objects from extraction
+                "panels": {"type": "array"},
                 "owner": {"type": "string"},
             },
         },
