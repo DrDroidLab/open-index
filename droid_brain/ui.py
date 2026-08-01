@@ -173,6 +173,13 @@ def _connect_tab(brain: store.Brain) -> None:
         ),
         language="json",
     )
+    st.markdown("From another machine, serve it over HTTP with "
+                f"`droid-brain mcp {brain.name} --http --host 0.0.0.0 --port 8000` "
+                "and use the URL instead:")
+    st.code(
+        json.dumps({"mcpServers": {f"droid-brain-{brain.name}": {"url": "http://brain-host:8000/mcp"}}}, indent=2),
+        language="json",
+    )
     st.caption("Works with Claude Desktop, Cursor, Claude Code and any other MCP client.")
 
 

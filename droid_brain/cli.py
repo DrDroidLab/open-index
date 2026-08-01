@@ -45,8 +45,11 @@ def main(argv: list[str] | None = None) -> int:
     p_search.add_argument("--type", dest="doc_type", default=None, help="Filter by doc_type")
     p_search.add_argument("--limit", type=int, default=10)
 
-    p_mcp = sub.add_parser("mcp", help="Run an MCP server (stdio) for a brain")
+    p_mcp = sub.add_parser("mcp", help="Run an MCP server for a brain")
     p_mcp.add_argument("brain", nargs="?", help="Brain to serve (default: most recent)")
+    p_mcp.add_argument("--http", action="store_true", help="Serve over streamable HTTP (for clients on other machines) instead of stdio")
+    p_mcp.add_argument("--host", default="127.0.0.1", help="Bind host for --http (default: 127.0.0.1; use 0.0.0.0 to expose on the network)")
+    p_mcp.add_argument("--port", type=int, default=8000, help="Port for --http (default: 8000)")
 
     p_extract = sub.add_parser("extract", help="Extract entities from MCP servers into a brain")
     p_extract.add_argument("brain")
@@ -149,7 +152,7 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
     from .mcp_server import run
 
     try:
-        run(brain)
+        run(brain, http=args.http, host=args.host, port=args.port)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

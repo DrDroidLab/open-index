@@ -78,6 +78,33 @@ Or write a config for your own MCP servers and run `droid-brain extract acme-inf
 
 Per tool spec: `name_field` (dotted path to the entity name), optional `fields` remapping (dotted paths into nested results; missing paths become `null`), `constants` added to every entity, `items_path` when the tool result wraps the list in an object, and `arguments` for the tool call. Items without a usable name are skipped and counted. If one server fails, the others still extract (already-extracted entities stay committed); failures are printed as warnings and the command exits non-zero.
 
+Extraction is non-interactive and idempotent, so you can keep the brain fresh from cron:
+
+```cron
+*/15 * * * * /usr/local/bin/droid-brain extract acme-infra /etc/droid-brain/extract.json >> /var/log/droid-brain-extract.log 2>&1
+```
+
+### Using a brain from another machine
+The brain lives wherever you set it up (e.g. next to the cron above), but its MCP server can serve clients anywhere. Run it with `--http`:
+
+```bash
+droid-brain mcp acme-infra --http --host 0.0.0.0 --port 8000
+```
+
+and point remote MCP clients at the URL instead of a local command:
+
+```json
+{
+  "mcpServers": {
+    "droid-brain-acme-infra": {
+      "url": "http://brain-host:8000/mcp"
+    }
+  }
+}
+```
+
+Note: the HTTP server is unauthenticated — bind to interfaces you trust. The CLI works on local files, so for terminal use on another machine just copy the brain file (`~/.droid_brains/acme-infra.db`) — each brain is a single portable file.
+
 # Enabling your LLM/agent to use your brain:
 
 ### MCP Server

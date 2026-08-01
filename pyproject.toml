@@ -12,6 +12,7 @@ requires-python = ">=3.10"
 dependencies = [
     "streamlit>=1.32",
     "mcp>=2.0",
+    "uvicorn>=0.30",  # serves `droid-brain mcp --http`
 ]
 
 [project.urls]

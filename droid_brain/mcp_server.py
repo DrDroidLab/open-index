@@ -1,4 +1,4 @@
-"""MCP server (stdio) exposing a brain to any LLM/agent.
+"""MCP server exposing a brain to any LLM/agent.
 
 Tools, mirroring the brain's query surface:
   1. get_brain_structure - textual explanation of what the brain stores
@@ -6,123 +6,56 @@ Tools, mirroring the brain's query surface:
   3. get_entity          - fetch one entity by doc_type + name
   4. create_entity       - add or update an entity
 
-Run with: droid-brain mcp <brain>
+Run locally (stdio, for MCP clients on the same machine):
+    droid-brain mcp <brain>
+
+Serve it to other machines over HTTP:
+    droid-brain mcp <brain> --http --host 0.0.0.0 --port 8000
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-from typing import Any
 
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult, TextContent, Tool
+from mcp.server.mcpserver import MCPServer
 
 from . import store
 
-_TOOLS = [
-    Tool(
-        name="get_brain_structure",
-        description="Textual explanation of the data stored in the brain: doc_types, entity counts, descriptions and example values.",
-        input_schema={"type": "object", "properties": {}},
-    ),
-    Tool(
-        name="search_brain",
-        description="Full-text search over all entities in the brain. Results are ranked with field boosters (name matches count most) and per-doc_type boosters.",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Search terms (matched with prefix matching across all fields)"},
-                "doc_type": {"type": "string", "description": "Optional doc_type to filter on"},
-                "limit": {"type": "integer", "description": "Max results (default 10)", "default": 10},
-            },
-            "required": ["query"],
-        },
-    ),
-    Tool(
-        name="get_entity",
-        description="Fetch a specific entity by its doc_type and name.",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "doc_type": {"type": "string"},
-                "name": {"type": "string"},
-            },
-            "required": ["doc_type", "name"],
-        },
-    ),
-    Tool(
-        name="create_entity",
-        description="Create (or update) an entity in the brain. The doc_type must already exist; data must be a JSON object.",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "doc_type": {"type": "string"},
-                "name": {"type": "string"},
-                "data": {"type": "object", "description": "The entity's fields as a JSON object"},
-            },
-            "required": ["doc_type", "name", "data"],
-        },
-    ),
-]
+MAX_LIMIT = 100
 
 
-def _required(arguments: dict[str, Any], *keys: str) -> None:
-    for key in keys:
-        if key not in arguments:
-            raise ValueError(f"Missing required argument {key!r}")
-
-
-def run(brain_name: str) -> None:
+def run(brain_name: str, http: bool = False, host: str = "127.0.0.1", port: int = 8000) -> None:
     brain = store.open_brain(brain_name)
+    server = MCPServer(name=f"droid-brain-{brain_name}")
 
-    def _dispatch(name: str, arguments: dict[str, Any]) -> str:
-        if name == "get_brain_structure":
-            return brain.structure_text()
-        if name == "search_brain":
-            _required(arguments, "query")
-            results = brain.search(
-                arguments["query"],
-                doc_type=arguments.get("doc_type"),
-                limit=max(1, min(int(arguments.get("limit") or 10), 100)),
-            )
-            return json.dumps(results, indent=2) if results else "No results."
-        if name == "get_entity":
-            _required(arguments, "doc_type", "name")
-            entity = brain.get_entity(arguments["doc_type"], arguments["name"])
-            if not entity:
-                raise ValueError(
-                    f"No entity {arguments['name']!r} of doc_type {arguments['doc_type']!r} in brain {brain.name!r}"
-                )
-            return json.dumps(entity, indent=2)
-        if name == "create_entity":
-            _required(arguments, "doc_type", "name", "data")
-            entity_id = brain.upsert_entity(arguments["doc_type"], arguments["name"], arguments["data"])
-            return json.dumps({"id": entity_id, "doc_type": arguments["doc_type"], "name": arguments["name"]})
-        raise ValueError(f"Unknown tool {name!r}")
+    @server.tool(description="Textual explanation of the data stored in the brain: doc_types, entity counts, descriptions, schema fields and example values.")
+    def get_brain_structure() -> str:
+        return brain.structure_text()
 
-    async def _on_list_tools(ctx: Any, params: Any) -> ListToolsResult:
-        return ListToolsResult(tools=_TOOLS)
+    @server.tool(description="Full-text search over all entities in the brain. Results are ranked with field boosters (name matches count most) and per-doc_type boosters.")
+    def search_brain(query: str, doc_type: str | None = None, limit: int = 10) -> str:
+        if not query:
+            raise ValueError("Missing required argument 'query'")
+        results = brain.search(query, doc_type=doc_type, limit=max(1, min(limit, MAX_LIMIT)))
+        return json.dumps(results, indent=2) if results else "No results."
 
-    async def _on_call_tool(ctx: Any, params: CallToolRequestParams) -> CallToolResult:
-        try:
-            text = _dispatch(params.name, params.arguments or {})
-        except Exception as e:
-            return CallToolResult(content=[TextContent(type="text", text=str(e))], is_error=True)
-        return CallToolResult(content=[TextContent(type="text", text=text)])
+    @server.tool(description="Fetch a specific entity by its doc_type and name.")
+    def get_entity(doc_type: str, name: str) -> str:
+        entity = brain.get_entity(doc_type, name)
+        if not entity:
+            raise ValueError(f"No entity {name!r} of doc_type {doc_type!r} in brain {brain.name!r}")
+        return json.dumps(entity, indent=2)
 
-    server = Server(
-        name=f"droid-brain-{brain_name}",
-        on_list_tools=_on_list_tools,
-        on_call_tool=_on_call_tool,
-    )
-
-    async def _main() -> None:
-        async with stdio_server() as (read_stream, write_stream):
-            await server.run(read_stream, write_stream, server.create_initialization_options())
+    @server.tool(description="Create (or update) an entity in the brain. The doc_type must already exist; data must be a JSON object satisfying the doc_type's schema.")
+    def create_entity(doc_type: str, name: str, data: dict) -> str:
+        entity_id = brain.upsert_entity(doc_type, name, data)
+        return json.dumps({"id": entity_id, "doc_type": doc_type, "name": name.strip()})
 
     try:
-        asyncio.run(_main())
+        if http:
+            print(f"Serving brain '{brain_name}' over MCP (streamable HTTP) on http://{host}:{port}/mcp")
+            server.run(transport="streamable-http", host=host, port=port)
+        else:
+            server.run(transport="stdio")
     finally:
         brain.close()
