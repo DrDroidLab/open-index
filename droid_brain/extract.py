@@ -84,21 +84,32 @@ DEMO_SOURCES: list[dict[str, Any]] = [
 ]
 
 
-def _dig(item: dict[str, Any], path: str) -> Any:
-    """Fetch a dotted path ('endpoint.host') from a nested dict."""
+def _dig(item: dict[str, Any], path: str, default: Any = None) -> Any:
+    """Fetch a dotted path ('endpoint.host') from a nested dict; ``default`` if absent."""
     value: Any = item
     for part in path.split("."):
         if not isinstance(value, dict) or part not in value:
-            raise ValueError(f"field {path!r} not found in item {json.dumps(item)[:120]}")
+            return default
         value = value[part]
     return value
 
 
+class ItemSkipped(ValueError):
+    """An item cannot become an entity (no usable name) and is skipped."""
+
+
 def transform_item(item: dict[str, Any], spec: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    """Turn one tool-result item into (entity_name, entity_data)."""
+    """Turn one tool-result item into (entity_name, entity_data).
+
+    Missing ``fields`` paths become None (real-world tools have optional
+    fields); a missing/empty ``name_field`` skips the item.
+    """
     name = _dig(item, spec["name_field"])
     if not isinstance(name, str) or not name.strip():
-        raise ValueError(f"name_field {spec['name_field']!r} did not resolve to a non-empty string")
+        raise ItemSkipped(
+            f"name_field {spec['name_field']!r} did not resolve to a non-empty string "
+            f"in item {json.dumps(item)[:120]}"
+        )
     if "fields" in spec:
         data = {target: _dig(item, path) for target, path in spec["fields"].items()}
     else:
@@ -126,7 +137,7 @@ async def extract_async(brain: Brain, sources: list[dict[str, Any]]) -> dict[str
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
-    summary: dict[str, Any] = {"sources": 0, "entities": 0, "by_doc_type": {}}
+    summary: dict[str, Any] = {"sources": 0, "entities": 0, "skipped": 0, "by_doc_type": {}}
 
     for source in sources:
         command = source["command"]
@@ -159,7 +170,11 @@ async def extract_async(brain: Brain, sources: list[dict[str, Any]]) -> dict[str
                             schema=spec.get("schema"),
                         )
                     for item in items:
-                        name, data = transform_item(item, spec)
+                        try:
+                            name, data = transform_item(item, spec)
+                        except ItemSkipped:
+                            summary["skipped"] += 1
+                            continue
                         brain.upsert_entity(doc_type, name, data)
                         summary["entities"] += 1
                         summary["by_doc_type"][doc_type] = summary["by_doc_type"].get(doc_type, 0) + 1

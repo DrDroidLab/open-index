@@ -5,15 +5,15 @@ import tempfile
 import unittest
 
 from droid_brain import store
-from droid_brain.extract import DEMO_SOURCES, _dig, _parse_items, extract, transform_item
+from droid_brain.extract import DEMO_SOURCES, ItemSkipped, _dig, _parse_items, extract, transform_item
 
 
 class TransformTestCase(unittest.TestCase):
     def test_dig_nested(self):
         item = {"endpoint": {"host": "db.example.com", "port": 5432}}
         self.assertEqual(_dig(item, "endpoint.host"), "db.example.com")
-        with self.assertRaises(ValueError):
-            _dig(item, "endpoint.missing")
+        self.assertIsNone(_dig(item, "endpoint.missing"))  # optional fields -> None
+        self.assertEqual(_dig(item, "endpoint.missing", default="x"), "x")
 
     def test_transform_with_field_mapping_and_constants(self):
         spec = {"name_field": "title", "fields": {"url": "meta.link"}, "constants": {"source": "grafana"}}
@@ -22,15 +22,22 @@ class TransformTestCase(unittest.TestCase):
         self.assertEqual(name, "dash-1")
         self.assertEqual(data, {"url": "http://x", "source": "grafana"})
 
+    def test_transform_missing_mapped_field_becomes_none(self):
+        spec = {"name_field": "title", "fields": {"url": "meta.link"}}
+        name, data = transform_item({"title": "dash-1"}, spec)
+        self.assertEqual((name, data), ("dash-1", {"url": None}))
+
     def test_transform_without_mapping_keeps_whole_item(self):
         spec = {"name_field": "id"}
         item = {"id": "a", "nested": {"deep": [1, 2]}}
         name, data = transform_item(item, spec)
         self.assertEqual((name, data), ("a", {"id": "a", "nested": {"deep": [1, 2]}}))
 
-    def test_transform_rejects_bad_name(self):
-        with self.assertRaises(ValueError):
+    def test_transform_skips_bad_name(self):
+        with self.assertRaises(ItemSkipped):
             transform_item({"title": "  "}, {"name_field": "title"})
+        with self.assertRaises(ItemSkipped):
+            transform_item({"other": "x"}, {"name_field": "title"})
 
     def test_parse_items(self):
         self.assertEqual(_parse_items('[{"a": 1}]', {}), [{"a": 1}])
@@ -40,6 +47,24 @@ class TransformTestCase(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             _parse_items('{"rows": []}', {})  # object without items_path
+
+    def test_items_without_name_are_skipped_not_fatal(self):
+        spec = {"doc_type": "thing", "name_field": "title"}
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["DROID_BRAIN_HOME"] = tmp
+            with store.create_brain("b") as brain:
+                brain.create_doc_type("thing")
+                ok = 0
+                skipped = 0
+                for item in [{"title": "a"}, {"no_title": True}, {"title": "b"}]:
+                    try:
+                        name, data = transform_item(item, spec)
+                        brain.upsert_entity("thing", name, data)
+                        ok += 1
+                    except ItemSkipped:
+                        skipped += 1
+                self.assertEqual((ok, skipped), (2, 1))
+                self.assertEqual(len(brain.list_entities(doc_type="thing")), 2)
 
 
 class ExtractIntegrationTestCase(unittest.TestCase):

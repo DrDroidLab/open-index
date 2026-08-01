@@ -180,7 +180,8 @@ def _cmd_extract(args: argparse.Namespace) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
     breakdown = ", ".join(f"{count} {doc_type}" for doc_type, count in sorted(summary["by_doc_type"].items()))
-    print(f"Extracted {summary['entities']} entities ({breakdown}) from {summary['sources']} MCP server(s) into '{args.brain}'")
+    skipped = f", {summary['skipped']} item(s) skipped (no usable name)" if summary.get("skipped") else ""
+    print(f"Extracted {summary['entities']} entities ({breakdown}) from {summary['sources']} MCP server(s) into '{args.brain}'{skipped}")
     print(f"Next: droid-brain search {args.brain} \"<query>\"   # or: droid-brain ui {args.brain}")
     return 0
 
