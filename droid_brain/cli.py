@@ -290,6 +290,11 @@ def seed_demo_data(db: DroidBrain, brain_name: str = "demo") -> None:
             {"name": "repo_url", "field_type": "string", "search_type": "syntactic"},
             {"name": "tier", "field_type": "string", "search_type": "syntactic"},
             {"name": "description", "field_type": "string", "processing_type": "text", "search_type": "semantic"},
+            {"name": "metadata", "field_type": "object", "fields": [
+                {"name": "deployment", "field_type": "string", "search_type": "syntactic"},
+                {"name": "owner_email", "field_type": "string", "search_type": "syntactic"},
+                {"name": "slack_channel", "field_type": "string", "search_type": "syntactic"},
+            ]},
         ],
     )
 
@@ -318,11 +323,11 @@ def seed_demo_data(db: DroidBrain, brain_name: str = "demo") -> None:
     )
 
     services = [
-        {"name": "api-gateway", "team": "platform", "repo_url": "https://github.com/acme/api-gateway", "tier": "tier-0", "description": "Main API gateway handling all external traffic. Uses NGINX + Lua for routing and authentication. Handles approximately 50k requests per second at peak."},
-        {"name": "user-service", "team": "backend", "repo_url": "https://github.com/acme/user-service", "tier": "tier-1", "description": "User management service — handles registration, authentication, and profile management. Backed by PostgreSQL."},
-        {"name": "payment-worker", "team": "payments", "repo_url": "https://github.com/acme/payment-worker", "tier": "tier-1", "description": "Async payment processing worker consuming from Kafka. Integrates with Stripe and internal ledger."},
-        {"name": "notification-service", "team": "backend", "repo_url": "https://github.com/acme/notification-service", "tier": "tier-2", "description": "Sends email, SMS, and push notifications. Uses AWS SNS + SendGrid."},
-        {"name": "inventory-db", "team": "data-platform", "repo_url": "https://github.com/acme/inventory-db", "tier": "tier-0", "description": "Core inventory database cluster — PostgreSQL with read replicas. Critical path for all order flows."},
+        {"name": "api-gateway", "team": "platform", "repo_url": "https://github.com/acme/api-gateway", "tier": "tier-0", "description": "Main API gateway handling all external traffic. Uses NGINX + Lua for routing and authentication.", "metadata": {"deployment": "kubernetes", "owner_email": "platform@acme.com", "slack_channel": "#platform-alerts"}},
+        {"name": "user-service", "team": "backend", "repo_url": "https://github.com/acme/user-service", "tier": "tier-1", "description": "User management service — registration, auth, and profiles. Backed by PostgreSQL.", "metadata": {"deployment": "kubernetes", "owner_email": "backend@acme.com", "slack_channel": "#backend-alerts"}},
+        {"name": "payment-worker", "team": "payments", "repo_url": "https://github.com/acme/payment-worker", "tier": "tier-1", "description": "Async payment processing worker consuming from Kafka. Integrates with Stripe.", "metadata": {"deployment": "kubernetes", "owner_email": "payments@acme.com", "slack_channel": "#payments-alerts"}},
+        {"name": "notification-service", "team": "backend", "repo_url": "https://github.com/acme/notification-service", "tier": "tier-2", "description": "Sends email, SMS, and push notifications via AWS SNS + SendGrid.", "metadata": {"deployment": "kubernetes", "owner_email": "backend@acme.com", "slack_channel": "#backend-alerts"}},
+        {"name": "inventory-db", "team": "data-platform", "repo_url": "https://github.com/acme/inventory-db", "tier": "tier-0", "description": "Core inventory database cluster — PostgreSQL with read replicas.", "metadata": {"deployment": "kubernetes", "owner_email": "data@acme.com", "slack_channel": "#data-alerts"}},
     ]
     for s in services:
         db.create_entity(brain_name, "service", s)

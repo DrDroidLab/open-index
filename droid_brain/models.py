@@ -1,20 +1,23 @@
 """Data models for Droid Brain."""
 
-from datetime import datetime
+from __future__ import annotations
+
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
 
 class SchemaField(BaseModel):
-    """A single field definition in a doc_type schema."""
+    """A single field definition in a doc_type schema. Supports nested objects."""
 
     name: str
-    field_type: str = "string"  # string, number, boolean, object
+    field_type: str = "string"  # string, number, boolean, object, array
     description: str = ""
     required: bool = False
     processing_type: str = "keyword"  # keyword, text, number, boolean
     search_type: str = "syntactic"  # syntactic, semantic
+    fields: Optional[list[SchemaField]] = None  # sub-fields for object/array types
 
 
 class DocType(BaseModel):
@@ -23,8 +26,8 @@ class DocType(BaseModel):
     name: str
     description: str = ""
     schema_fields: list[SchemaField] = Field(default_factory=list)
-    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
-    updated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 class Entity(BaseModel):
@@ -33,8 +36,8 @@ class Entity(BaseModel):
     entity_id: str
     doc_type: str
     data: dict[str, Any] = Field(default_factory=dict)
-    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
-    updated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 class BrainStructure(BaseModel):
@@ -50,4 +53,4 @@ class Brain(BaseModel):
 
     name: str
     description: str = ""
-    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

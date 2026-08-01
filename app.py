@@ -13,6 +13,28 @@ import streamlit as st
 from droid_brain.core import DroidBrain
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _render_schema_fields(fields: list[dict], indent: int = 0) -> None:
+    """Render schema fields, handling nested objects/arrays recursively."""
+    for f in fields:
+        prefix = " " * indent
+        name = f.get("name", "")
+        ftype = f.get("field_type", "string")
+        required = " *" if f.get("required") else ""
+        children = f.get("fields")
+
+        label = f"{prefix}• **{name}** : {ftype}{required}"
+        if f.get("description"):
+            label += f" — _{f['description']}_"
+        st.markdown(label)
+
+        if children:
+            _render_schema_fields(children, indent + 1)
+
+
+# ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
 st.set_page_config(
@@ -154,18 +176,7 @@ with tab_structure:
 
                 if dt.get("schema_fields"):
                     st.markdown("**Schema fields:**")
-                    fields_data = []
-                    for f in dt["schema_fields"]:
-                        fields_data.append(
-                            {
-                                "Name": f.get("name", ""),
-                                "Type": f.get("field_type", "string"),
-                                "Required": "✅" if f.get("required") else "",
-                                "Search": f.get("search_type", ""),
-                                "Processing": f.get("processing_type", ""),
-                            }
-                        )
-                    st.dataframe(fields_data, width="stretch", hide_index=True)
+                    _render_schema_fields(dt["schema_fields"])
 
                 if dt.get("examples"):
                     st.markdown("**Example entities:**")

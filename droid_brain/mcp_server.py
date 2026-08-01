@@ -115,6 +115,25 @@ TOOLS = [
 # ---------------------------------------------------------------------------
 
 
+def _format_fields(fields: list[dict], indent: int = 0) -> list[str]:
+    """Recursively format schema fields for text output."""
+    out = []
+    for f in fields:
+        prefix = "  " * (indent + 3)
+        meta = []
+        if f.get("required"):
+            meta.append("required")
+        if f.get("search_type"):
+            meta.append(f"search={f['search_type']}")
+        meta_str = f" ({', '.join(meta)})" if meta else ""
+        out.append(
+            f"{prefix}• {f['name']} : {f.get('field_type', 'string')}{meta_str}"
+        )
+        if f.get("fields"):
+            out.extend(_format_fields(f["fields"], indent + 1))
+    return out
+
+
 async def _tool_brain_structure(arguments: dict) -> str:
     brain_name = arguments["brain_name"]
     db = _get_db()
@@ -131,16 +150,7 @@ async def _tool_brain_structure(arguments: dict) -> str:
             lines.append(f"   Description: {dt['description']}")
         if dt.get("schema_fields"):
             lines.append("   Fields:")
-            for f in dt["schema_fields"]:
-                extra = []
-                if f.get("required"):
-                    extra.append("required")
-                if f.get("search_type"):
-                    extra.append(f"search={f['search_type']}")
-                extra_str = f" ({', '.join(extra)})" if extra else ""
-                lines.append(
-                    f"     • {f['name']} : {f.get('field_type', 'string')}{extra_str}"
-                )
+            lines.extend(_format_fields(dt["schema_fields"]))
         if dt.get("examples"):
             lines.append("   Examples:")
             for ex in dt["examples"]:
