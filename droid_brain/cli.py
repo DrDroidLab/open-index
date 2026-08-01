@@ -374,18 +374,27 @@ def seed_demo(ctx: click.Context, brain_name: str) -> None:
 @click.option("--port", default=8501, help="Streamlit port")
 @click.pass_context
 def start(ctx: click.Context, brain_name: str, port: int) -> None:
-    """Seed demo brain and launch Streamlit — single command to get started."""
+    """Launch the Droid Brain UI. Seeds demo data if brain doesn't exist yet."""
     db: DroidBrain = ctx.obj["db"]
-    seed_demo_data(db, brain_name)
+    brains = {b["name"] for b in db.list_brains()}
 
-    structure = db.get_brain_structure(brain_name)
-    click.echo(f"🌱 Demo brain '{brain_name}' seeded ({structure.total_entities} entities).")
+    if brain_name in brains:
+        s = db.get_brain_structure(brain_name)
+        click.echo(f"🧠 Using existing brain '{brain_name}' ({s.total_entities} entities).")
+    else:
+        seed_demo_data(db, brain_name)
+        s = db.get_brain_structure(brain_name)
+        click.echo(f"🌱 Seeded demo brain '{brain_name}' ({s.total_entities} entities).")
+
     click.echo(f"🚀 Launching UI at http://localhost:{port} ...")
 
     import subprocess
+    from pathlib import Path
+
+    app_path = Path(__file__).parent.parent / "app.py"
 
     subprocess.run(
-        [sys.executable, "-m", "streamlit", "run", "app.py",
+        [sys.executable, "-m", "streamlit", "run", str(app_path),
          "--server.address", "0.0.0.0", "--server.port", str(port)],
     )
 
