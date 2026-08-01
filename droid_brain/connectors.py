@@ -12,12 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import subprocess
-import sys
 from typing import Any, Optional
-
-from mcp.types import CallToolResult, TextContent
 
 from droid_brain.core import DroidBrain
 from droid_brain.models import SchemaField
@@ -47,51 +42,58 @@ class Connector:
         self.transform = transform
 
 
-async def extract_assets(connector: Connector) -> dict[str, Any]:
-    """Run a connector: call MCP tool → transform → write entities to brain.
+# ---------------------------------------------------------------------------
+# Shared persistence — used by both subprocess and in-process paths
+# ---------------------------------------------------------------------------
+
+
+def _persist_items(
+    brain_name: str,
+    doc_type: str,
+    field_mapping: dict[str, str],
+    items: list[dict],
+    connector_name: Optional[str] = None,
+) -> dict[str, Any]:
+    """Ensure brain/doc_type exist, then create entities.
 
     Returns a summary dict with counts and created entity IDs.
     """
-    # 1. Call the MCP tool
-    raw_result = await _call_mcp_tool(
-        connector.mcp_command,
-        connector.tool_name,
-        connector.tool_arguments,
-    )
-
-    # 2. Parse result (expect JSON array of objects)
-    items = _parse_items(raw_result, connector.transform)
-
-    # 3. Write to brain
     db = DroidBrain()
-    entities = []
 
-    # Ensure brain and doc_type exist
+    # Auto-create brain if missing
     brains = {b["name"] for b in db.list_brains()}
-    if connector.brain_name not in brains:
-        db.create_brain(connector.brain_name, f"Auto-created by connector '{connector.name}'")
+    if brain_name not in brains:
+        label = f"Auto-created by connector '{connector_name}'" if connector_name else "Auto-created by connector"
+        db.create_brain(brain_name, label)
 
-    existing_dt = db.get_doctype(connector.brain_name, connector.doc_type)
+    # Auto-create doc_type (infer schema from first item) if missing
+    existing_dt = db.get_doctype(brain_name, doc_type)
     if not existing_dt:
-        # Infer schema from first item
         schema = _infer_schema(items[0]) if items else []
-        db.create_doctype(connector.brain_name, connector.doc_type,
-                          f"Auto-created by connector '{connector.name}'",
+        label = f"Auto-created by connector '{connector_name}'" if connector_name else "Auto-created by connector"
+        db.create_doctype(brain_name, doc_type, label,
                           [s.model_dump() for s in schema])
 
+    entities = []
     for item in items:
-        mapped_data = {connector.field_mapping.get(k, k): v
-                       for k, v in item.items()}
-        entity = db.create_entity(connector.brain_name, connector.doc_type, mapped_data)
+        mapped_data = {field_mapping.get(k, k): v for k, v in item.items()}
+        entity = db.create_entity(brain_name, doc_type, mapped_data)
         entities.append(entity)
 
-    return {
-        "connector": connector.name,
-        "brain": connector.brain_name,
-        "doc_type": connector.doc_type,
+    result: dict[str, Any] = {
+        "brain": brain_name,
+        "doc_type": doc_type,
         "entities_created": len(entities),
         "entity_ids": [e["entity_id"] for e in entities],
     }
+    if connector_name:
+        result["connector"] = connector_name
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Schema inference
+# ---------------------------------------------------------------------------
 
 
 def _infer_schema(item: dict) -> list[SchemaField]:
@@ -112,8 +114,17 @@ def _infer_schema(item: dict) -> list[SchemaField]:
     return fields
 
 
+# ---------------------------------------------------------------------------
+# Item parsing & transform
+# ---------------------------------------------------------------------------
+
+
 def _parse_items(raw: str, transform: Optional[str]) -> list[dict]:
-    """Parse raw MCP output into a list of dicts. Applies optional transform."""
+    """Parse raw MCP output into a list of dicts. Applies optional transform.
+
+    NOTE: the ``transform`` parameter is a Python expression that is exec'd
+    inside a restricted namespace per item. Only use with trusted input.
+    """
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
@@ -133,13 +144,37 @@ def _parse_items(raw: str, transform: Optional[str]) -> list[dict]:
         raise ValueError(f"Expected JSON array from MCP tool, got {type(data).__name__}")
 
     if transform:
-        namespace = {"item": None, "result": []}
+        namespace: dict[str, Any] = {"item": None, "result": []}
         for item in data:
             namespace["item"] = item
-            exec(f"result.append({transform})", namespace)
+            # Security note: exec'ing user-supplied code. This is a local CLI
+            # tool — only trusted users should supply --transform expressions.
+            exec(f"result.append({transform})", {"__builtins__": {}}, namespace)
         data = namespace["result"]
 
     return data
+
+
+# ---------------------------------------------------------------------------
+# Subprocess-based MCP extraction
+# ---------------------------------------------------------------------------
+
+
+async def extract_assets(connector: Connector) -> dict[str, Any]:
+    """Run a connector: call MCP tool → transform → write entities to brain."""
+    raw_result = await _call_mcp_tool(
+        connector.mcp_command,
+        connector.tool_name,
+        connector.tool_arguments,
+    )
+    items = _parse_items(raw_result, connector.transform)
+    return _persist_items(
+        brain_name=connector.brain_name,
+        doc_type=connector.doc_type,
+        field_mapping=connector.field_mapping,
+        items=items,
+        connector_name=connector.name,
+    )
 
 
 async def _call_mcp_tool(
@@ -148,10 +183,7 @@ async def _call_mcp_tool(
     arguments: dict[str, Any],
     timeout: int = 30,
 ) -> str:
-    """Call an MCP tool via subprocess (stdio transport).
-
-    Sends an MCP JSON-RPC initialize + tools/call message to the MCP server.
-    """
+    """Call an MCP tool via subprocess (stdio transport)."""
     proc = await asyncio.create_subprocess_exec(
         *mcp_command.split(),
         stdin=asyncio.subprocess.PIPE,
@@ -159,7 +191,6 @@ async def _call_mcp_tool(
         stderr=asyncio.subprocess.PIPE,
     )
 
-    # MCP initialize handshake
     init_msg = json.dumps({
         "jsonrpc": "2.0",
         "id": 1,
@@ -171,13 +202,11 @@ async def _call_mcp_tool(
         },
     }) + "\n"
 
-    # Initialized notification
     initialized_msg = json.dumps({
         "jsonrpc": "2.0",
         "method": "notifications/initialized",
     }) + "\n"
 
-    # Tools/call request
     call_msg = json.dumps({
         "jsonrpc": "2.0",
         "id": 2,
@@ -200,7 +229,6 @@ async def _call_mcp_tool(
         if proc.returncode is None:
             proc.kill()
 
-    # Parse MCP response — look for the tools/call response (id=2)
     for line in stdout.decode().strip().split("\n"):
         try:
             msg = json.loads(line)
@@ -227,7 +255,7 @@ async def _send_and_receive(
     proc.stdin.write(init_msg.encode())
     proc.stdin.write(initialized_msg.encode())
     await proc.stdin.drain()
-    await asyncio.sleep(0.5)  # give server time to process init
+    await asyncio.sleep(0.5)
 
     proc.stdin.write(call_msg.encode())
     await proc.stdin.drain()
@@ -238,13 +266,8 @@ async def _send_and_receive(
     return stdout, stderr
 
 
-def run_connector(connector: Connector) -> dict[str, Any]:
-    """Synchronous wrapper for extract_assets."""
-    return asyncio.run(extract_assets(connector))
-
-
 # ---------------------------------------------------------------------------
-# Direct-mode extraction (for testing / embedded MCP handlers)
+# In-process extraction (for testing / embedded MCP handlers)
 # ---------------------------------------------------------------------------
 
 
@@ -268,17 +291,9 @@ async def extract_from_handlers(
 
     raw_result = await handler(arguments)
     items = _parse_items(raw_result, transform)
-
-    db = DroidBrain()
-    entities = []
-    for item in items:
-        mapped_data = {field_mapping.get(k, k): v for k, v in item.items()}
-        entity = db.create_entity(brain_name, doc_type, mapped_data)
-        entities.append(entity)
-
-    return {
-        "brain": brain_name,
-        "doc_type": doc_type,
-        "entities_created": len(entities),
-        "entity_ids": [e["entity_id"] for e in entities],
-    }
+    return _persist_items(
+        brain_name=brain_name,
+        doc_type=doc_type,
+        field_mapping=field_mapping,
+        items=items,
+    )

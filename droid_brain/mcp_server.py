@@ -1,13 +1,14 @@
 """MCP server that exposes Droid Brain tools to LLMs/agents.
 
-Provides three tools:
+Provides four tools:
   1. brain_structure  — get a textual overview of doc_types, counts, examples
   2. search_brain     — full-text search with optional doc_type filter
-  3. fetch_entity     — retrieve a single entity by ID
+  3. list_brains      — list all available brains with summary stats
+  4. fetch_entity     — retrieve a single entity by ID
 
 Start with:
   droid-brain-mcp                     # stdio transport
-  droid-brain-mcp --transport sse     # SSE transport on port 8000
+  droid-brain-mcp --transport sse     # Streamable HTTP transport on port 8000
 """
 
 from __future__ import annotations
@@ -87,6 +88,15 @@ TOOLS = [
                 },
             },
             "required": ["brain_name", "query"],
+        },
+    ),
+    Tool(
+        name="list_brains",
+        title="List Brains",
+        description="List all available brains and their descriptions.",
+        input_schema={
+            "type": "object",
+            "properties": {},
         },
     ),
     Tool(
@@ -190,6 +200,23 @@ async def _tool_search_brain(arguments: dict) -> str:
     return "\n".join(lines)
 
 
+async def _tool_list_brains(arguments: dict) -> str:
+    db = _get_db()
+    brains = db.list_brains()
+    if not brains:
+        return "No brains found. Create one with: create-brain <name>"
+    results = []
+    for b in brains:
+        s = db.get_brain_structure(b["name"])
+        results.append({
+            "name": b["name"],
+            "description": b.get("description", ""),
+            "doc_types": len(s.doc_types),
+            "entities": s.total_entities,
+        })
+    return json.dumps(results, indent=2)
+
+
 async def _tool_fetch_entity(arguments: dict) -> str:
     brain_name = arguments["brain_name"]
     entity_id = arguments["entity_id"]
@@ -219,6 +246,8 @@ async def _on_call_tool(request: Any, params: CallToolRequestParams) -> CallTool
             text = await _tool_brain_structure(arguments)
         elif name == "search_brain":
             text = await _tool_search_brain(arguments)
+        elif name == "list_brains":
+            text = await _tool_list_brains(arguments)
         elif name == "fetch_entity":
             text = await _tool_fetch_entity(arguments)
         else:

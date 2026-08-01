@@ -9,10 +9,14 @@ Usage:
   droid-brain structure <brain>
   droid-brain mcp-server [--transport stdio|sse]
   droid-brain seed-demo [brain_name]
+  droid-brain connector add <name> --mcp-cmd ... --tool ... --brain ... --doctype ... --field-mapping '...'
+  droid-brain connector list | run | runs <name>
+  droid-brain cron
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from typing import Optional
@@ -22,11 +26,41 @@ import click
 from droid_brain.core import DroidBrain
 
 @click.group()
+@click.option(
+    "--remote-url",
+    default=None,
+    envvar="DROID_BRAIN_REMOTE_URL",
+    help="Remote MCP server URL (e.g. http://host:8000). When set, CLI talks to remote brain.",
+)
 @click.pass_context
-def cli(ctx: click.Context) -> None:
+def cli(ctx: click.Context, remote_url: Optional[str]) -> None:
     """Droid Brain — structured organisational knowledge for AI agents."""
     ctx.ensure_object(dict)
-    ctx.obj["db"] = DroidBrain()
+
+    if remote_url:
+        from droid_brain.remote import RemoteDroidBrain
+
+        ctx.obj["db"] = RemoteDroidBrain(remote_url)
+        ctx.obj["remote"] = True
+    else:
+        ctx.obj["db"] = DroidBrain()
+        ctx.obj["remote"] = False
+
+
+# ---------------------------------------------------------------------------
+# Helper
+# ---------------------------------------------------------------------------
+
+
+def _require_local(ctx: click.Context, command: str) -> None:
+    """Exit with a clear message if the CLI is in remote mode."""
+    if ctx.obj.get("remote"):
+        click.echo(
+            f"❌ '{command}' is not available in remote mode.\n"
+            f"   Remote brains are read-only via MCP. Run locally to create or modify data.",
+            err=True,
+        )
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +74,7 @@ def cli(ctx: click.Context) -> None:
 @click.pass_context
 def create_brain(ctx: click.Context, name: str, description: str) -> None:
     """Create a new brain."""
+    _require_local(ctx, "create-brain")
     db: DroidBrain = ctx.obj["db"]
     brain = db.create_brain(name, description)
     click.echo(f"✅ Brain '{name}' created.")
@@ -65,6 +100,7 @@ def list_brains(ctx: click.Context) -> None:
 @click.pass_context
 def delete_brain(ctx: click.Context, name: str) -> None:
     """Delete a brain and all its entities."""
+    _require_local(ctx, "delete-brain")
     db: DroidBrain = ctx.obj["db"]
     db.delete_brain(name)
     click.echo(f"🗑️  Brain '{name}' deleted.")
@@ -90,6 +126,7 @@ def create_doctype(
     ctx: click.Context, brain: str, name: str, description: str, fields: str
 ) -> None:
     """Create a new doc_type within a brain."""
+    _require_local(ctx, "create-doctype")
     db: DroidBrain = ctx.obj["db"]
     try:
         fields_data = json.loads(fields)
@@ -140,6 +177,7 @@ def create_entity(
     file: Optional[str],
 ) -> None:
     """Create a new entity in a brain."""
+    _require_local(ctx, "create-entity")
     db: DroidBrain = ctx.obj["db"]
     if file:
         with open(file) as fh:
@@ -359,6 +397,7 @@ def seed_demo_data(db: DroidBrain, brain_name: str = "demo") -> None:
 @click.pass_context
 def seed_demo(ctx: click.Context, brain_name: str) -> None:
     """Seed a brain with demo data (infrastructure example)."""
+    _require_local(ctx, "seed-demo")
     db: DroidBrain = ctx.obj["db"]
     seed_demo_data(db, brain_name)
 
@@ -380,6 +419,7 @@ def seed_demo(ctx: click.Context, brain_name: str) -> None:
 @click.pass_context
 def start(ctx: click.Context, brain_name: str, port: int) -> None:
     """Launch the Droid Brain UI. Seeds demo data if brain doesn't exist yet."""
+    _require_local(ctx, "start")
     db: DroidBrain = ctx.obj["db"]
     brains = {b["name"] for b in db.list_brains()}
 
@@ -402,6 +442,149 @@ def start(ctx: click.Context, brain_name: str, port: int) -> None:
         [sys.executable, "-m", "streamlit", "run", str(app_path),
          "--server.address", "0.0.0.0", "--server.port", str(port)],
     )
+
+
+# ---------------------------------------------------------------------------
+# Connector & cron commands
+# ---------------------------------------------------------------------------
+
+
+@cli.group("connector")
+def connector_group() -> None:
+    """Manage connectors — MCP → brain extraction pipelines."""
+
+
+@connector_group.command("add")
+@click.argument("name")
+@click.option("--mcp-cmd", default=None, help="MCP server command, e.g. 'python examples/github_mcp.py'")
+@click.option("--tool", required=True, help="MCP tool name to call")
+@click.option("--brain", required=True, help="Target brain name")
+@click.option("--doctype", required=True, help="Target doc_type")
+@click.option("--field-mapping", required=True, help="JSON mapping: tool_field→entity_field")
+@click.option("--cron", default="", help="Cron expression or 'every_6h', 'every_30m'")
+@click.option("--transform", default=None, help="Python expression to transform each item")
+@click.option("--handler", "handler_path", default=None,
+              help="Python import path for in-process handler, e.g. 'examples.github_mcp:list_repos'. Fast path, no subprocess.")
+@click.pass_context
+def connector_add(
+    ctx: click.Context,
+    name: str,
+    mcp_cmd: Optional[str],
+    tool: str,
+    brain: str,
+    doctype: str,
+    field_mapping: str,
+    cron: str,
+    transform: Optional[str],
+    handler_path: Optional[str],
+) -> None:
+    """Register a new connector (scheduled extraction pipeline)."""
+    from droid_brain.cron import CronManager
+
+    if not mcp_cmd and not handler_path:
+        click.echo("❌ Either --mcp-cmd or --handler is required.", err=True)
+        sys.exit(1)
+
+    try:
+        mapping = json.loads(field_mapping)
+    except json.JSONDecodeError:
+        click.echo("❌ --field-mapping must be valid JSON.", err=True)
+        sys.exit(1)
+
+    mgr = CronManager()
+    result = mgr.add(
+        name=name,
+        mcp_command=mcp_cmd or "",
+        tool_name=tool,
+        brain_name=brain,
+        doc_type=doctype,
+        field_mapping=mapping,
+        cron_expr=cron,
+        transform=transform,
+        handler_path=handler_path,
+    )
+    mode = " (in-process)" if handler_path else " (subprocess)"
+    click.echo(f"✅ Connector '{result['name']}' registered{mode}."
+               + (f" Schedule: {cron}" if cron else " (manual only)"))
+
+
+@connector_group.command("list")
+def connector_list() -> None:
+    """List registered connectors."""
+    from droid_brain.cron import CronManager
+
+    mgr = CronManager()
+    connectors = mgr.list()
+    if not connectors:
+        click.echo("No connectors registered.")
+        click.echo("Add one: droid-brain connector add <name> --mcp-cmd ... --tool ... --brain ... --doctype ... --field-mapping '...'")
+        return
+    for c in connectors:
+        status = "✅" if c["enabled"] else "⏸️"
+        cron = c["cron_expr"] or "(manual)"
+        last = c["last_run"][:19] if c["last_run"] else "never"
+        click.echo(f"  {status} {c['name']} — schedule: {cron} — last run: {last}")
+
+
+@connector_group.command("run")
+@click.argument("name")
+def connector_run(name: str) -> None:
+    """Run a connector immediately."""
+    from droid_brain.cron import CronManager
+
+    mgr = CronManager()
+    click.echo(f"▶️  Running connector '{name}'...")
+    try:
+        result = asyncio.run(mgr.run_connector(name))
+        click.echo(f"✅ {result['entities_created']} entities created in '{result['brain']}'.")
+    except Exception as exc:
+        click.echo(f"❌ Failed: {exc}", err=True)
+        sys.exit(1)
+
+
+@connector_group.command("remove")
+@click.argument("name")
+def connector_remove(name: str) -> None:
+    """Remove a registered connector."""
+    from droid_brain.cron import CronManager
+
+    mgr = CronManager()
+    if mgr.remove(name):
+        click.echo(f"🗑️  Connector '{name}' removed.")
+    else:
+        click.echo(f"❌ Connector '{name}' not found.", err=True)
+
+
+@connector_group.command("runs")
+@click.argument("name")
+@click.option("--limit", default=10, help="Number of runs to show")
+def connector_runs(name: str, limit: int) -> None:
+    """Show recent runs for a connector."""
+    from droid_brain.cron import CronManager
+
+    mgr = CronManager()
+    runs = mgr.get_runs(name, limit=limit)
+    if not runs:
+        click.echo(f"No runs recorded for '{name}'.")
+        return
+    for r in runs:
+        status = "✅" if r["status"] == "success" else "❌"
+        click.echo(
+            f"  {status} {r['started_at'][:19]} — {r['entities_created']} entities"
+            + (f" — {r['error'][:60]}" if r.get("error") else "")
+        )
+
+
+@cli.command("cron")
+def cron_scheduler() -> None:
+    """Start the Droid Brain cron scheduler (runs until Ctrl+C)."""
+    from droid_brain.cron import CronManager
+
+    mgr = CronManager()
+    try:
+        asyncio.run(mgr.start_scheduler())
+    except KeyboardInterrupt:
+        click.echo("\n👋 Scheduler stopped.")
 
 
 if __name__ == "__main__":

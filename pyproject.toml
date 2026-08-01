@@ -16,4 +16,7 @@ droid-brain = "droid_brain.cli:cli"
 droid-brain-mcp = "droid_brain.mcp_server:main"
 
 [tool.setuptools.packages.find]
-include = ["droid_brain*"]
+include = ["droid_brain*", "examples*"]
+
+[project.optional-dependencies]
+streamlit = ["streamlit>=1.28"]
