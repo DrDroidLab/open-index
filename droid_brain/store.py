@@ -50,12 +50,11 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _validate_name(kind: str, name: str) -> str:
+def _validate_name(kind: str, name: str) -> None:
     if not name or not NAME_RE.match(name):
         raise ValueError(
             f"Invalid {kind} name {name!r}: use 1-64 chars of letters, digits, '-' or '_', starting with a letter or digit."
         )
-    return name
 
 
 def brains_dir() -> Path:
@@ -63,6 +62,7 @@ def brains_dir() -> Path:
 
 
 def brain_path(name: str) -> Path:
+    _validate_name("brain", name)
     return brains_dir() / f"{name}.db"
 
 
@@ -121,10 +121,14 @@ def _flatten(value: Any) -> str:
     return " ".join(parts)
 
 
+def _tokens(query: str) -> list[str]:
+    """Extract searchable tokens from a query."""
+    return re.findall(r"[\w.-]+", query)
+
+
 def _fts_query(user_query: str) -> str:
     """Build a safe FTS5 MATCH expression: ANDed prefix-quoted tokens."""
-    tokens = re.findall(r"[\w.-]+", user_query)
-    return " ".join(f'"{t}"*' for t in tokens)
+    return " ".join(f'"{t}"*' for t in _tokens(user_query))
 
 
 class Brain:
@@ -134,8 +138,12 @@ class Brain:
         self.name = name
         self.path = brain_path(name)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.path))
+        # timeout: wait briefly instead of failing on "database is locked";
+        # check_same_thread: the Streamlit UI shares one connection across reruns;
+        # WAL: UI, MCP server and CLI can use the same brain file concurrently.
+        self.conn = sqlite3.connect(str(self.path), timeout=5.0, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(_SCHEMA)
         self.conn.commit()
 
@@ -174,6 +182,7 @@ class Brain:
                 (name, description, float(boost), _now()),
             )
         except sqlite3.IntegrityError:
+            self.conn.rollback()
             raise ValueError(f"doc_type {name!r} already exists") from None
         self.conn.commit()
 
@@ -196,31 +205,34 @@ class Brain:
     def upsert_entity(self, doc_type: str, name: str, data: dict[str, Any]) -> int:
         if not self.doc_type_exists(doc_type):
             raise ValueError(f"doc_type {doc_type!r} does not exist in brain {self.name!r}")
-        if not name.strip():
+        name = name.strip()
+        if not name:
             raise ValueError("entity name cannot be empty")
         if not isinstance(data, dict):
             raise ValueError("entity data must be a JSON object")
-        payload = json.dumps(data)
+        try:
+            payload = json.dumps(data)
+        except TypeError:
+            raise ValueError("entity data must be JSON serializable") from None
         now = _now()
-        row = self.conn.execute(
-            "SELECT id FROM entities WHERE doc_type = ? AND name = ?", (doc_type, name)
-        ).fetchone()
-        if row:
-            entity_id = row["id"]
+        try:
+            # Atomic upsert: safe for concurrent writers (UI + MCP + CLI).
             self.conn.execute(
-                "UPDATE entities SET data = ?, updated_at = ? WHERE id = ?", (payload, now, entity_id)
-            )
-            self.conn.execute("DELETE FROM entities_fts WHERE rowid = ?", (entity_id,))
-        else:
-            cur = self.conn.execute(
-                "INSERT INTO entities (doc_type, name, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO entities (doc_type, name, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(doc_type, name) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
                 (doc_type, name, payload, now, now),
             )
-            entity_id = cur.lastrowid
-        self.conn.execute(
-            "INSERT INTO entities_fts (rowid, name, doc_type, body) VALUES (?, ?, ?, ?)",
-            (entity_id, name, doc_type, _flatten(data)),
-        )
+            entity_id = self.conn.execute(
+                "SELECT id FROM entities WHERE doc_type = ? AND name = ?", (doc_type, name)
+            ).fetchone()["id"]
+            self.conn.execute("DELETE FROM entities_fts WHERE rowid = ?", (entity_id,))
+            self.conn.execute(
+                "INSERT INTO entities_fts (rowid, name, doc_type, body) VALUES (?, ?, ?, ?)",
+                (entity_id, name, doc_type, _flatten(data)),
+            )
+        except sqlite3.Error:
+            self.conn.rollback()
+            raise
         self.conn.commit()
         return entity_id
 
@@ -264,7 +276,7 @@ class Brain:
         match = _fts_query(query)
         if not match:
             return self.list_entities(doc_type=doc_type, limit=limit)
-        tokens = re.findall(r"[\w.-]+", query.lower())
+        tokens = _tokens(query.lower())
         name_affinity = " + ".join("(instr(lower(e.name), ?) > 0)" for _ in tokens)
         sql = (
             "SELECT e.id, e.doc_type, e.name, e.data, e.created_at, e.updated_at, "

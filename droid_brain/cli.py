@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -66,19 +67,26 @@ def _launch_ui(brain: str | None) -> int:
     from streamlit.web import cli as stcli
 
     app_path = str(Path(__file__).with_name("ui.py"))
-    sys.argv = ["streamlit", "run", app_path] + (["--", brain] if brain else [])
+    # Local tool: allow serving behind a reverse proxy / SSH tunnel regardless of install location.
+    sys.argv = [
+        "streamlit", "run", app_path,
+        "--server.enableCORS", "false",
+        "--server.enableXsrfProtection", "false",
+    ] + (["--", brain] if brain else [])
     return stcli.main()
 
 
 def _cmd_new(args: argparse.Namespace) -> int:
+    seeded = None
     try:
         brain = store.create_brain(args.name, description=args.description)
-        seeded = None
-        if args.seed_demo:
-            from .seed import seed_demo
+        try:
+            if args.seed_demo:
+                from .seed import seed_demo
 
-            seeded = seed_demo(brain)
-        brain.close()
+                seeded = seed_demo(brain)
+        finally:
+            brain.close()
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
@@ -101,7 +109,7 @@ def _cmd_list() -> int:
             with store.open_brain(b["name"]) as brain:
                 doc_types = brain.list_doc_types()
                 entities = sum(dt["entities"] for dt in doc_types)
-        except ValueError:
+        except (ValueError, sqlite3.Error):
             doc_types, entities = [], 0
         print(f"{b['name']:<24} {len(doc_types):>3} doc_types  {entities:>4} entities  {b['path']}")
     return 0

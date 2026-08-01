@@ -24,6 +24,12 @@ def _initial_brain() -> str | None:
     return sys.argv[1] if len(sys.argv) > 1 else None
 
 
+@st.cache_resource
+def _get_brain(name: str) -> store.Brain:
+    """One shared connection per brain across reruns (WAL + busy timeout make it safe)."""
+    return store.open_brain(name)
+
+
 def _create_brain_form() -> None:
     st.title("Create your first brain")
     st.caption("A brain is a local knowledge index for your agents: doc_types, entities and boosted search — all in one file.")
@@ -117,7 +123,11 @@ def _search_tab(brain: store.Brain) -> None:
     if not query:
         st.caption("Results are ranked with field boosters (name matches count most) and per-doc_type boosters.")
         return
-    results = brain.search(query, doc_type=None if doc_type == "All" else doc_type)
+    try:
+        results = brain.search(query, doc_type=None if doc_type == "All" else doc_type)
+    except Exception as e:
+        st.error(f"Search failed: {e}")
+        return
     if not results:
         st.info("No results.")
         return
@@ -162,7 +172,7 @@ def main() -> None:
         _create_brain_form()
         return
 
-    brain = store.open_brain(choice)
+    brain = _get_brain(choice)
     st.title(choice)
     description = brain.get_meta("description")
     if description:

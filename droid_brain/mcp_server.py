@@ -68,6 +68,12 @@ _TOOLS = [
 ]
 
 
+def _required(arguments: dict[str, Any], *keys: str) -> None:
+    for key in keys:
+        if key not in arguments:
+            raise ValueError(f"Missing required argument {key!r}")
+
+
 def run(brain_name: str) -> None:
     brain = store.open_brain(brain_name)
 
@@ -75,13 +81,15 @@ def run(brain_name: str) -> None:
         if name == "get_brain_structure":
             return brain.structure_text()
         if name == "search_brain":
+            _required(arguments, "query")
             results = brain.search(
                 arguments["query"],
                 doc_type=arguments.get("doc_type"),
-                limit=int(arguments.get("limit") or 10),
+                limit=max(1, min(int(arguments.get("limit") or 10), 100)),
             )
             return json.dumps(results, indent=2) if results else "No results."
         if name == "get_entity":
+            _required(arguments, "doc_type", "name")
             entity = brain.get_entity(arguments["doc_type"], arguments["name"])
             if not entity:
                 raise ValueError(
@@ -89,6 +97,7 @@ def run(brain_name: str) -> None:
                 )
             return json.dumps(entity, indent=2)
         if name == "create_entity":
+            _required(arguments, "doc_type", "name", "data")
             entity_id = brain.upsert_entity(arguments["doc_type"], arguments["name"], arguments["data"])
             return json.dumps({"id": entity_id, "doc_type": arguments["doc_type"], "name": arguments["name"]})
         raise ValueError(f"Unknown tool {name!r}")
@@ -113,4 +122,7 @@ def run(brain_name: str) -> None:
         async with stdio_server() as (read_stream, write_stream):
             await server.run(read_stream, write_stream, server.create_initialization_options())
 
-    asyncio.run(_main())
+    try:
+        asyncio.run(_main())
+    finally:
+        brain.close()
