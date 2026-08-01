@@ -14,10 +14,28 @@ The primitives of creating a brain are as follows:
 # Getting Started
 
 ### Creating your first brain
-The way the project works is that you run this command and spin up an instance of the droid brain.
+The way the project works is that you run one command and spin up an instance of the droid brain. There is nothing else to run: no OpenSearch, no Docker — every brain is a single local file (`~/.droid_brains/<name>.db`, SQLite with FTS5 full-text search built in).
+
+```bash
+pip install "droid-brain @ git+https://github.com/DrDroidLab/droid-brain"
+droid-brain
+```
+
+Or as a true one-shot with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uvx --from git+https://github.com/DrDroidLab/droid-brain droid-brain
+```
+
+On launch, the UI opens your most recent brain — or the create screen if you have none. You give your brain a name (this is its index), and you can seed it with demo entities to see search and boosting immediately:
+
+```bash
+droid-brain new acme-infra --seed-demo   # create a brain with demo entities
+droid-brain ui acme-infra                # open it in the UI
+```
 
 ### Creating your first doc_type
-Then you create the first few types of doc_types. Sample doc types:
+Then you create the first few types of doc_types (from the Doc Types tab in the UI). Sample doc types:
 - software infrastructure brain: dashboards, metrics, panels, services, products, alert_definitions, runbooks, skills, releases, etc.
 - sales brain: leads, deals, accounts, opportunities, meetings, etc.
 - lending brain: loans, borrowers, brokers, applications, etc.
@@ -29,21 +47,44 @@ You can create instances of doc_types either manually or programmatically:
 3. Through a webhook/API trigger from a script on your end
 4. Through a recurring cron defined in the brain configuration
 
-Read more about this in [Entity Management](./docs/entity_management.md)
+Read more about this in [Entity Management](./entity-management.md)
 
 # Enabling your LLM/agent to use your brain:
 
 ### MCP Server
-Run this command to get an MCP server up and running for your brain. This MCP server has multiple tools for the agent to query the brain. Primarily, these three:
+Run this command to get an MCP server up and running for your brain:
+
+```bash
+droid-brain mcp acme-infra
+```
+
+Or point any MCP client (Claude Desktop, Cursor, Claude Code, ...) at your brain via its config:
+
+```json
+{
+  "mcpServers": {
+    "droid-brain-acme-infra": {
+      "command": "droid-brain",
+      "args": ["mcp", "acme-infra"]
+    }
+  }
+}
+```
+
+This MCP server has multiple tools for the agent to query the brain. Primarily, these three:
 1. Brain structure: Gives a textual explanation of the data that's stored within the brain. What doc_types, how many instances of each, example values, description of the doc_type, etc.
 2. Search the brain // apply filters
 3. Fetch a specific entity
 
-### CLI (experimental)
-The same data can be queried using the CLI as well. To do so, generate a key in the platform and authenticate your CLI session in the terminal using that key.
+It also exposes a `create_entity` tool so the agent can add knowledge back into the brain.
 
-Command to run:
-droid-brain 'cli-connect'
+### CLI
+The same data can be queried using the CLI as well:
+
+```bash
+droid-brain list                            # all brains
+droid-brain search acme-infra "payments"    # boosted full-text search
+```
 
 # Advanced Capabilities
 
@@ -69,3 +110,5 @@ Search:
     - Field based boosters
     - Type based boosters
     - Temporal boosters
+
+Field and type boosters work out of the box without any search server: the embedded engine ranks with bm25 column weights (a match on an entity's name counts far more than one in its content) multiplied by each doc_type's `boost` (set when creating the doc_type — e.g. give `service` a higher boost than `runbook`).
