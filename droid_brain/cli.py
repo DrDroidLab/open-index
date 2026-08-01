@@ -369,5 +369,26 @@ def seed_demo(ctx: click.Context, brain_name: str) -> None:
     click.echo(f"  streamlit run app.py  (then select '{brain_name}' in the UI)")
 
 
+@cli.command("start")
+@click.argument("brain_name", default="demo")
+@click.option("--port", default=8501, help="Streamlit port")
+@click.pass_context
+def start(ctx: click.Context, brain_name: str, port: int) -> None:
+    """Seed demo brain and launch Streamlit — single command to get started."""
+    db: DroidBrain = ctx.obj["db"]
+    seed_demo_data(db, brain_name)
+
+    structure = db.get_brain_structure(brain_name)
+    click.echo(f"🌱 Demo brain '{brain_name}' seeded ({structure.total_entities} entities).")
+    click.echo(f"🚀 Launching UI at http://localhost:{port} ...")
+
+    import subprocess
+
+    subprocess.run(
+        [sys.executable, "-m", "streamlit", "run", "app.py",
+         "--server.address", "0.0.0.0", "--server.port", str(port)],
+    )
+
+
 if __name__ == "__main__":
     cli()

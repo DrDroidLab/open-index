@@ -269,11 +269,17 @@ class DroidBrain:
         query_text: str,
         doc_type: Optional[str] = None,
         size: int = 20,
+        boost: Optional[dict[str, float]] = None,
     ) -> list[dict]:
+        """Full-text search with optional field boosting.
+
+        boost maps field names to multipliers (e.g. {"name": 2.0}).
+        Entities matching boosted fields rank higher.
+        """
         raw_query = self._escape_fts(query_text)
         if doc_type:
             rows = self._conn.execute(
-                "SELECT e.* FROM entities e "
+                "SELECT e.*, rank FROM entities e "
                 "JOIN entities_fts fts ON e.rowid = fts.rowid "
                 "WHERE entities_fts MATCH ? AND e.brain_name = ? AND e.doc_type = ? "
                 "ORDER BY rank LIMIT ?",
@@ -281,13 +287,28 @@ class DroidBrain:
             ).fetchall()
         else:
             rows = self._conn.execute(
-                "SELECT e.* FROM entities e "
+                "SELECT e.*, rank FROM entities e "
                 "JOIN entities_fts fts ON e.rowid = fts.rowid "
                 "WHERE entities_fts MATCH ? AND e.brain_name = ? "
                 "ORDER BY rank LIMIT ?",
                 (raw_query, brain_name, size),
             ).fetchall()
-        return [self._row_to_entity(r) for r in rows]
+
+        results = [self._row_to_entity(r) for r in rows]
+        # Boost: add bonus score for entities whose data contains boosted-field matches
+        if boost and results:
+            tokens = [t.lower() for t in query_text.strip().split()]
+            for entity in results:
+                bonus = 0.0
+                data = entity["data"]
+                for field, multiplier in boost.items():
+                    val = str(data.get(field, "")).lower()
+                    for token in tokens:
+                        if token in val:
+                            bonus += multiplier
+                entity["_boost_score"] = round(bonus, 2)
+            results.sort(key=lambda e: e.get("_boost_score", 0), reverse=True)
+        return results
 
     @staticmethod
     def _escape_fts(query: str) -> str:

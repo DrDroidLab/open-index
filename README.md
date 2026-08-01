@@ -5,10 +5,15 @@ The Droid Brain helps you build and maintain accurate organisational information
 ## Quick Start
 
 ```bash
-pip install --break-system-packages -e .
-droid-brain seed-demo                                    # seed with sample infrastructure data
-streamlit run app.py                                     # UI at http://localhost:8501
-droid-brain mcp-server --transport stdio                 # MCP server for Claude, Cursor, etc.
+pip install -e .
+droid-brain start              # seeds demo brain + launches UI at http://localhost:8501
+```
+
+Or step by step:
+```bash
+droid-brain seed-demo          # seed with sample data (brain name: "demo")
+streamlit run app.py           # UI at http://localhost:8501
+droid-brain mcp-server --transport stdio   # MCP for Claude, Cursor, etc.
 ```
 
 No Docker, no external services — SQLite by default.
