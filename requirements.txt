@@ -1,0 +1,6 @@
+opensearch-py>=2.7.1
+pydantic>=2.0
+streamlit>=1.35
+mcp>=1.0.0
+click>=8.0
+uvicorn>=0.30

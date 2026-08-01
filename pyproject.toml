@@ -1,0 +1,19 @@
+[project]
+name = "droid-brain"
+version = "0.1.0"
+description = "Build and maintain structured organisational knowledge for AI agents"
+requires-python = ">=3.10"
+dependencies = [
+    "opensearch-py>=2.7.1",
+    "pydantic>=2.0",
+    "click>=8.0",
+    "mcp>=1.0.0",
+    "uvicorn>=0.30",
+]
+
+[project.scripts]
+droid-brain = "droid_brain.cli:cli"
+droid-brain-mcp = "droid_brain.mcp_server:main"
+
+[tool.setuptools.packages.find]
+include = ["droid_brain*"]
