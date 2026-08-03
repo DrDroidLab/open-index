@@ -1,0 +1,9 @@
+name: infra-brain
+description: A software-infrastructure context graph — services and their dependencies, the datastores they use, the dashboards that watch them, the runbooks that fix them, and the alerts that fire on them. Modeled on the DrDroid entity types, generalized.
+
+storage:
+  backend: sqlite
+  path: ./brain.db
+
+search:
+  backend: sqlite

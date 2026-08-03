@@ -1,0 +1,10 @@
+doc_type: area
+description: A broad area of life (health, career, family, finance).
+storage: file
+display:
+  label_field: name
+  color: "#7c3aed"
+schema:
+  fields:
+    - { name: name,        type: string, processing: keyword, search: syntactic, boost: 6 }
+    - { name: description, type: text,   processing: text,    search: semantic }

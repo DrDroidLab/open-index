@@ -1,0 +1,12 @@
+doc_type: dashboard
+description: A monitoring dashboard watching one or more services (DrDroid's dashboard).
+storage: file
+display:
+  label_field: name
+  color: "#0891b2"
+schema:
+  fields:
+    - { name: name,        type: string, processing: keyword, search: syntactic, boost: 6 }
+    - { name: description, type: text,   processing: text,    search: semantic }
+    - { name: platform,    type: string, processing: keyword, search: syntactic, boost: 2 }
+    - { name: url,         type: string, processing: keyword, search: none }

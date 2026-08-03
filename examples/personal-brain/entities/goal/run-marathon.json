@@ -1,0 +1,12 @@
+{
+  "doc_type": "goal",
+  "id": "goal:run-marathon",
+  "name": "Run a marathon",
+  "description": "Finish a full marathon under 4 hours.",
+  "status": "in-progress",
+  "target_date": "2026-11-01",
+  "related_to": [
+    { "target": "area:health", "relationship_edge_meaning": "belongs to area" },
+    { "target": "project:training-plan", "relationship_edge_meaning": "is advanced by" }
+  ]
+}

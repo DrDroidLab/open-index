@@ -1,0 +1,9 @@
+name: support-brain
+description: A customer-support context graph — products, their common issues, the user segments who hit them, and notable comments.
+
+storage:
+  backend: sqlite
+  path: ./brain.db
+
+search:
+  backend: sqlite

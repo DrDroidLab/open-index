@@ -1,0 +1,8 @@
+{
+  "doc_type": "issue",
+  "id": "issue:slow-checkout",
+  "name": "Slow checkout page load",
+  "description": "The checkout page takes several seconds to become interactive on mobile.",
+  "severity": "medium",
+  "status": "open"
+}

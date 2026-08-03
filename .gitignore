@@ -1,0 +1,16 @@
+# Generated brain storage
+*.db
+*.db-journal
+*.db-wal
+.droid_brain_state.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/

@@ -1,0 +1,10 @@
+{
+  "doc_type": "goal",
+  "id": "goal:weekly-family-time",
+  "name": "Protect weekly family time",
+  "description": "One full unplugged day with family every week.",
+  "status": "on-track",
+  "related_to": [
+    { "target": "area:family", "relationship_edge_meaning": "belongs to area" }
+  ]
+}

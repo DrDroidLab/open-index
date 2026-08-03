@@ -1,0 +1,10 @@
+{
+  "doc_type": "runbook",
+  "id": "runbook:five-xx",
+  "name": "Triaging 5xx spikes",
+  "description": "Steps to triage a spike in server errors.",
+  "steps": "1. Open the Error Rates dashboard. 2. Find the service with the elevated 5xx rate. 3. Check its recent deployment and replica count. 4. Look for dependency failures. 5. Scale or roll back as needed.",
+  "related_to": [
+    { "target": "service:svc-1", "relationship_edge_meaning": "resolves issues in" }
+  ]
+}

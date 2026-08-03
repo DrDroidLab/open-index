@@ -1,0 +1,12 @@
+{
+  "doc_type": "service",
+  "id": "service:orders",
+  "name": "Orders Service",
+  "description": "Persists orders and exposes order history and fulfillment status.",
+  "owner": "fulfillment-team",
+  "language": "python",
+  "tier": "high",
+  "related_to": [
+    { "target": "datastore:postgres-main", "relationship_edge_meaning": "reads from" }
+  ]
+}

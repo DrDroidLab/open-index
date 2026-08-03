@@ -1,0 +1,13 @@
+{
+  "doc_type": "service",
+  "id": "service:api-gateway",
+  "name": "API Gateway",
+  "description": "Edge gateway that routes and authenticates all inbound traffic.",
+  "owner": "platform-team",
+  "language": "go",
+  "tier": "critical",
+  "related_to": [
+    { "target": "service:checkout", "relationship_edge_meaning": "is upstream of" },
+    { "target": "service:orders", "relationship_edge_meaning": "is upstream of" }
+  ]
+}

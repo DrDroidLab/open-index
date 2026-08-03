@@ -1,0 +1,12 @@
+doc_type: metric
+description: A metric / SLI definition (the stable definition, not the time-series data).
+storage: file
+display: { label_field: name, color: "#0284c7" }
+schema:
+  fields:
+    - { name: name,        type: string, search: syntactic, boost: 6 }
+    - { name: description, type: text,   search: semantic }
+    - { name: unit,        type: string, search: syntactic }
+relationships:
+  - { name: "measured on", target_doc_type: service }
+  - { name: "shown in",    target_doc_type: dashboard }

@@ -1,0 +1,11 @@
+doc_type: person
+description: A person in your life (friend, mentor, colleague, family).
+storage: file
+display:
+  label_field: name
+  color: "#0284c7"
+schema:
+  fields:
+    - { name: name,        type: string, processing: keyword, search: syntactic, boost: 6 }
+    - { name: description, type: text,   processing: text,    search: semantic }
+    - { name: role,        type: string, processing: keyword, search: syntactic, boost: 2 }

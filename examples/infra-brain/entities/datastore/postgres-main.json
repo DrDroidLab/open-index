@@ -1,0 +1,11 @@
+{
+  "doc_type": "datastore",
+  "id": "datastore:postgres-main",
+  "name": "Primary Postgres",
+  "description": "Primary transactional database for orders, payments, and checkout.",
+  "engine": "postgres",
+  "tier": "critical",
+  "related_to": [
+    { "target": "runbook:db-failover", "relationship_edge_meaning": "is documented by" }
+  ]
+}

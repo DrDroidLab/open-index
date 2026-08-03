@@ -1,0 +1,11 @@
+doc_type: deployment
+description: A deployment — the stable, human-paced unit (unlike ephemeral pods, which we deliberately do NOT model as entities).
+storage: index
+display: { label_field: name, color: "#d97706" }
+schema:
+  fields:
+    - { name: name,     type: string, search: syntactic, boost: 6 }
+    - { name: replicas, type: number, search: none }
+relationships:
+  - { name: "in namespace", target_doc_type: namespace }
+  - { name: "exposes",      target_doc_type: service }

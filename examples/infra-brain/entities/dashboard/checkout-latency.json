@@ -1,0 +1,8 @@
+{
+  "doc_type": "dashboard",
+  "id": "dashboard:checkout-latency",
+  "name": "Checkout Latency",
+  "description": "P50/P95/P99 latency and error rate for the checkout flow.",
+  "platform": "grafana",
+  "url": "https://grafana.example.com/d/checkout-latency"
+}

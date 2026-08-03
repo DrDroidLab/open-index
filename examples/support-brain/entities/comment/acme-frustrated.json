@@ -1,0 +1,12 @@
+{
+  "doc_type": "comment",
+  "id": "comment:acme-frustrated",
+  "name": "Acme Corp: repeated declines",
+  "body": "Our finance team has had three failed payments this week — every one stalls on the verification popup.",
+  "author": "Acme Corp",
+  "sentiment": "negative",
+  "related_to": [
+    { "target": "issue:payment-declined", "relationship_edge_meaning": "is evidence for" },
+    { "target": "user_segment:enterprise", "relationship_edge_meaning": "came from" }
+  ]
+}

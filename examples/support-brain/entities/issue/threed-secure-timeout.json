@@ -1,0 +1,8 @@
+{
+  "doc_type": "issue",
+  "id": "issue:threed-secure-timeout",
+  "name": "3-D Secure timeout",
+  "description": "The bank's 3-D Secure challenge page times out before the customer completes verification.",
+  "severity": "high",
+  "status": "root-cause-found"
+}

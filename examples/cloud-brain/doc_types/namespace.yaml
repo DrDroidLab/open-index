@@ -1,0 +1,7 @@
+doc_type: namespace
+description: A Kubernetes namespace.
+storage: index
+display: { label_field: name, color: "#7c3aed" }
+schema:
+  fields:
+    - { name: name, type: string, search: syntactic, boost: 6 }

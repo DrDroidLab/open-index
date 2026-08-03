@@ -1,0 +1,12 @@
+doc_type: known_issue
+description: A known issue / failure mode and how it manifests.
+storage: file
+display: { label_field: name, color: "#dc2626" }
+schema:
+  fields:
+    - { name: name,        type: string, search: syntactic, boost: 6 }
+    - { name: description, type: text,   search: semantic }
+    - { name: severity,    type: string, search: syntactic, boost: 2 }
+relationships:
+  - { name: "affects",       target_doc_type: service }
+  - { name: "documented by", target_doc_type: runbook }

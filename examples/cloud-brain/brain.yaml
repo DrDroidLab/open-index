@@ -1,0 +1,13 @@
+name: cloud-brain
+description: >-
+  A Kubernetes-style infrastructure graph — namespaces, nodes, services, and
+  deployments — populated by a real connector ingesting from a live MCP server. A
+  scale example (200 entities), all index-backed. Ephemeral pods are deliberately
+  NOT modeled as entities; deployments are the stable, human-paced unit.
+
+storage:
+  backend: sqlite
+  path: ./brain.db
+
+search:
+  backend: sqlite

@@ -1,0 +1,12 @@
+{
+  "doc_type": "dashboard",
+  "id": "dashboard:latency-overview",
+  "name": "Latency Overview",
+  "description": "P50/P95/P99 latency across the service fleet.",
+  "platform": "grafana",
+  "url": "https://grafana.example.com/d/latency-overview",
+  "related_to": [
+    { "target": "service:svc-0", "relationship_edge_meaning": "monitors" },
+    { "target": "service:svc-1", "relationship_edge_meaning": "monitors" }
+  ]
+}

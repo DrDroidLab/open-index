@@ -1,0 +1,8 @@
+{
+  "doc_type": "issue",
+  "id": "issue:no-results",
+  "name": "Search returns no results",
+  "description": "Common queries return an empty result set due to strict tokenization.",
+  "severity": "medium",
+  "status": "open"
+}

@@ -1,0 +1,11 @@
+doc_type: runbook
+description: A troubleshooting playbook for a class of problems.
+storage: file
+display: { label_field: name, color: "#b45309" }
+schema:
+  fields:
+    - { name: name,        type: string, search: syntactic, boost: 6 }
+    - { name: description, type: text,   search: semantic }
+    - { name: steps,       type: text,   search: semantic }
+relationships:
+  - { name: "resolves issues in", target_doc_type: service }

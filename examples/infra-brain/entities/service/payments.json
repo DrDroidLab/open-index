@@ -1,0 +1,14 @@
+{
+  "doc_type": "service",
+  "id": "service:payments",
+  "name": "Payments Service",
+  "description": "Talks to payment processors and handles 3-D Secure verification.",
+  "owner": "payments-team",
+  "language": "java",
+  "tier": "critical",
+  "related_to": [
+    { "target": "datastore:postgres-main", "relationship_edge_meaning": "writes to" },
+    { "target": "dashboard:payments-errors", "relationship_edge_meaning": "is monitored by" },
+    { "target": "runbook:payment-declines", "relationship_edge_meaning": "is documented by" }
+  ]
+}
