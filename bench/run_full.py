@@ -208,14 +208,30 @@ def _merge_shard_outputs(merged_dir: Path, out_dir: Path) -> dict[str, Any]:
     with predictions_path.open("w", encoding="utf-8") as preds_out, metadata_path.open(
         "w", encoding="utf-8"
     ) as meta_out:
+        # Dedupe predictions by question key, keeping the FIRST occurrence.
+        # Re-runs with a different worker count can regenerate an instance in a
+        # different shard (resume reads only its own shard), so duplicates arise.
+        seen_qids: set[str] = set()
+        pred_row_count = 0
         for shard_dir in sorted(out_dir.glob("shard_*")):
             shard_preds = shard_dir / "predictions.jsonl"
             shard_meta = shard_dir / "metadata.jsonl"
             if shard_preds.exists():
                 with shard_preds.open("r", encoding="utf-8") as f:
                     for line in f:
-                        if line.strip():
-                            preds_out.write(line)
+                        if not line.strip():
+                            continue
+                        try:
+                            row = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        qid = row.get("question_id") or row.get("qa_pair_id")
+                        if qid is not None:
+                            if qid in seen_qids:
+                                continue
+                            seen_qids.add(qid)
+                        preds_out.write(line)
+                        pred_row_count += 1
             if shard_meta.exists():
                 with shard_meta.open("r", encoding="utf-8") as f:
                     for line in f:
@@ -260,7 +276,9 @@ def _merge_shard_outputs(merged_dir: Path, out_dir: Path) -> dict[str, Any]:
         "system": "",
         "split": "",
         "instances": total_instances,
-        "questions": total_questions,
+        # Unique prediction rows actually written (shard summaries can
+        # double-count regenerated instances after cross-shard re-runs).
+        "questions": pred_row_count,
         "failures": total_failures,
         "k": 5,
         "seed": 42,

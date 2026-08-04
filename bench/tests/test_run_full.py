@@ -506,3 +506,26 @@ def test_merge_without_probes_leaves_probe_path_none(tmp_path: Path) -> None:
 
     assert merged["probe_results_path"] is None
     assert not (out_dir / "merged" / "probe_results.json").exists()
+
+
+def test_merge_dedupes_duplicate_question_ids(tmp_path: Path) -> None:
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    for i in range(2):
+        shard_dir = out_dir / f"shard_{i}"
+        shard_dir.mkdir()
+        # Both shards contain a row for the same question (cross-shard re-run).
+        (shard_dir / "predictions.jsonl").write_text(
+            json.dumps({"question_id": "q_dup", "hypothesis": f"from_shard_{i}"}) + "\n"
+        )
+        (shard_dir / "metadata.jsonl").write_text("{}\n")
+        (shard_dir / "summary.json").write_text(
+            json.dumps({"instances": 1, "questions": 1, "failures": 0, "total_cost_usd": 0.01})
+        )
+
+    merged = run_full.merge_shards(out_dir, "longmemeval", "flat", "", 5, 42)
+
+    preds = [json.loads(l) for l in (out_dir / "merged" / "predictions.jsonl").read_text().splitlines()]
+    assert len(preds) == 1
+    assert preds[0]["hypothesis"] == "from_shard_0"  # first occurrence wins
+    assert merged["questions"] == 1
