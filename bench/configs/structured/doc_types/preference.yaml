@@ -1,0 +1,33 @@
+doc_type: preference
+storage: index
+schema:
+  fields:
+    - name: subject
+      type: string
+      processing: keyword
+      search: syntactic
+      boost: 3
+      required: true
+    - name: preference_type
+      type: string
+      processing: keyword
+      search: syntactic
+      boost: 2
+      required: true
+    - name: value
+      type: text
+      processing: text
+      search: syntactic
+      boost: 1
+      required: true
+    - name: source_id
+      type: string
+      processing: keyword
+      search: syntactic
+      boost: 1
+      required: true
+    - name: timestamp
+      type: string
+      processing: keyword
+      search: none
+      required: false

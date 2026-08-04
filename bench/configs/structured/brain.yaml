@@ -1,0 +1,6 @@
+name: bench-structured
+storage:
+  backend: sqlite
+  path: ./brain.db
+search:
+  backend: sqlite

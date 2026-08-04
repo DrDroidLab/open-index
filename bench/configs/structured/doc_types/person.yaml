@@ -1,0 +1,33 @@
+doc_type: person
+storage: index
+schema:
+  fields:
+    - name: name
+      type: string
+      processing: keyword
+      search: syntactic
+      boost: 4
+      required: true
+    - name: role
+      type: string
+      processing: keyword
+      search: syntactic
+      boost: 2
+      required: false
+    - name: notes
+      type: text
+      processing: text
+      search: syntactic
+      boost: 1
+      required: false
+    - name: source_id
+      type: string
+      processing: keyword
+      search: syntactic
+      boost: 1
+      required: true
+    - name: timestamp
+      type: string
+      processing: keyword
+      search: none
+      required: false

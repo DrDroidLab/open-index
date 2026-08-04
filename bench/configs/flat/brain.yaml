@@ -1,0 +1,6 @@
+name: bench-flat
+storage:
+  backend: sqlite
+  path: ./brain.db
+search:
+  backend: sqlite
