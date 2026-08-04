@@ -13,6 +13,7 @@ from droid_brain.models import Entity
 from bench.ir.types import BenchmarkInstance, Question
 from bench.llm.client import LLMClient
 from bench.prompts import probe_judge_prompt, probe_search_prompt, update_probe_extraction_prompt
+from bench.systems._utils import fact_entity_id
 
 
 @dataclass
@@ -123,7 +124,7 @@ def load_probes(cache_path: Path) -> list[UpdateProbe]:
 
 def probe_structured(brain: Brain, probe: UpdateProbe) -> bool:
     """Directly inspect the structured brain for the expected current value."""
-    entity_id = f"user_fact:{probe.subject.lower().strip()}-{probe.attribute.lower().strip()}"
+    entity_id = fact_entity_id(probe.subject, probe.attribute)
     entity = brain.get_entity(entity_id)
     if entity is None:
         return False

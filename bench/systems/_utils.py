@@ -6,10 +6,12 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import yaml
 
 from bench.config import BENCH_DIR
+from droid_brain.models import Entity
 
 _SLUG_INVALID = re.compile(r"[^a-zA-Z0-9._-]")
 _SPACE_RE = re.compile(r"\s+")
@@ -28,6 +30,20 @@ def normalize_slug(value: str) -> str:
     if not value:
         return "x"
     return value
+
+
+def fact_entity_id(subject: str, attribute: str) -> str:
+    """Return the stable entity id for a structured user_fact."""
+    return f"user_fact:{normalize_slug(subject)}-{normalize_slug(attribute)}"
+
+
+def record_source_id(entity: Entity | None, retrieved: list[str]) -> None:
+    """Append an entity's source_id to `retrieved` if present and not already recorded."""
+    if entity is None:
+        return
+    sid = entity.fields.get("source_id")
+    if sid and sid not in retrieved:
+        retrieved.append(sid)
 
 
 def copy_brain_config(src_dir: Path, dest_dir: Path, db_path: Path | str) -> None:

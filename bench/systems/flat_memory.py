@@ -2,19 +2,12 @@
 
 from __future__ import annotations
 
-import shutil
-import time
-from typing import Any, Iterator
+from typing import Any
 
-from droid_brain.brain import Brain
-from droid_brain.models import Entity
-
-from bench.ir.types import EvidenceEvent, Question
 from bench.llm.client import LLMClient
-from bench.prompts import answer_system_prompt, ingest_system_prompt
-from bench.systems._tool_loop import function_tool, object_schema, run_tool_loop
-from bench.systems._utils import make_temp_brain, normalize_slug
-from bench.systems.base import Answer, MemorySystem
+from bench.systems._brain import BrainBackedMemorySystem
+from bench.systems._tool_loop import answer_tool_handler, function_tool, object_schema
+from bench.systems._utils import normalize_slug, record_source_id
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +69,7 @@ _ANSWER_TOOLS = [
 # ---------------------------------------------------------------------------
 
 
-class FlatMemoryBaseline(MemorySystem):
+class FlatMemoryBaseline(BrainBackedMemorySystem):
     """Flat baseline: a single `memory` doc_type, same FTS5 backend as structured."""
 
     def __init__(
@@ -86,93 +79,38 @@ class FlatMemoryBaseline(MemorySystem):
         max_ingest_tools: int = 4,
         max_answer_tools: int = 12,
     ):
-        self.client = llm_client
-        self.keep_state = keep_state
-        self.max_ingest_tools = max_ingest_tools
-        self.max_answer_tools = max_answer_tools
-        self._brain_dir = make_temp_brain("flat")
-        self.brain = Brain.open(self._brain_dir)
-        self._current_event: EvidenceEvent | None = None
-
-    def ingest(self, events: Iterator[EvidenceEvent]) -> None:
-        for event in events:
-            self._current_event = event
-            messages = [
-                {"role": "system", "content": ingest_system_prompt("flat")},
-                {
-                    "role": "user",
-                    "content": (
-                        f"Event source_id={event.source_id} timestamp={event.timestamp}\n\n"
-                        f"{event.text}"
-                    ),
-                },
-            ]
-            run_tool_loop(
-                client=self.client,
-                messages=messages,
-                tools=_INGEST_TOOLS,
-                handlers=self._ingest_handlers(),
-                finish_tool="done",
-                max_tool_calls=self.max_ingest_tools,
-            )
-
-    def answer(self, question: Question) -> Answer:
-        start = time.perf_counter()
-        retrieved_source_ids: list[str] = []
-        system_prompt = answer_system_prompt("flat", question.question_timestamp)
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": question.text},
-        ]
-        result = run_tool_loop(
-            client=self.client,
-            messages=messages,
-            tools=_ANSWER_TOOLS,
-            handlers=self._answer_handlers(retrieved_source_ids),
-            finish_tool="answer",
-            max_tool_calls=self.max_answer_tools,
-        )
-        latency_ms = (time.perf_counter() - start) * 1000
-        answer_usage = result.usage
-        all_source_ids = list(dict.fromkeys(result.source_ids + retrieved_source_ids))
-        return Answer(
-            text=result.content,
-            source_ids=all_source_ids,
-            tool_calls=result.tool_calls,
-            usage=answer_usage,
-            latency_ms=latency_ms,
-            metadata=result.metadata,
+        super().__init__(
+            llm_client,
+            config_name="flat",
+            prompt_variant="flat",
+            keep_state=keep_state,
+            max_ingest_tools=max_ingest_tools,
+            max_answer_tools=max_answer_tools,
         )
 
-    def close(self) -> None:
-        if not self.keep_state and self._brain_dir.exists():
-            shutil.rmtree(self._brain_dir, ignore_errors=True)
+    def _ingest_tools(self) -> list[dict[str, Any]]:
+        return _INGEST_TOOLS
+
+    def _answer_tools(self) -> list[dict[str, Any]]:
+        return _ANSWER_TOOLS
 
     def _ingest_handlers(self) -> dict[str, Any]:
-        event = self._current_event
-        source_id = event.source_id if event else ""
-        timestamp = event.timestamp if event else ""
-
         def _write_memory(args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             text = args.get("text", "")
             memory_id = args.get("memory_id")
-            if memory_id:
-                entity_id = f"memory:{normalize_slug(memory_id)}"
-            else:
-                entity_id = f"memory:{normalize_slug(source_id)}"
-            self.brain.put_entity(
-                Entity(
-                    id=entity_id,
-                    doc_type="memory",
-                    name=entity_id,
-                    fields={
-                        "text": text,
-                        "source_id": source_id,
-                        "timestamp": timestamp,
-                    },
-                )
+            source_id = self._current_source_id
+            entity_id = (
+                f"memory:{normalize_slug(memory_id)}"
+                if memory_id
+                else f"memory:{normalize_slug(source_id)}"
             )
-            return f"Wrote {entity_id}.", {}
+            observation = self._put_entity(
+                entity_id,
+                "memory",
+                entity_id,
+                {"text": text},
+            )
+            return observation, {}
 
         def _done(args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             return "Done.", {}
@@ -185,17 +123,16 @@ class FlatMemoryBaseline(MemorySystem):
             limit = args.get("limit", 5)
             results = self.brain.search(query=query, doc_types=["memory"], limit=limit)
             lines = [f"Memory search results ({results.total} total, limit {limit}):"]
-            for r in results.results:
-                raw = r.get("entity")
-                if raw is None:
-                    continue
-                entity = Entity.from_dict(raw)
-                sid = entity.fields.get("source_id")
-                if sid and sid not in retrieved_source_ids:
-                    retrieved_source_ids.append(sid)
-                lines.append(
-                    f"- id={entity.id} source_id={sid} text={entity.fields.get('text', '')[:200]}"
+            lines.extend(
+                self._format_search_result_lines(
+                    results,
+                    retrieved_source_ids,
+                    lambda e: (
+                        f"- id={e.id} source_id={e.fields.get('source_id')} "
+                        f"text={e.fields.get('text', '')[:200]}"
+                    ),
                 )
+            )
             return "\n".join(lines), {}
 
         def _get_memory(args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -204,21 +141,15 @@ class FlatMemoryBaseline(MemorySystem):
             entity = self.brain.get_entity(entity_id)
             if entity is None:
                 return f"Memory {entity_id} not found.", {}
-            sid = entity.fields.get("source_id")
-            if sid and sid not in retrieved_source_ids:
-                retrieved_source_ids.append(sid)
+            record_source_id(entity, retrieved_source_ids)
             return (
-                f"Memory {entity.id}: source_id={sid}, text={entity.fields.get('text', '')}",
+                f"Memory {entity.id}: source_id={entity.fields.get('source_id')}, "
+                f"text={entity.fields.get('text', '')}",
                 {},
             )
-
-        def _answer(args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-            text = args.get("text", "")
-            source_ids = list(args.get("source_ids", []))
-            return "Answer recorded.", {"text": text, "source_ids": source_ids}
 
         return {
             "search_memory": _search_memory,
             "get_memory": _get_memory,
-            "answer": _answer,
+            "answer": answer_tool_handler,
         }

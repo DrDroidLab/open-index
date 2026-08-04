@@ -122,3 +122,16 @@ def run_tool_loop(
     result.metadata["stopped_due_to"] = "max_tool_calls"
     result.tool_calls = tool_count
     return result
+
+
+# ---------------------------------------------------------------------------
+# Shared tool handlers
+# ---------------------------------------------------------------------------
+
+
+def answer_tool_handler(args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Common handler for the final `answer` tool used by all brain systems."""
+    return "Answer recorded.", {
+        "text": args.get("text", ""),
+        "source_ids": list(args.get("source_ids", [])),
+    }
