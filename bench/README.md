@@ -132,6 +132,7 @@ bench/
 │   ├── scoring.py         # SubEM, official judge, Recall@k, ops/probe metrics
 │   └── report.py          # combined markdown report generator
 ├── run_smoke.py           # smoke matrix runner with cost cap
+├── run_full.py            # sharded full-run wrapper
 ├── ir/
 │   └── types.py           # EvidenceEvent, Question, BenchmarkInstance
 ├── llm/
@@ -146,6 +147,50 @@ bench/
 ├── tests/                 # pytest unit tests + optional integration smoke
 └── results/               # generated reports (raw logs are gitignored)
 ```
+
+## Full runs
+
+For production evaluations, use `bench/run_full.py` to shard the workload across
+worker processes. Each worker owns its own output directory and SQLite brain, so
+there is no shared mutable state. The wrapper merges shard outputs, scores them,
+and writes a combined report.
+
+Run the three LongMemEval-S arms (one command per arm, each uses 8 workers by
+default):
+
+```bash
+python3 -m bench.run_full --dataset longmemeval --system structured --out bench/results/full_lme_structured
+python3 -m bench.run_full --dataset longmemeval --system flat --out bench/results/full_lme_flat
+python3 -m bench.run_full --dataset longmemeval --system longctx --out bench/results/full_lme_longctx
+```
+
+Run the MemoryAgentBench splits:
+
+```bash
+python3 -m bench.run_full --dataset mab --split Accurate_Retrieval --system structured --out bench/results/full_mab_ar_structured
+python3 -m bench.run_full --dataset mab --split Accurate_Retrieval --system flat --out bench/results/full_mab_ar_flat
+python3 -m bench.run_full --dataset mab --split Accurate_Retrieval --system longctx --out bench/results/full_mab_ar_longctx
+
+python3 -m bench.run_full --dataset mab --split Conflict_Resolution --system structured --out bench/results/full_mab_cr_structured
+python3 -m bench.run_full --dataset mab --split Conflict_Resolution --system flat --out bench/results/full_mab_cr_flat
+```
+
+Useful flags:
+
+- `--workers P` — number of parallel worker processes (default 8).
+- `--max-instances N` — limit the number of instances to process (handy for a
+dry run).
+- `--max-cost C` — approximate per-worker cost cap; the global cap is split
+evenly across workers. Set to 0 for unlimited.
+- `--no-score` — run the matrix and merge outputs without invoking the judge
+(useful when you want to score later or separately).
+- `--k` and `--seed` — forwarded to the systems.
+
+Because the harness uses an Azure OpenAI-compatible endpoint, the default
+`--workers 8` may hit rate limits on large-context calls. If you see 429 errors
+in the per-shard logs, reduce `--workers` (the client already retries with
+backoff, but sustained concurrency can outpace a tight quota). Start with
+`--workers 4` for the long-context arm and `--workers 8` for the brain arms.
 
 ## Design notes
 

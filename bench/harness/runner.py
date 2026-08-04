@@ -17,7 +17,7 @@ from bench.config import (
 )
 from bench.data import longmemeval, memoryagentbench
 from bench.harness.probes import UpdateProbe, _is_update_question, extract_probes, probe_flat, probe_structured
-from bench.ir.types import BenchmarkInstance, Question
+from bench.ir.types import BenchmarkInstance, Question, read_instances
 from bench.llm.client import LLMClient, Usage
 from bench.systems import FlatMemoryBaseline, LongContextBaseline, StructuredBrainMemory
 from bench.systems.base import Answer, MemorySystem
@@ -53,6 +53,57 @@ def _load_instances(config: dict[str, Any]) -> Iterator[BenchmarkInstance]:
         )
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
+
+
+def _load_instances_from_config(config: dict[str, Any]) -> list[BenchmarkInstance]:
+    """Load instances from a config value: path, list, or via adapters."""
+    raw = config.get("instances")
+    if raw is None or raw == "":
+        return list(_load_instances(config))
+    if isinstance(raw, (str, Path)):
+        return list(read_instances(Path(raw)))
+    if isinstance(raw, list):
+        return list(raw)
+    # Treat any iterable as a list.
+    return list(raw)
+
+
+def _existing_qids_from_predictions(path: Path) -> set[str]:
+    """Return question IDs already present in a predictions.jsonl file."""
+    qids: set[str] = set()
+    if not path.exists():
+        return qids
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        qids.add(str(row.get("question_id", "")))
+        qids.add(str(row.get("qa_pair_id", "")))
+    return qids
+
+
+def _load_existing_summary(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _load_existing_probe_results(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return data
+        return []
+    except (json.JSONDecodeError, OSError):
+        return []
 
 
 def _make_system(
@@ -134,27 +185,54 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
     """Run one dataset x system combination and write result files."""
     dataset = config["dataset"]
     system_name = config["system"]
-    out_dir = Path(config.get("out", RESULTS_DIR)) / dataset / system_name
+    if "out_dir" in config:
+        out_dir = Path(config["out_dir"])
+    else:
+        out_dir = Path(config.get("out", RESULTS_DIR)) / dataset / system_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
     predictions_path = out_dir / "predictions.jsonl"
     metadata_path = out_dir / "metadata.jsonl"
     probe_results_path = out_dir / "probe_results.json"
+    summary_path = out_dir / "summary.json"
 
     k = int(config.get("k", 5))
     seed = int(config.get("seed", 42))
     split = config.get("split", "")
 
+    resume = bool(config.get("resume", False))
+    cost_cap = max(0.0, float(config.get("cost_cap", 0.0) or 0.0))
+
+    existing_qids: set[str] = set()
+    existing_summary: dict[str, Any] = {}
+    existing_probes: list[dict[str, Any]] = []
+    if resume:
+        existing_qids = _existing_qids_from_predictions(predictions_path)
+        existing_summary = _load_existing_summary(summary_path)
+        existing_probes = _load_existing_probe_results(probe_results_path)
+
+    existing_instances = int(existing_summary.get("instances", 0))
+    existing_questions = int(existing_summary.get("questions", 0))
+    existing_failures = int(existing_summary.get("failures", 0))
+    existing_cost = float(existing_summary.get("total_cost_usd", 0.0))
+
     prediction_rows: list[dict[str, Any]] = []
     metadata_rows: list[dict[str, Any]] = []
-    probe_results: list[dict[str, Any]] = []
+    probe_results = list(existing_probes) if resume else []
     total_cost = 0.0
     instance_count = 0
     question_count = 0
     failure_count = 0
+    cost_cap_reached = False
 
-    instances = config.get("instances") or _load_instances(config)
+    instances = _load_instances_from_config(config)
     for instance in instances:
+        if resume and any(q.question_id in existing_qids for q in instance.questions):
+            continue
+        if cost_cap > 0 and existing_cost + total_cost >= cost_cap:
+            cost_cap_reached = True
+            break
+
         instance_count += 1
         system = _make_system(config, client=config.get("client"), k=k, seed=seed)
         cost_before = system.client.ledger.total_cost_usd
@@ -246,11 +324,21 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
             )
 
     if prediction_rows:
-        with predictions_path.open("w", encoding="utf-8") as f:
+        mode = "a" if resume else "w"
+        with predictions_path.open(mode, encoding="utf-8") as f:
             for row in prediction_rows:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-    _write_metadata(metadata_path, metadata_rows)
+    if metadata_rows:
+        mode = "a" if resume else "w"
+        with metadata_path.open(mode, encoding="utf-8") as f:
+            for row in metadata_rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    elif not resume:
+        # Keep the non-resume behavior: overwrite with an empty file when there
+        # are no rows so stale metadata is not left behind.
+        with metadata_path.open("w", encoding="utf-8") as f:
+            pass
 
     if probe_results:
         probe_results_path.write_text(
@@ -258,21 +346,28 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
             encoding="utf-8",
         )
 
-    summary = {
+    total_instances = existing_instances + instance_count
+    total_questions = existing_questions + question_count
+    total_failures = existing_failures + failure_count
+    total_cost_all = existing_cost + total_cost
+
+    summary: dict[str, Any] = {
         "dataset": dataset,
         "system": system_name,
         "split": split,
-        "instances": instance_count,
-        "questions": question_count,
-        "failures": failure_count,
+        "instances": total_instances,
+        "questions": total_questions,
+        "failures": total_failures,
         "k": k,
         "seed": seed,
-        "total_cost_usd": total_cost,
+        "total_cost_usd": total_cost_all,
         "predictions_path": str(predictions_path),
         "metadata_path": str(metadata_path),
         "probe_results_path": str(probe_results_path) if probe_results else None,
     }
-    summary_path = out_dir / "summary.json"
+    if cost_cap_reached:
+        summary["cost_cap_reached"] = True
+        summary["cost_cap_usd"] = cost_cap
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False))
     return summary
 
