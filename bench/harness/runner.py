@@ -80,8 +80,10 @@ def _existing_qids_from_predictions(path: Path) -> set[str]:
             row = json.loads(line)
         except json.JSONDecodeError:
             continue
-        qids.add(str(row.get("question_id", "")))
-        qids.add(str(row.get("qa_pair_id", "")))
+        for key in ("question_id", "qa_pair_id"):
+            value = row.get(key)
+            if value:
+                qids.add(str(value))
     return qids
 
 
