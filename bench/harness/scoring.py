@@ -522,6 +522,20 @@ def score_run(
         if line.strip()
     ]
 
+    # Per-question metrics must not double-count questions: merged runs can
+    # contain duplicate metadata rows after cross-shard top-up re-runs
+    # (predictions are deduped at merge time; metadata is kept complete for
+    # honest cost accounting). Dedupe by question id, keeping the first row.
+    seen_qids: set[str] = set()
+    metadata_unique: list[dict[str, Any]] = []
+    for row in metadata:
+        qid = str(row.get("question_id", ""))
+        if qid and qid in seen_qids:
+            continue
+        if qid:
+            seen_qids.add(qid)
+        metadata_unique.append(row)
+
     dataset = summary["dataset"]
     system = summary["system"]
     metrics: dict[str, Any] = {
@@ -563,9 +577,9 @@ def score_run(
         judge_results = run_longmemeval_judge(run_dir / "predictions.jsonl", judge_client, references=references)
         metrics["judge"] = aggregate_judge_results(judge_results)
         if system == "longctx":
-            metrics["window_coverage"] = compute_window_coverage(metadata, references)
+            metrics["window_coverage"] = compute_window_coverage(metadata_unique, references)
         else:
-            metrics["recall_at_k"] = compute_recall_at_k(metadata, references, k=metrics["k"])
+            metrics["recall_at_k"] = compute_recall_at_k(metadata_unique, references, k=metrics["k"])
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
 
