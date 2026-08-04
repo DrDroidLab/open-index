@@ -272,3 +272,61 @@ def test_runner_catches_instance_error_and_continues(tmp_path: Path, monkeypatch
     metadata_path = Path(summary["metadata_path"])
     rows = [json.loads(line) for line in metadata_path.read_text().splitlines()]
     assert rows[0]["error"].startswith("RuntimeError")
+
+
+def _two_instance_config(tmp_path: Path, **extra):
+    instances = [
+        BenchmarkInstance(
+            instance_id=f"lme_{i}",
+            events=[EvidenceEvent(event_id=f"e{i}", source_id=f"s{i}", timestamp="2023-05-20", text="x")],
+            questions=[Question(question_id=f"lme_{i}", text="q?")],
+        )
+        for i in range(2)
+    ]
+    config = {
+        "dataset": "longmemeval",
+        "system": "fake",
+        "instances": instances,
+        "out": str(tmp_path / "results"),
+        "temperature": 0.0,
+        "model": "gpt-4o-mini",
+    }
+    config.update(extra)
+    return config
+
+
+def test_runner_fresh_run_truncates_stale_predictions(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(runner, "SYSTEMS", {"fake": lambda client, k, seed: _FakeSystem(client)})
+    run_dir = tmp_path / "results" / "longmemeval" / "fake"
+    run_dir.mkdir(parents=True)
+    (run_dir / "predictions.jsonl").write_text(
+        json.dumps({"question_id": "STALE", "hypothesis": "old"}) + "\n", encoding="utf-8"
+    )
+    (run_dir / "metadata.jsonl").write_text('{"stale": true}\n', encoding="utf-8")
+
+    summary = runner.run(_two_instance_config(tmp_path))
+    assert summary["questions"] == 2
+
+    preds = [json.loads(line) for line in (run_dir / "predictions.jsonl").read_text().splitlines()]
+    assert {p["question_id"] for p in preds} == {"lme_0", "lme_1"}
+    assert all(p["question_id"] != "STALE" for p in preds)
+    meta = [json.loads(line) for line in (run_dir / "metadata.jsonl").read_text().splitlines()]
+    assert all("stale" not in m for m in meta)
+
+
+def test_runner_resume_appends_and_skips_completed(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(runner, "SYSTEMS", {"fake": lambda client, k, seed: _FakeSystem(client)})
+    run_dir = tmp_path / "results" / "longmemeval" / "fake"
+    run_dir.mkdir(parents=True)
+    # Simulate a crashed earlier worker: lme_0 already predicted, lme_1 not.
+    (run_dir / "predictions.jsonl").write_text(
+        json.dumps({"question_id": "lme_0", "hypothesis": "from crash"}) + "\n", encoding="utf-8"
+    )
+
+    summary = runner.run(_two_instance_config(tmp_path, resume=True))
+    assert summary["questions"] == 1  # only lme_1 ran this time
+
+    preds = [json.loads(line) for line in (run_dir / "predictions.jsonl").read_text().splitlines()]
+    assert [p["question_id"] for p in preds] == ["lme_0", "lme_1"]
+    assert preds[0]["hypothesis"] == "from crash"  # original row untouched
+    assert preds[1]["hypothesis"] == "answer for lme_1"  # appended, not rewritten

@@ -218,6 +218,29 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
 
     prediction_rows: list[dict[str, Any]] = []
     metadata_rows: list[dict[str, Any]] = []
+    if not resume:
+        # Fresh run: truncate so the per-instance appends below cannot
+        # duplicate stale rows from an earlier run in the same directory.
+        predictions_path.write_text("", encoding="utf-8")
+        metadata_path.write_text("", encoding="utf-8")
+
+    def _flush_rows() -> None:
+        """Append buffered rows to disk and clear the buffers.
+
+        Flushed after every instance so a crashed worker never loses
+        completed work and --resume can skip it on restart.
+        """
+        if prediction_rows:
+            with predictions_path.open("a", encoding="utf-8") as f:
+                for row in prediction_rows:
+                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            prediction_rows.clear()
+        if metadata_rows:
+            with metadata_path.open("a", encoding="utf-8") as f:
+                for row in metadata_rows:
+                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            metadata_rows.clear()
+
     probe_results = list(existing_probes) if resume else []
     total_cost = 0.0
     instance_count = 0
@@ -323,22 +346,9 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
                 }
             )
 
-    if prediction_rows:
-        mode = "a" if resume else "w"
-        with predictions_path.open(mode, encoding="utf-8") as f:
-            for row in prediction_rows:
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        _flush_rows()
 
-    if metadata_rows:
-        mode = "a" if resume else "w"
-        with metadata_path.open(mode, encoding="utf-8") as f:
-            for row in metadata_rows:
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    elif not resume:
-        # Keep the non-resume behavior: overwrite with an empty file when there
-        # are no rows so stale metadata is not left behind.
-        with metadata_path.open("w", encoding="utf-8") as f:
-            pass
+    _flush_rows()
 
     if probe_results:
         probe_results_path.write_text(
