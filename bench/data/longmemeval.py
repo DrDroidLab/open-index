@@ -12,6 +12,30 @@ from bench.ir.types import BenchmarkInstance, EvidenceEvent, Question
 
 LONGMEMEVAL_FILE = "longmemeval_s_cleaned.json"
 
+
+def load_rows(file: Path | str | None = None) -> list[dict[str, Any]]:
+    """Load the raw LongMemEval-S cleaned JSON rows.
+
+    Handles JSON files that are either a top-level list or a dict keyed by split.
+    """
+    if file is None:
+        file = DatasetCacheConfig().longmemeval_dir / LONGMEMEVAL_FILE
+    path = Path(file)
+    if not path.exists():
+        raise FileNotFoundError(f"LongMemEval cache not found: {path}. Run fetch_eval_assets.")
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        # Some HF JSON files are keyed by split; take the first list value.
+        for v in data.values():
+            if isinstance(v, list):
+                data = v
+                break
+    if not isinstance(data, list):
+        raise ValueError(f"Expected a list of rows in {path}, got {type(data).__name__}")
+    return data
+
+
 _DATE_RE = re.compile(
     r"(\d{4})\s*[/-]\s*(\d{1,2})\s*[/-]\s*(\d{1,2})"
 )
@@ -105,21 +129,7 @@ def iter_instances(
         max_instances: Maximum number of instances to yield.
         source_filter: Unused for LongMemEval (kept for a uniform adapter signature).
     """
-    if file is None:
-        file = DatasetCacheConfig().longmemeval_dir / LONGMEMEVAL_FILE
-    path = Path(file)
-    if not path.exists():
-        raise FileNotFoundError(f"LongMemEval cache not found: {path}. Run fetch_eval_assets.")
-
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(data, dict):
-        # Some HF JSON files are keyed by split; take the first list value.
-        for v in data.values():
-            if isinstance(v, list):
-                data = v
-                break
-    if not isinstance(data, list):
-        raise ValueError(f"Expected a list of rows in {path}, got {type(data).__name__}")
+    data = load_rows(file)
 
     yielded = 0
     for row in data:

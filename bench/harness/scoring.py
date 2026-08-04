@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from bench.config import AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, JUDGE_MODEL, RESULTS_DIR
+from bench.data import longmemeval
+from bench.data.memoryagentbench import _derive_coarse_group
 from bench.llm.client import LLMClient
 
 
@@ -76,6 +78,48 @@ def _load_official_judge_prompt() -> Optional[Any]:
         return None
 
 
+_JUDGE_QA_INTRO = (
+    "I will give you a question, a correct answer, and a response from a model. "
+    "Please answer yes if the response contains the correct answer. Otherwise, answer no. "
+    "If the response is equivalent to the correct answer or contains all the intermediate steps "
+    "to get the correct answer, you should also answer yes. "
+    "If the response only contains a subset of the information required by the answer, answer no. "
+)
+
+_JUDGE_TYPE_NOTES: dict[str, str] = {
+    "single-session-user": "",
+    "single-session-assistant": "",
+    "multi-session": "",
+    "temporal-reasoning": (
+        "In addition, do not penalize off-by-one errors for the number of days. "
+        "If the question asks for the number of days/weeks/months, etc., and the model makes off-by-one errors "
+        "(e.g., predicting 19 days when the answer is 18), the model's response is still correct. "
+    ),
+    "knowledge-update": (
+        "If the response contains some previous information along with an updated answer, "
+        "the response should be considered as correct as long as the updated answer is the required answer."
+    ),
+}
+
+
+def _build_qa_judge_prompt(
+    question_type: str,
+    question: str,
+    answer: str,
+    hypothesis: str,
+) -> str:
+    """Build the standard QA judge prompt for a known question type."""
+    return (
+        _JUDGE_QA_INTRO
+        + _JUDGE_TYPE_NOTES[question_type]
+        + "\n\n"
+        + f"Question: {question}\n\n"
+        + f"Correct Answer: {answer}\n\n"
+        + f"Model Response: {hypothesis}\n\n"
+        + "Is the model response correct? Answer yes or no only."
+    )
+
+
 def _fallback_judge_prompt(
     question_type: str,
     question: str,
@@ -100,47 +144,6 @@ def _fallback_judge_prompt(
             "Does the model correctly identify the question as unanswerable? Answer yes or no only."
         )
 
-    if question_type in ("single-session-user", "single-session-assistant", "multi-session"):
-        return (
-            "I will give you a question, a correct answer, and a response from a model. "
-            "Please answer yes if the response contains the correct answer. Otherwise, answer no. "
-            "If the response is equivalent to the correct answer or contains all the intermediate steps "
-            "to get the correct answer, you should also answer yes. "
-            "If the response only contains a subset of the information required by the answer, answer no. "
-            "\n\n"
-            f"Question: {question}\n\n"
-            f"Correct Answer: {answer}\n\n"
-            f"Model Response: {hypothesis}\n\n"
-            "Is the model response correct? Answer yes or no only."
-        )
-    if question_type == "temporal-reasoning":
-        return (
-            "I will give you a question, a correct answer, and a response from a model. "
-            "Please answer yes if the response contains the correct answer. Otherwise, answer no. "
-            "If the response is equivalent to the correct answer or contains all the intermediate steps "
-            "to get the correct answer, you should also answer yes. "
-            "If the response only contains a subset of the information required by the answer, answer no. "
-            "In addition, do not penalize off-by-one errors for the number of days. "
-            "If the question asks for the number of days/weeks/months, etc., and the model makes off-by-one errors "
-            "(e.g., predicting 19 days when the answer is 18), the model's response is still correct. "
-            "\n\n"
-            f"Question: {question}\n\n"
-            f"Correct Answer: {answer}\n\n"
-            f"Model Response: {hypothesis}\n\n"
-            "Is the model response correct? Answer yes or no only."
-        )
-    if question_type == "knowledge-update":
-        return (
-            "I will give you a question, a correct answer, and a response from a model. "
-            "Please answer yes if the response contains the correct answer. Otherwise, answer no. "
-            "If the response contains some previous information along with an updated answer, "
-            "the response should be considered as correct as long as the updated answer is the required answer."
-            "\n\n"
-            f"Question: {question}\n\n"
-            f"Correct Answer: {answer}\n\n"
-            f"Model Response: {hypothesis}\n\n"
-            "Is the model response correct? Answer yes or no only."
-        )
     if question_type == "single-session-preference":
         return (
             "I will give you a question, a rubric for desired personalized response, and a response from a model. "
@@ -153,6 +156,10 @@ def _fallback_judge_prompt(
             f"Model Response: {hypothesis}\n\n"
             "Is the model response correct? Answer yes or no only."
         )
+
+    if question_type in _JUDGE_TYPE_NOTES:
+        return _build_qa_judge_prompt(question_type, question, answer, hypothesis)
+
     raise NotImplementedError(f"No judge prompt for question type {question_type!r}")
 
 
@@ -161,27 +168,8 @@ def _load_longmemeval_references() -> dict[str, dict[str, Any]]:
     path = _longmemeval_cache_path()
     if not path.exists():
         raise FileNotFoundError(f"LongMemEval cache not found: {path}")
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(data, dict):
-        for v in data.values():
-            if isinstance(v, list):
-                data = v
-                break
-    if not isinstance(data, list):
-        raise ValueError(f"Expected a list of rows in {path}, got {type(data).__name__}")
-    return {str(row.get("question_id", "")): row for row in data if row.get("question_id")}
-
-
-def _derive_mab_coarse_group(source: str, split: str) -> str:
-    """Derive the coarse ability group for a MemoryAgentBench row."""
-    s = (source or "").lower()
-    if "factconsolidation_sh" in s or s.startswith("fc_sh"):
-        return "conflict_resolution_sh"
-    if "factconsolidation_mh" in s or s.startswith("fc_mh"):
-        return "conflict_resolution_mh"
-    if split.lower() == "accurate_retrieval":
-        return "accurate_retrieval"
-    return split.lower().replace(" ", "_")
+    rows = longmemeval.load_rows(path)
+    return {str(row.get("question_id", "")): row for row in rows if row.get("question_id")}
 
 
 def _mean(values: list[float]) -> float:
@@ -278,7 +266,7 @@ def score_mab_predictions(predictions: list[dict[str, Any]]) -> dict[str, Any]:
         all_scores.append(score)
         split = str(pred.get("split", ""))
         source = str(pred.get("source", ""))
-        group = _derive_mab_coarse_group(source, split)
+        group = _derive_coarse_group(source, split)
         per_split[split].append(score)
         per_group[group].append(score)
     return {

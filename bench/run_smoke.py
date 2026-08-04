@@ -35,30 +35,19 @@ def _select_longmemeval_smoke_indices(n: int, min_knowledge_update: int = 2) -> 
     3. Return the selected indices sorted by their original position.
     """
     path = DatasetCacheConfig().longmemeval_dir / "longmemeval_s_cleaned.json"
-    if not path.exists():
-        raise FileNotFoundError(f"LongMemEval cache not found: {path}")
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(data, dict):
-        for v in data.values():
-            if isinstance(v, list):
-                data = v
-                break
-    if not isinstance(data, list):
-        raise ValueError(f"Expected a list of rows in {path}, got {type(data).__name__}")
-
-    ku_indices = [i for i, row in enumerate(data) if row.get("question_type") == "knowledge-update"]
+    rows = longmemeval.load_rows(path)
+    ku_indices = [i for i, row in enumerate(rows) if row.get("question_type") == "knowledge-update"]
     selected = set(ku_indices[: min(min_knowledge_update, n)])
     remaining = n - len(selected)
-    if remaining > 0:
-        for i, row in enumerate(data):
-            if i in selected:
-                continue
-            if row.get("question_type") == "knowledge-update" and i not in selected:
-                continue
-            selected.add(i)
-            remaining -= 1
-            if remaining == 0:
-                break
+    for i, row in enumerate(rows):
+        if remaining <= 0:
+            break
+        if i in selected:
+            continue
+        if row.get("question_type") == "knowledge-update":
+            continue
+        selected.add(i)
+        remaining -= 1
     return sorted(selected)
 
 

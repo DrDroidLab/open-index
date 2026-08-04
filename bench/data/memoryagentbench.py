@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -43,7 +44,7 @@ def _split_context(context: str, max_chunk_chars: int = 2000) -> list[str]:
         # Sentence-level split for lines that exceed the chunk budget.
         sentences = []
         current = ""
-        for sentence in re_split_sentences(line):
+        for sentence in _split_sentences(line):
             if current and len(current) + len(sentence) + 1 > max_chunk_chars:
                 sentences.append(current)
                 current = sentence
@@ -55,15 +56,13 @@ def _split_context(context: str, max_chunk_chars: int = 2000) -> list[str]:
     return chunks
 
 
-def re_split_sentences(text: str) -> list[str]:
+def _split_sentences(text: str) -> list[str]:
     """Split text into sentences heuristically."""
-    import re
-
     return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
 
 
 def _build_events(
-    row: dict[str, Any], split: str, fallback_used: bool
+    row: dict[str, Any], split: str
 ) -> tuple[list[EvidenceEvent], dict[str, Any]]:
     metadata = row.get("metadata") or {}
     haystack_sessions = metadata.get("haystack_sessions")
@@ -170,7 +169,7 @@ def iter_instances(
                 continue
 
             coarse_group = _derive_coarse_group(str(source), split)
-            events, extra_meta = _build_events(row, split, fallback_used=False)
+            events, extra_meta = _build_events(row, split)
             questions = _build_questions(row, coarse_group)
 
             instance_id = str(metadata.get("qa_pair_ids", [f"{split}_{yielded}"])[0])

@@ -12,11 +12,12 @@ from datasets import load_dataset
 from huggingface_hub import hf_hub_download
 
 from bench.config import CACHE_DIR, DatasetCacheConfig
+from bench.data.longmemeval import LONGMEMEVAL_FILE
+from bench.data.memoryagentbench import MEMORYAGENTBENCH_SPLITS as _MAB_SPLIT_NAMES
 
 LONGMEMEVAL_REPO = "xiaowu0162/longmemeval-cleaned"
-LONGMEMEVAL_FILE = "longmemeval_s_cleaned.json"
 MEMORYAGENTBENCH_REPO = "ai-hyz/MemoryAgentBench"
-MEMORYAGENTBENCH_SPLITS = ["Accurate_Retrieval", "Conflict_Resolution"]
+MEMORYAGENTBENCH_SPLITS = list(_MAB_SPLIT_NAMES)
 
 
 def _longmemeval_cache_path(cfg: DatasetCacheConfig) -> Path:
