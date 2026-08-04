@@ -10,7 +10,7 @@ from droid_brain.brain import Brain
 from droid_brain.models import Entity
 
 from bench.ir.types import EvidenceEvent, Question
-from bench.llm.client import LLMClient, Usage
+from bench.llm.client import LLMClient
 from bench.prompts import answer_system_prompt, ingest_system_prompt
 from bench.systems._tool_loop import function_tool, object_schema, run_tool_loop
 from bench.systems._utils import make_temp_brain, normalize_slug

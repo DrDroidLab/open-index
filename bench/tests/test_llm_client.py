@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from bench.llm.client import ChatResponse, CostLedger, FakeLLMClient, LLMClient, ToolCall, Usage
+from bench.llm.client import CostLedger, FakeLLMClient, LLMClient, Usage
 
 
 def test_cost_ledger_adds_usage_and_cost_for_mini() -> None:

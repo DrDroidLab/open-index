@@ -7,8 +7,6 @@ import tempfile
 from pathlib import Path
 from typing import Iterator
 
-import pytest
-
 from bench.harness import runner
 from bench.ir.types import BenchmarkInstance, EvidenceEvent, Question
 from bench.llm.client import FakeLLMClient, Usage

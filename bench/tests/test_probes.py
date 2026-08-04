@@ -18,7 +18,7 @@ from bench.harness.probes import (
     probe_structured,
 )
 from bench.ir.types import BenchmarkInstance, EvidenceEvent, Question
-from bench.llm.client import FakeLLMClient, Usage
+from bench.llm.client import FakeLLMClient
 from bench.systems import FlatMemoryBaseline, StructuredBrainMemory
 
 
