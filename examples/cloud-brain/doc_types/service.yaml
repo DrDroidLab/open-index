@@ -1,0 +1,10 @@
+doc_type: service
+description: A Kubernetes service.
+storage: index
+display: { label_field: name, color: "#0891b2" }
+schema:
+  fields:
+    - { name: name, type: string, search: syntactic, boost: 6 }
+    - { name: port, type: number, search: none }
+relationships:
+  - { name: "in namespace", target_doc_type: namespace }

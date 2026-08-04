@@ -1,0 +1,11 @@
+{
+  "doc_type": "project",
+  "id": "project:training-plan",
+  "name": "16-week training plan",
+  "description": "Structured long runs, intervals, and rest days building to the marathon.",
+  "status": "active",
+  "related_to": [
+    { "target": "area:health", "relationship_edge_meaning": "belongs to area" },
+    { "target": "person:sam", "relationship_edge_meaning": "involves" }
+  ]
+}

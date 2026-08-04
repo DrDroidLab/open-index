@@ -1,0 +1,10 @@
+{
+  "doc_type": "product",
+  "id": "product:search",
+  "name": "Search",
+  "description": "Catalog search and filtering across the storefront.",
+  "owner": "discovery-team",
+  "related_to": [
+    { "target": "issue:no-results", "relationship_edge_meaning": "has common issue" }
+  ]
+}

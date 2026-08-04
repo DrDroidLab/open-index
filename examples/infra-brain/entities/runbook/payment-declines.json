@@ -1,0 +1,11 @@
+{
+  "doc_type": "runbook",
+  "id": "runbook:payment-declines",
+  "name": "Investigating Payment Declines",
+  "description": "What to check when decline rates spike.",
+  "steps": "1. Check the Payments Errors dashboard for processor error codes. 2. Look for 3-D Secure timeouts. 3. Verify the processor's status page. 4. Check Postgres connection pool saturation.",
+  "related_to": [
+    { "target": "service:checkout", "relationship_edge_meaning": "resolves issues in" },
+    { "target": "service:payments", "relationship_edge_meaning": "resolves issues in" }
+  ]
+}

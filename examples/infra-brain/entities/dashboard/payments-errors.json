@@ -1,0 +1,8 @@
+{
+  "doc_type": "dashboard",
+  "id": "dashboard:payments-errors",
+  "name": "Payments Errors",
+  "description": "Processor error codes, decline rates, and 3-D Secure timeouts.",
+  "platform": "datadog",
+  "url": "https://app.datadoghq.com/dashboard/payments-errors"
+}

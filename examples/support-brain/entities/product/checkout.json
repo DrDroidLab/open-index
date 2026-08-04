@@ -1,0 +1,11 @@
+{
+  "doc_type": "product",
+  "id": "product:checkout",
+  "name": "Checkout",
+  "description": "Checkout and payment flow, including card and wallet processing.",
+  "owner": "payments-team",
+  "related_to": [
+    { "target": "issue:payment-declined", "relationship_edge_meaning": "has common issue" },
+    { "target": "issue:slow-checkout", "relationship_edge_meaning": "has common issue" }
+  ]
+}

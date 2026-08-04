@@ -1,0 +1,10 @@
+{
+  "doc_type": "user_segment",
+  "id": "user_segment:mobile-first",
+  "name": "Mobile-first users",
+  "description": "Consumers who almost exclusively use the mobile web app.",
+  "size": 15800,
+  "related_to": [
+    { "target": "issue:slow-checkout", "relationship_edge_meaning": "frequently reports" }
+  ]
+}

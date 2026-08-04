@@ -1,0 +1,11 @@
+{
+  "doc_type": "metric",
+  "id": "metric:p99-latency",
+  "name": "p99 request latency",
+  "description": "99th-percentile request latency per service.",
+  "unit": "ms",
+  "related_to": [
+    { "target": "service:svc-0", "relationship_edge_meaning": "measured on" },
+    { "target": "dashboard:latency-overview", "relationship_edge_meaning": "shown in" }
+  ]
+}

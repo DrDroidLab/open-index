@@ -3,69 +3,241 @@
 
 The Droid Brain helps you build and maintain accurate organisational information in form of structured data to assist agents to operate in a complex environment effectively.
 
+It is **domain-agnostic**: model a support org (`product → "has common issue" → issue`), a sales pipeline (`customer → order`), your infrastructure (`service → runbook`), or anything else. You define the concepts; the brain stores them, searches them, and draws the map.
 
 The primitives of creating a brain are as follows:
 - doc_types: the different types of docs that you want to generate and maintain. This can be considered the equivalent of concepts you want to maintain in your knowledge.
 - doc_schema: the schema of information stored for a given doc_type
-- entity: an instance of a given doc_type, stored as per the schema is an entity
+- entity: an instance of a given doc_type, stored as per the schema is an entity. Every entity can declare relationships to other entities via `related_to` (the target) + `relationship_edge_meaning` (free-text edge semantics).
 - connectors: the origin from where you extract the information (in case this is extracted from a given source)
 
 
-# Getting Started
+## Quickstart
 
-### Creating your first brain
-The way the project works is that you run this command and spin up an instance of the droid brain.
+```bash
+pip install -e '.[all]'          # core + UI (Streamlit) + MCP server
 
-### Creating your first doc_type
-Then you create the first few types of doc_types. Sample doc types:
-- software infrastructure brain: dashboards, metrics, panels, services, products, alert_definitions, runbooks, skills, releases, etc.
-- sales brain: leads, deals, accounts, opportunities, meetings, etc.
-- lending brain: loans, borrowers, brokers, applications, etc.
+# Try the bundled example (support brain: products, issues, segments, comments)
+droid-brain index --brain examples/support-brain
+droid-brain ui    --brain examples/support-brain      # open the Map tab, pick an anchor
 
-### Creating instances of doc_types
-You can create instances of doc_types either manually or programmatically:
-1. Through manual entry/upload from UI
-2. By talking to an agent that's connected to the brain via it's CLI / MCP server
-3. Through a webhook/API trigger from a script on your end
-4. Through a recurring cron defined in the brain configuration
+# Or start your own brain from scratch
+droid-brain init my-brain
+droid-brain add-doc-type customer --brain my-brain
+# ...add entities under my-brain/entities/**/*.json...
+droid-brain index --brain my-brain
+droid-brain ui    --brain my-brain
+```
 
-Read more about this in [Entity Management](./docs/entity_management.md)
+### Commands
 
-# Enabling your LLM/agent to use your brain:
+| Command | What it does |
+|---|---|
+| `droid-brain init <name> [dir]` | Scaffold a new brain directory. |
+| `droid-brain add-doc-type <name>` | Add a doc_type schema stub under `doc_types/`. |
+| `droid-brain add-entity <file>` | Validate + store an entity JSON file. |
+| `droid-brain index` | (Re)load `entities/**/*.json` into the search index. |
+| `droid-brain validate` | Validate `brain.yaml`, schemas, and every entity file (use in CI). |
+| `droid-brain ingest <connector>` | Run a connector now to pull entities from an MCP server. |
+| `droid-brain run [--force] [--loop N]` | Run every connector whose `schedule` is due (wire into cron/CI). |
+| `droid-brain search <query> [-t doc_type]` | Search from the terminal. |
+| `droid-brain ui` | Launch the Streamlit explorer (Structure / Search / **Map** / Contribute). |
+| `droid-brain mcp` | Run the MCP server (stdio) so a local agent can **read and write** the brain. |
+| `droid-brain serve [--port --token]` | Serve the MCP server over **HTTP** for remote/cloud agents (bearer-token auth). |
 
-### MCP Server
-Run this command to get an MCP server up and running for your brain. This MCP server has multiple tools for the agent to query the brain. Primarily, these three:
-1. Brain structure: Gives a textual explanation of the data that's stored within the brain. What doc_types, how many instances of each, example values, description of the doc_type, etc.
-2. Search the brain // apply filters
-3. Fetch a specific entity
+### Built for Claude Code (and any agent)
 
-### CLI (experimental)
-The same data can be queried using the CLI as well. To do so, generate a key in the platform and authenticate your CLI session in the terminal using that key.
+`droid-brain init` also drops a `.mcp.json` and a `CLAUDE.md` in the brain, so the
+moment you open Claude Code in that folder it can drive the brain over MCP:
 
-Command to run:
-droid-brain 'cli-connect'
+- **read** — `navigation_guidelines()` (what doc_types exist + how to query), `search_brain()`, `get_entity()`
+- **write** — `put_entity()` (add/update an entity), `create_doc_type()` (define a concept)
 
-# Advanced Capabilities
+So you *define* doc_types and *populate* entities by talking to the agent — it
+writes the YAML/JSON files (the git source of truth) for you. Entities also arrive
+via manual JSON, connectors (MCP ingestion on a `schedule`), or an agent
+write-back loop (a Stop hook that records learnings via `put_entity`).
 
-Once you've setup the brain and it's functionally working, here's where the fun begins:
+### A brain on disk
 
-## Controlling the brain:
-There are two parts to how you control the brain:
-1. Schema Design
-2. Search Design
+```
+my-brain/
+  brain.yaml            # name + storage/search backend
+  doc_types/*.yaml      # one schema per doc_type (fields, boosts, display color)
+  entities/**/*.json    # entities, with related_to edges
+  connectors/*.py       # optional ingestion scripts (MCP → entities)
+```
 
-Schema:
-The fields you define within the schema.
-- The type of data in that field (string, number, boolean, etc.)
-- The processing type of that field (keyword, timestamp, text, etc.)
-- The kind of search you want to enable on top of that (semantic, syntactic)
+Storage defaults to **SQLite + FTS5** (zero external services). The backend sits
+behind a pluggable interface, so an OpenSearch backend can be dropped in later
+without touching the rest of the code.
 
-Search:
-- You can control the fields within the search tool that the agent has access to.
-    - The fields that can be searched on
-    - The fields that can be filtered on
-    - The fields that can be sorted on
-- Entity & Field Boosters - this can help you to give different priorities and weights to different kind of entities within your organisation.
-    - Field based boosters
-    - Type based boosters
-    - Temporal boosters
+### Where entities live — `storage: file | index`
+
+Each doc_type declares its source of truth, so curated and machine-generated data
+don't fight over git:
+
+- **`storage: index`** (default) — the search DB owns these entities; they are
+  **not** written to files. Right for connector-pulled, high-volume, or temporal
+  data (hundreds of services, memories, alerts) that would otherwise churn the repo.
+- **`storage: file`** — JSON files under `entities/<doc_type>/` are the source of
+  truth, git-tracked and PR-reviewable. Right for curated, human/agent-authored
+  entities.
+
+`droid-brain index` reconciles **file**-backed types from disk on each run and
+leaves **index**-backed entities (written by connectors/agents) untouched. So
+`brain.db` is durable state for index-backed types — back it up or re-ingest;
+it's gitignored by default.
+
+
+# Creating a brain, step by step
+
+`droid-brain init <name>` scaffolds the directory below; then you author two kinds
+of file — **doc_types** (schemas) and **entities** (instances). Sample doc_types:
+infra (`service`, `datastore`, `dashboard`, `runbook`, `alert`), sales (`lead`,
+`deal`, `account`), lending (`loan`, `borrower`, `application`), or personal
+(`goal`, `project`, `person`, `area`, `note`). Three runnable examples ship in
+[`examples/`](./examples): `support-brain`, `infra-brain`, and `personal-brain`.
+
+### 1. Define a doc_type
+
+A doc_type is a concept plus its schema — one YAML file in `doc_types/`:
+
+```yaml
+# doc_types/service.yaml
+doc_type: service
+description: A deployed service.
+storage: file                 # file = git source of truth · index = DB-owned (default)
+display:
+  label_field: name
+  color: "#7c3aed"
+schema:
+  fields:
+    - { name: name,        type: string, search: syntactic, boost: 6 }   # weighted 6× in ranking
+    - { name: description, type: text,   search: semantic }
+    - { name: owner,       type: string, search: syntactic }
+relationships:                # the correlations this type uses — optional but recommended
+  - { name: "writes to",       target_doc_type: datastore }
+  - { name: "is monitored by", target_doc_type: dashboard }
+```
+
+- **`boost`** sets per-field search weight — a hit in a `boost: 6` title outranks a
+  `boost: 1` description hit 6-to-1. Optional; defaults to 1.
+- **`relationships`** declares the edge vocabulary so correlations are discoverable
+  (shown in the UI + navigation guide) and lightly validated (right target type).
+  Optional — entities may still use undeclared meanings.
+
+Create one with `droid-brain add-doc-type service` (writes a stub you edit), or ask your agent.
+
+### 2. Add entities
+
+An entity is one instance. For `storage: file` types, write one JSON per entity
+under `entities/<doc_type>/`:
+
+```json
+// entities/service/checkout.json
+{
+  "doc_type": "service",
+  "id": "service:checkout",
+  "name": "Checkout",
+  "owner": "payments-team",
+  "related_to": [
+    { "target": "datastore:postgres-main",     "relationship_edge_meaning": "writes to" },
+    { "target": "dashboard:checkout-latency",   "relationship_edge_meaning": "is monitored by" }
+  ]
+}
+```
+
+- `id` must be `<doc_type>:<slug>`.
+- **`related_to`** is the reserved correlation field present on **every** entity — it
+  defines the graph edges (`target` + `relationship_edge_meaning`). This is how you
+  say "this ticket is about that service" without any graph database.
+
+Then `droid-brain index` (loads file-backed entities) and `droid-brain validate`.
+
+### 3. Populate at scale (four ways, one validated store)
+
+1. **Manual / agent** — write JSON, or open Claude Code in the folder and let it call
+   `put_entity` / `create_doc_type` over MCP.
+2. **Bulk** — hand a file of records to your agent, or a connector.
+3. **Connectors** — `connectors/*.py` pull from an MCP server on a `schedule`; run with
+   `droid-brain ingest <name>` or `droid-brain run` (cron/CI-friendly).
+4. **Agent write-back** — a Stop hook that records learnings via `put_entity` (the
+   "continuously improving" loop).
+
+See [Entity Management](./entity-management.md) for guidance on cadence and decay.
+
+### 4. Explore
+
+`droid-brain ui` → **Structure** (doc_types, fields, relationships), **Search**, and
+**Map** (anchor a doc_type, pick entities, click a node to expand its correlations).
+
+# Enabling your agent to use the brain
+
+`droid-brain mcp` runs an MCP server (stdio) exposing the brain to any MCP client —
+**read and write**:
+
+- `navigation_guidelines()` — orient: doc_types, fields, relationships, how to query/write.
+- `search_brain(query, doc_types, limit)` · `get_entity(id)` — read.
+- `put_entity(...)` · `create_doc_type(...)` — write (validated, honors the storage policy).
+
+`droid-brain init` drops a `.mcp.json` so Claude Code auto-connects, a `CLAUDE.md`
+documenting the model, and an **`edit-brain` skill** (`.claude/skills/edit-brain/SKILL.md`)
+the agent follows when adding or correlating knowledge. The UI's **Contribute** tab
+shows how to connect — editing happens via the agent or CLI, never in the UI, so files
+stay the source of truth and every write is validated.
+
+## Using the brain from a cloud agent (production)
+
+Two shapes, depending on whether one agent or many share the brain:
+
+**Embedded (one agent, you own the runtime).** Bake the package + brain dir into the
+agent's image and let it spawn the MCP server over stdio — no network, works today:
+
+```jsonc
+{ "mcpServers": { "brain": { "command": "droid-brain", "args": ["mcp", "--brain", "/app/brain"] } } }
+```
+
+**Remote (many agents, shared brain).** Run the brain as a networked MCP server and
+register its URL in each agent:
+
+```bash
+pip install 'droid-brain[serve,opensearch]'
+DROID_BRAIN_TOKEN=… droid-brain serve --brain /srv/acme-brain --port 8080
+# agent registers a remote MCP server:  http://<host>:8080/mcp
+#                                        Authorization: Bearer <DROID_BRAIN_TOKEN>
+```
+
+`droid-brain serve` exposes the same read+write tools over **streamable HTTP** with
+**bearer-token auth**. For a shared, multi-writer brain, switch the backend to
+**OpenSearch** (SQLite is single-writer) — flip `search.backend` in `brain.yaml`:
+
+```yaml
+search:
+  backend: opensearch
+  hosts: ["https://opensearch:9200"]
+  index: droid_brain_acme          # optional; defaults to droid_brain_<name>
+  username: "${OPENSEARCH_USER}"    # ${ENV} resolved at connect time
+  password: "${OPENSEARCH_PASSWORD}"
+  use_ssl: true
+  verify_certs: true
+```
+
+OpenSearch also gives native per-field boosting and **fuzzy** (typo-tolerant) search.
+The doc_type/file-entity part comes from git; index-backed data lives in the cluster,
+so give it a persistent home. Rule of thumb: **local/dev → SQLite; exposed as an
+MCP/API endpoint → OpenSearch + `serve`.**
+
+# Controlling search
+
+**Schema** (per field): data `type` (string/number/boolean/timestamp), `processing`
+(keyword/text/timestamp), and `search` kind (`syntactic` = keyword+prefix today,
+`semantic` declarable and keyword-backed until a vector backend lands, `none` = not indexed).
+
+**Ranking** — genuine **per-field boosters**: each field's `boost` weights how much a
+match there counts, so you tune "title matters more than description" with one number.
+Storage defaults to SQLite + FTS5; the backend is pluggable (an OpenSearch backend can
+be dropped in behind the same interface).
+
+_Not yet implemented (declarable seams exist): semantic/vector search, and type-level &
+temporal boosters._

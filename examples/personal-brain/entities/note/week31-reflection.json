@@ -1,0 +1,10 @@
+{
+  "doc_type": "note",
+  "id": "note:week31-reflection",
+  "name": "Week 31 reflection",
+  "body": "Long run felt strong this week — held pace for 18 miles. Sam's company on Saturdays makes the early starts bearable. Marathon goal feels reachable if I keep the midweek intervals.",
+  "date": "2026-08-02",
+  "related_to": [
+    { "target": "goal:run-marathon", "relationship_edge_meaning": "reflects on" }
+  ]
+}

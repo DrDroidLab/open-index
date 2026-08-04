@@ -1,0 +1,10 @@
+{
+  "doc_type": "runbook",
+  "id": "runbook:db-failover",
+  "name": "Postgres Failover",
+  "description": "How to fail over the primary Postgres to a replica.",
+  "steps": "1. Confirm the primary is unhealthy. 2. Promote the standby replica. 3. Repoint the connection string / PgBouncer. 4. Verify writes from checkout and payments. 5. Re-provision a new standby.",
+  "related_to": [
+    { "target": "datastore:postgres-main", "relationship_edge_meaning": "resolves issues in" }
+  ]
+}

@@ -1,0 +1,15 @@
+doc_type: goal
+description: Something you want to achieve, within a life area.
+storage: file
+display:
+  label_field: name
+  color: "#059669"
+schema:
+  fields:
+    - { name: name,        type: string, processing: keyword, search: syntactic, boost: 6 }
+    - { name: description, type: text,   processing: text,    search: semantic }
+    - { name: status,      type: string, processing: keyword, search: syntactic, boost: 2 }
+    - { name: target_date, type: string, processing: timestamp, search: none }
+relationships:
+  - { name: "belongs to area", target_doc_type: area }
+  - { name: "is advanced by",  target_doc_type: project }

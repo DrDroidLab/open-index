@@ -1,0 +1,14 @@
+doc_type: runbook
+description: A troubleshooting playbook for a class of problems (DrDroid's runbook).
+storage: file
+display:
+  label_field: name
+  color: "#d97706"
+schema:
+  fields:
+    - { name: name,        type: string, processing: keyword, search: syntactic, boost: 6 }
+    - { name: description, type: text,   processing: text,    search: semantic }
+    - { name: steps,       type: text,   processing: text,    search: semantic }
+relationships:
+  # targets both services and datastores, so no single target_doc_type
+  - { name: "resolves issues in", description: "the service or datastore this runbook fixes" }

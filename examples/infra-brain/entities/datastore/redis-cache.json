@@ -1,0 +1,8 @@
+{
+  "doc_type": "datastore",
+  "id": "datastore:redis-cache",
+  "name": "Redis Cache",
+  "description": "Session and cart cache fronting the checkout flow.",
+  "engine": "redis",
+  "tier": "high"
+}

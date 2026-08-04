@@ -1,0 +1,11 @@
+{
+  "doc_type": "metric",
+  "id": "metric:error-rate",
+  "name": "5xx error rate",
+  "description": "Fraction of requests returning 5xx per service.",
+  "unit": "%",
+  "related_to": [
+    { "target": "service:svc-1", "relationship_edge_meaning": "measured on" },
+    { "target": "dashboard:errors", "relationship_edge_meaning": "shown in" }
+  ]
+}

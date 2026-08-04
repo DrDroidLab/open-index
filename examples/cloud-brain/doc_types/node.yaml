@@ -1,0 +1,10 @@
+doc_type: node
+description: A compute node in the cluster.
+storage: index
+display: { label_field: name, color: "#059669" }
+schema:
+  fields:
+    - { name: name, type: string, search: syntactic, boost: 6 }
+    - { name: zone, type: string, search: syntactic, boost: 2 }
+relationships:
+  - { name: "in namespace", target_doc_type: namespace }

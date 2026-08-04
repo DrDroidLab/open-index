@@ -1,0 +1,12 @@
+{
+  "doc_type": "goal",
+  "id": "goal:ship-side-project",
+  "name": "Ship a side project",
+  "description": "Launch a useful open-source tool and get real users.",
+  "status": "in-progress",
+  "target_date": "2026-12-31",
+  "related_to": [
+    { "target": "area:career", "relationship_edge_meaning": "belongs to area" },
+    { "target": "project:droid-brain", "relationship_edge_meaning": "is advanced by" }
+  ]
+}

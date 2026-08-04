@@ -1,0 +1,11 @@
+{
+  "doc_type": "known_issue",
+  "id": "known_issue:five-xx-on-scaledown",
+  "name": "5xx during scale-down",
+  "description": "Brief 5xx errors when a deployment scales down and in-flight requests are dropped.",
+  "severity": "high",
+  "related_to": [
+    { "target": "service:svc-1", "relationship_edge_meaning": "affects" },
+    { "target": "runbook:five-xx", "relationship_edge_meaning": "documented by" }
+  ]
+}

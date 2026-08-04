@@ -1,0 +1,10 @@
+{
+  "doc_type": "user_segment",
+  "id": "user_segment:enterprise",
+  "name": "Enterprise customers",
+  "description": "Large B2B accounts on annual contracts with high transaction volume.",
+  "size": 420,
+  "related_to": [
+    { "target": "issue:payment-declined", "relationship_edge_meaning": "frequently reports" }
+  ]
+}

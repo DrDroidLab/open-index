@@ -1,0 +1,13 @@
+doc_type: product
+description: A product or module we support.
+storage: file   # curated — JSON files under entities/ are the source of truth
+display:
+  label_field: name
+  color: "#7c3aed"
+schema:
+  fields:
+    - { name: name,        type: string, processing: keyword, search: syntactic, boost: 6 }
+    - { name: description, type: text,   processing: text,    search: semantic }
+    - { name: owner,       type: string, processing: keyword, search: syntactic }
+relationships:
+  - { name: "has common issue", target_doc_type: issue }

@@ -1,0 +1,12 @@
+{
+  "doc_type": "dashboard",
+  "id": "dashboard:errors",
+  "name": "Error Rates",
+  "description": "5xx rate and error budgets by service.",
+  "platform": "datadog",
+  "url": "https://app.datadoghq.com/dashboard/errors",
+  "related_to": [
+    { "target": "service:svc-1", "relationship_edge_meaning": "monitors" },
+    { "target": "service:svc-2", "relationship_edge_meaning": "monitors" }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "doc_type": "issue",
+  "id": "issue:payment-declined",
+  "name": "Payment declined at checkout",
+  "description": "Card payments are declined even with valid cards, often at the 3-D Secure step.",
+  "severity": "high",
+  "status": "investigating",
+  "related_to": [
+    { "target": "issue:threed-secure-timeout", "relationship_edge_meaning": "is explained by" }
+  ]
+}

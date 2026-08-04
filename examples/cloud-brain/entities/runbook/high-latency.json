@@ -1,0 +1,10 @@
+{
+  "doc_type": "runbook",
+  "id": "runbook:high-latency",
+  "name": "Investigating high latency",
+  "description": "Steps to triage a latency regression.",
+  "steps": "1. Open the Latency Overview dashboard. 2. Identify the slow service and endpoint. 3. Check recent deployments for that service. 4. Inspect node saturation in its namespace. 5. Roll back the suspect deployment if correlated.",
+  "related_to": [
+    { "target": "service:svc-0", "relationship_edge_meaning": "resolves issues in" }
+  ]
+}

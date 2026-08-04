@@ -1,0 +1,12 @@
+doc_type: dashboard
+description: A monitoring dashboard watching one or more services.
+storage: file   # curated knowledge — tracked in git
+display: { label_field: name, color: "#4f46e5" }
+schema:
+  fields:
+    - { name: name,        type: string, search: syntactic, boost: 6 }
+    - { name: description, type: text,   search: semantic }
+    - { name: platform,    type: string, search: syntactic, boost: 2 }
+    - { name: url,         type: string, search: none }
+relationships:
+  - { name: "monitors", target_doc_type: service }

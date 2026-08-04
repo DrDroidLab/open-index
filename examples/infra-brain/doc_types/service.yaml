@@ -1,0 +1,20 @@
+doc_type: service
+description: A deployed service or application (DrDroid's service_catalog/service).
+storage: file   # curated catalog — tracked in git
+display:
+  label_field: name
+  color: "#7c3aed"
+schema:
+  fields:
+    - { name: name,        type: string, processing: keyword, search: syntactic, boost: 6 }
+    - { name: description, type: text,   processing: text,    search: semantic }
+    - { name: owner,       type: string, processing: keyword, search: syntactic }
+    - { name: language,    type: string, processing: keyword, search: syntactic }
+    - { name: tier,        type: string, processing: keyword, search: syntactic, boost: 2 }
+relationships:
+  - { name: "is upstream of",   target_doc_type: service,   description: "traffic flows from this service to the target" }
+  - { name: "is downstream of", target_doc_type: service }
+  - { name: "writes to",        target_doc_type: datastore }
+  - { name: "reads from",       target_doc_type: datastore }
+  - { name: "is monitored by",  target_doc_type: dashboard }
+  - { name: "is documented by", target_doc_type: runbook }

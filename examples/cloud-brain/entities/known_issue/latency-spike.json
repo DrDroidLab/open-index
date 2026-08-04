@@ -1,0 +1,11 @@
+{
+  "doc_type": "known_issue",
+  "id": "known_issue:latency-spike",
+  "name": "Latency spike after deploy",
+  "description": "p99 latency spikes for ~10 minutes after a new deployment rolls out, until caches warm.",
+  "severity": "medium",
+  "related_to": [
+    { "target": "service:svc-0", "relationship_edge_meaning": "affects" },
+    { "target": "runbook:high-latency", "relationship_edge_meaning": "documented by" }
+  ]
+}

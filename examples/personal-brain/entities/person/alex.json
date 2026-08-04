@@ -1,0 +1,7 @@
+{
+  "doc_type": "person",
+  "id": "person:alex",
+  "name": "Alex",
+  "description": "Engineering mentor; great for architecture sounding-boarding.",
+  "role": "mentor"
+}
