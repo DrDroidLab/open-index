@@ -11,6 +11,7 @@ from droid_brain.brain import Brain
 from droid_brain.models import Entity
 
 from bench.ir.types import EvidenceEvent, Question
+from bench.llm.client import ContentFilteredError, Usage
 from bench.prompts import answer_system_prompt, ingest_system_prompt
 from bench.systems._tool_loop import answer_tool_handler, run_tool_loop
 from bench.systems._utils import make_temp_brain, record_source_id
@@ -100,6 +101,7 @@ class BrainBackedMemorySystem(MemorySystem):
         self, events: Iterator[EvidenceEvent], *, question_timestamp: Optional[str] = None
     ) -> None:
         self._ingest_dropped_after_date = 0
+        self._ingest_content_filtered = 0
         for event in events:
             if question_timestamp is not None and event.timestamp is not None:
                 if event.timestamp > question_timestamp:
@@ -120,15 +122,21 @@ class BrainBackedMemorySystem(MemorySystem):
                     ),
                 },
             ]
-            run_tool_loop(
-                client=self.client,
-                messages=messages,
-                tools=self._ingest_tools(),
-                handlers=self._ingest_handlers(),
-                finish_tool="done",
-                max_tool_calls=self.max_ingest_tools,
-                seed=self._seed,
-            )
+            try:
+                run_tool_loop(
+                    client=self.client,
+                    messages=messages,
+                    tools=self._ingest_tools(),
+                    handlers=self._ingest_handlers(),
+                    finish_tool="done",
+                    max_tool_calls=self.max_ingest_tools,
+                    seed=self._seed,
+                )
+            except ContentFilteredError:
+                # Azure content filter rejected this event's text: skip the
+                # event (its facts are lost, instance survives) and count it.
+                self._ingest_content_filtered += 1
+                continue
 
     def answer(self, question: Question) -> Answer:
         start = time.perf_counter()
@@ -141,21 +149,33 @@ class BrainBackedMemorySystem(MemorySystem):
             )
         messages.append({"role": "user", "content": question.text})
 
-        result = run_tool_loop(
-            client=self.client,
-            messages=messages,
-            tools=self._answer_tools(),
-            handlers=self._answer_handlers(retrieved_source_ids),
-            finish_tool="answer",
-            max_tool_calls=self.max_answer_tools,
-            require_finish_tool=True,
-            seed=self._seed,
-        )
+        try:
+            result = run_tool_loop(
+                client=self.client,
+                messages=messages,
+                tools=self._answer_tools(),
+                handlers=self._answer_handlers(retrieved_source_ids),
+                finish_tool="answer",
+                max_tool_calls=self.max_answer_tools,
+                require_finish_tool=True,
+                seed=self._seed,
+            )
+        except ContentFilteredError:
+            latency_ms = (time.perf_counter() - start) * 1000
+            return Answer(
+                text="",
+                source_ids=[],
+                tool_calls=0,
+                usage=Usage(),
+                latency_ms=latency_ms,
+                metadata={"content_filtered": True},
+            )
         latency_ms = (time.perf_counter() - start) * 1000
         all_source_ids = list(dict.fromkeys(result.source_ids + retrieved_source_ids))
         # Retrieval budget: cap recorded source_ids to the top-k actually used.
         all_source_ids = all_source_ids[: self._retrieval_k]
         result.metadata["ingest_dropped_after_date"] = self._ingest_dropped_after_date
+        result.metadata["ingest_content_filtered"] = getattr(self, "_ingest_content_filtered", 0)
         return Answer(
             text=result.content,
             source_ids=all_source_ids,

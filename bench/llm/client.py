@@ -43,6 +43,14 @@ def _price_per_1m(model: str) -> tuple[float, float]:
 # ---------------------------------------------------------------------------
 
 
+class ContentFilteredError(Exception):
+    """Azure's content management policy rejected the prompt (HTTP 400).
+
+    Distinct from other BadRequestErrors so callers can degrade gracefully
+    (skip the offending evidence / question) instead of aborting the run.
+    """
+
+
 @dataclass(frozen=True)
 class Usage:
     prompt_tokens: int = 0
@@ -150,6 +158,8 @@ class LLMClient:
                 return self._parse_completion(completion)
             except Exception as exc:  # pragma: no cover - retry path exercised in tests
                 last_exception = exc
+                if self._is_content_filter(exc):
+                    raise ContentFilteredError(str(exc)) from exc
                 if not self._is_retryable(exc):
                     raise
                 if attempt >= self.max_retries:
@@ -160,6 +170,20 @@ class LLMClient:
         raise RuntimeError(
             f"LLM call failed after {self.max_retries} attempts: {last_exception}"
         ) from last_exception
+
+    @staticmethod
+    def _is_content_filter(exc: Exception) -> bool:
+        """True when Azure's content management policy rejected the prompt (400)."""
+        from openai import BadRequestError
+
+        if not isinstance(exc, BadRequestError):
+            return False
+        msg = str(exc).lower()
+        return (
+            "content management policy" in msg
+            or "responsibleaipolicyviolation" in msg
+            or "content_filter" in msg
+        )
 
     def _is_retryable(self, exc: Exception) -> bool:
         """Return True for 429/5xx and transient network errors."""
@@ -208,6 +232,13 @@ class LLMClient:
 # ---------------------------------------------------------------------------
 
 
+class _ErrorResponse:
+    """Queue slot that raises instead of returning a ChatResponse."""
+
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+
 class FakeLLMClient:
     """Scripted LLM client that replays queued responses."""
 
@@ -215,7 +246,7 @@ class FakeLLMClient:
         self.model = model
         self.temperature = temperature
         self.ledger = CostLedger()
-        self._responses: deque[ChatResponse] = deque()
+        self._responses: deque[ChatResponse | _ErrorResponse] = deque()
         self._calls: list[list[dict[str, Any]]] = []
         self._max_tokens: list[int] = []
         self._seeds: list[Optional[int]] = []
@@ -228,6 +259,11 @@ class FakeLLMClient:
         self._responses.append(
             ChatResponse(content=content, usage=usage or Usage(10, 5), model=self.model)
         )
+        return self
+
+    def queue_error(self, exc: Exception) -> "FakeLLMClient":
+        """Queue an exception to be raised on the call that consumes this slot."""
+        self._responses.append(_ErrorResponse(exc))
         return self
 
     def queue_tool_calls(
@@ -261,6 +297,8 @@ class FakeLLMClient:
         self._max_tokens.append(max_tokens)
         self._seeds.append(seed)
         response = self._responses.popleft()
+        if isinstance(response, _ErrorResponse):
+            raise response.exc
         self.ledger.add(response.usage, self.model)
         return response
 

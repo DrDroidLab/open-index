@@ -9,7 +9,7 @@ import tiktoken
 
 from bench.config import AGENT_DEFAULT_MAX_TOKENS
 from bench.ir.types import EvidenceEvent, Question
-from bench.llm.client import LLMClient, Usage
+from bench.llm.client import ContentFilteredError, LLMClient, Usage
 from bench.prompts.templates import long_context_system_prompt
 from bench.systems.base import Answer, MemorySystem
 
@@ -67,12 +67,23 @@ class LongContextBaseline(MemorySystem):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": evidence_text + "\n\n" + question_prefix},
         ]
-        response = self.client.chat(
-            messages=messages,
-            temperature=0,
-            max_tokens=AGENT_DEFAULT_MAX_TOKENS,
-            seed=self._seed,
-        )
+        try:
+            response = self.client.chat(
+                messages=messages,
+                temperature=0,
+                max_tokens=AGENT_DEFAULT_MAX_TOKENS,
+                seed=self._seed,
+            )
+        except ContentFilteredError:
+            latency_ms = (time.perf_counter() - start) * 1000
+            return Answer(
+                text="",
+                source_ids=[],
+                tool_calls=0,
+                usage=Usage(),
+                latency_ms=latency_ms,
+                metadata={"content_filtered": True},
+            )
         latency_ms = (time.perf_counter() - start) * 1000
         return Answer(
             text=response.content,

@@ -82,22 +82,19 @@ def run_tool_loop(
         result.metadata.setdefault("latency_ms", 0.0)
         result.metadata["latency_ms"] += latency_ms
 
-        messages.append(
-            {
-                "role": "assistant",
-                "content": response.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
-                    }
-                    for tc in response.tool_calls
-                ]
-                if response.tool_calls
-                else [],
-            }
-        )
+        assistant_msg: dict[str, Any] = {"role": "assistant", "content": response.content or ""}
+        if response.tool_calls:
+            # Azure rejects "tool_calls": [] with a 400 — omit the key entirely
+            # when the model returned no tool calls.
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
+                }
+                for tc in response.tool_calls
+            ]
+        messages.append(assistant_msg)
 
         if not response.tool_calls:
             if require_finish_tool and finish_tool == "answer" and rounds < max_tool_calls:

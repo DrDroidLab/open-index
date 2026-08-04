@@ -342,3 +342,40 @@ def test_long_context_handles_literal_special_token_text() -> None:
     messages = [{"role": "user", "content": "text with <|endoftext|> and <|im_start|> literals"}]
     count = system._count_messages(messages)
     assert count > 0
+
+
+def test_ingest_skips_content_filtered_event() -> None:
+    from bench.llm.client import ContentFilteredError
+
+    fake = FakeLLMClient()
+    fake.queue_error(ContentFilteredError("filtered"))
+    fake.queue_tool_calls([("done", {})])  # second event ingests fine
+    system = FlatMemoryBaseline(fake)
+    try:
+        system.ingest(
+            iter(
+                [
+                    EvidenceEvent(event_id="e1", source_id="s1", timestamp=None, text="bad text"),
+                    EvidenceEvent(event_id="e2", source_id="s2", timestamp=None, text="ok text"),
+                ]
+            )
+        )
+    finally:
+        system.close()
+    assert system._ingest_content_filtered == 1
+
+
+def test_answer_content_filtered_returns_empty_flagged_answer() -> None:
+    from bench.llm.client import ContentFilteredError
+
+    fake = FakeLLMClient()
+    fake.queue_tool_calls([("done", {})])  # ingest one event cleanly
+    fake.queue_error(ContentFilteredError("filtered"))  # answer call gets filtered
+    system = FlatMemoryBaseline(fake)
+    try:
+        system.ingest(iter([EvidenceEvent(event_id="e1", source_id="s1", timestamp=None, text="x")]))
+        ans = system.answer(Question(question_id="q1", text="q?"))
+    finally:
+        system.close()
+    assert ans.text == ""
+    assert ans.metadata.get("content_filtered") is True

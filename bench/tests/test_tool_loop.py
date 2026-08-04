@@ -76,3 +76,24 @@ def test_ingest_plain_text_terminates_immediately() -> None:
     )
     assert result.content == "done"
     assert result.tool_calls == 0
+
+
+def test_empty_tool_calls_key_omitted_from_history() -> None:
+    """Azure rejects "tool_calls": [] — the loop must omit the key on plain-text turns."""
+    from bench.systems._tool_loop import run_tool_loop, function_tool, object_schema
+
+    fake = FakeLLMClient()
+    fake.queue_text("let me think out loud first")
+    fake.queue_tool_calls([("answer", {"text": "done", "source_ids": []})])
+
+    tools = [function_tool("answer", "final answer", object_schema({"text": "str", "source_ids": "list"}))]
+    handlers = {"answer": lambda args: ("ok", {"text": args["text"], "source_ids": []})}
+    messages = [{"role": "user", "content": "q?"}]
+    result = run_tool_loop(fake, messages, tools, handlers, finish_tool="answer", require_finish_tool=True)
+
+    assert result.content == "done"
+    assistant_msgs = [m for m in messages if m["role"] == "assistant"]
+    assert len(assistant_msgs) == 2
+    for m in assistant_msgs:
+        assert "tool_calls" not in m or len(m["tool_calls"]) > 0
+    assert "tool_calls" not in assistant_msgs[0]  # plain-text turn: key omitted

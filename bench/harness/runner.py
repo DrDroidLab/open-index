@@ -339,6 +339,8 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
                     "tool_calls": answer.tool_calls,
                     "retrieved_source_ids": answer.source_ids,
                     "truncated": answer.metadata.get("truncated", False),
+                    "content_filtered": answer.metadata.get("content_filtered", False),
+                    "ingest_content_filtered": answer.metadata.get("ingest_content_filtered", 0),
                     "dropped_events": answer.metadata.get("dropped_events", 0),
                     "cost_usd": per_question_cost,
                     "instance_cost_usd": delta_cost,
