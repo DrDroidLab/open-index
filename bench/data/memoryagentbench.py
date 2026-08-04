@@ -98,7 +98,9 @@ def _build_events(
     return events, extra_meta
 
 
-def _build_questions(row: dict[str, Any], coarse_group: str) -> list[Question]:
+def _build_questions(
+    row: dict[str, Any], coarse_group: str, row_index: int
+) -> list[Question]:
     questions = list(row.get("questions", []))
     answers = list(row.get("answers", []))
     metadata = row.get("metadata") or {}
@@ -108,7 +110,13 @@ def _build_questions(row: dict[str, Any], coarse_group: str) -> list[Question]:
     out: list[Question] = []
     for i, q in enumerate(questions):
         gold = answers[i] if i < len(answers) and answers[i] is not None else []
-        qid = qa_pair_ids[i] if i < len(qa_pair_ids) and qa_pair_ids[i] is not None else f"q_{i}"
+        raw_qid = (
+            qa_pair_ids[i]
+            if i < len(qa_pair_ids) and qa_pair_ids[i] is not None
+            else f"q_{i}"
+        )
+        # Disambiguate ids that are reused across rows (e.g., Accurate_Retrieval).
+        qid = f"{source}::{row_index}::{raw_qid}"
         out.append(
             Question(
                 question_id=str(qid),
@@ -121,6 +129,9 @@ def _build_questions(row: dict[str, Any], coarse_group: str) -> list[Question]:
                     "coarse_group": coarse_group,
                     "question_index": i,
                     "split": metadata.get("split"),
+                    "qa_pair_id": str(raw_qid),
+                    "source": str(source),
+                    "row_index": row_index,
                 },
             )
         )
@@ -156,7 +167,7 @@ def iter_instances(
 
     yielded = 0
     with split_path.open("r", encoding="utf-8") as f:
-        for line in f:
+        for row_index, line in enumerate(f):
             line = line.strip()
             if not line:
                 continue
@@ -170,9 +181,13 @@ def iter_instances(
 
             coarse_group = _derive_coarse_group(str(source), split)
             events, extra_meta = _build_events(row, split)
-            questions = _build_questions(row, coarse_group)
+            questions = _build_questions(row, coarse_group, row_index)
 
-            instance_id = str(metadata.get("qa_pair_ids", [f"{split}_{yielded}"])[0])
+            raw_qa_ids = metadata.get("qa_pair_ids") or [f"{split}_{yielded}"]
+            raw_instance_id = str(raw_qa_ids[0])
+            # Disambiguate the instance id as well, since the first raw qa_pair_id
+            # is also reused across Accurate_Retrieval rows.
+            instance_id = f"{source}::{row_index}::{raw_instance_id}"
             instance = BenchmarkInstance(
                 instance_id=instance_id,
                 events=events,
@@ -181,6 +196,8 @@ def iter_instances(
                     "source": source,
                     "coarse_group": coarse_group,
                     "split": split,
+                    "raw_instance_id": raw_instance_id,
+                    "row_index": row_index,
                     **extra_meta,
                 },
             )

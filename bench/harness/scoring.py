@@ -185,7 +185,13 @@ def _load_longmemeval_references() -> dict[str, dict[str, Any]]:
 
 
 def _load_mab_references(split: str) -> dict[str, dict[str, Any]]:
-    """Load the MemoryAgentBench split keyed by qa_pair_id."""
+    """Load the MemoryAgentBench split keyed by disambiguated question_id.
+
+    The adapter produces question ids of the form
+    ``{source}::{row_index}::{qa_pair_id}`` so that reused raw qa_pair_ids
+    (notably in Accurate_Retrieval) do not collide. References are keyed by
+    the same disambiguated ids so scoring joins line up with predictions.
+    """
     refs: dict[str, dict[str, Any]] = {}
     for instance in memoryagentbench.iter_instances(split=split):
         source = str(instance.metadata.get("source", ""))

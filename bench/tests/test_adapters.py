@@ -10,7 +10,9 @@ import pytest
 from datasets import Dataset
 
 from bench.data import longmemeval, memoryagentbench
+from bench.harness import scoring
 from bench.ir import types
+from bench.ir.types import BenchmarkInstance, Question
 
 
 # ---------------------------------------------------------------------------
@@ -196,10 +198,105 @@ def test_memoryagentbench_per_row_question_indexing(tmp_path: Path) -> None:
     assert len(instances) == 1
     questions = instances[0].questions
     assert len(questions) == 2
-    assert questions[0].question_id == "ar_0_0"
-    assert questions[1].question_id == "ar_0_1"
+    # Question ids are now disambiguated with source, row index, and raw qa_pair_id.
+    assert questions[0].question_id == "longmemeval_s_0::0::ar_0_0"
+    assert questions[1].question_id == "longmemeval_s_0::0::ar_0_1"
     assert questions[0].text == "What is the first fact?"
     assert questions[1].text == "What is the second fact?"
+    assert questions[0].metadata["qa_pair_id"] == "ar_0_0"
+
+
+def test_memoryagentbench_disambiguates_duplicate_qa_pair_ids(tmp_path: Path) -> None:
+    """Accurate_Retrieval reuses raw qa_pair_ids across rows; ids must be unique."""
+    rows = [
+        {
+            "context": "Chunk A",
+            "questions": ["Q1"],
+            "answers": [["A1"]],
+            "metadata": {
+                "haystack_sessions": ["Chunk A"],
+                "qa_pair_ids": ["shared_0"],
+                "source": "src_a",
+            },
+        },
+        {
+            "context": "Chunk B",
+            "questions": ["Q2"],
+            "answers": [["A2"]],
+            "metadata": {
+                "haystack_sessions": ["Chunk B"],
+                "qa_pair_ids": ["shared_0"],
+                "source": "src_b",
+            },
+        },
+    ]
+    _save_synthetic_mab_split(tmp_path, "Accurate_Retrieval", rows)
+    instances = list(
+        memoryagentbench.iter_instances(split="Accurate_Retrieval", cache_dir=tmp_path)
+    )
+    qids = [q.question_id for inst in instances for q in inst.questions]
+    assert len(qids) == len(set(qids)) == 2
+    assert qids[0] != qids[1]
+    assert qids[0] == "src_a::0::shared_0"
+    assert qids[1] == "src_b::1::shared_0"
+    # Raw qa_pair_id is preserved for provenance.
+    assert all(q.metadata["qa_pair_id"] == "shared_0" for inst in instances for q in inst.questions)
+
+
+def test_load_mab_references_round_trip_with_predictions(monkeypatch) -> None:
+    """Reference loader keys must match the disambiguated qa_pair_ids used in predictions."""
+    instances = [
+        BenchmarkInstance(
+            instance_id="src_a::0::shared_0",
+            events=[],
+            questions=[
+                Question(
+                    question_id="src_a::0::shared_0",
+                    text="Q1",
+                    gold_answers=["A1"],
+                    ability="src_a",
+                    metadata={"coarse_group": "accurate_retrieval", "qa_pair_id": "shared_0"},
+                )
+            ],
+            metadata={"source": "src_a", "coarse_group": "accurate_retrieval", "split": "Accurate_Retrieval"},
+        ),
+        BenchmarkInstance(
+            instance_id="src_b::1::shared_0",
+            events=[],
+            questions=[
+                Question(
+                    question_id="src_b::1::shared_0",
+                    text="Q2",
+                    gold_answers=["A2"],
+                    ability="src_b",
+                    metadata={"coarse_group": "accurate_retrieval", "qa_pair_id": "shared_0"},
+                )
+            ],
+            metadata={"source": "src_b", "coarse_group": "accurate_retrieval", "split": "Accurate_Retrieval"},
+        ),
+    ]
+    monkeypatch.setattr(scoring.memoryagentbench, "iter_instances", lambda **kwargs: iter(instances))
+
+    refs = scoring._load_mab_references("Accurate_Retrieval")
+    assert set(refs.keys()) == {"src_a::0::shared_0", "src_b::1::shared_0"}
+
+    predictions = [
+        {
+            "qa_pair_id": "src_a::0::shared_0",
+            "hypothesis": "A1",
+            "source": "src_a",
+            "split": "Accurate_Retrieval",
+        },
+        {
+            "qa_pair_id": "src_b::1::shared_0",
+            "hypothesis": "A2",
+            "source": "src_b",
+            "split": "Accurate_Retrieval",
+        },
+    ]
+    result = scoring.score_mab_predictions(predictions, refs)
+    assert result["overall"] == 1.0
+    assert result["count"] == 2
 
 
 def test_memoryagentbench_gold_answer_list(tmp_path: Path) -> None:

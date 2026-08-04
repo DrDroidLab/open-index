@@ -175,6 +175,12 @@ python3 -m bench.run_full --dataset mab --split Conflict_Resolution --system str
 python3 -m bench.run_full --dataset mab --split Conflict_Resolution --system flat --out bench/results/full_mab_cr_flat
 ```
 
+MemoryAgentBench sizes: **Accurate_Retrieval** = 22 rows / 2,000 questions
+(5 `longmemeval_s*` rows × 60 questions + 17 rows × 100 questions), and
+**Conflict_Resolution** = 8 rows × 100 = 800 questions. Accurate_Retrieval
+reuses the same raw `qa_pair_ids` across rows, so the adapter internally
+disambiguates them as `{source}::{row_index}::{qa_pair_id}`.
+
 Useful flags:
 
 - `--workers P` — number of parallel worker processes (default 8).
