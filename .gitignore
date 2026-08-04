@@ -6,11 +6,9 @@
 
 # Benchmark harness
 bench/cache/
-bench/results/*.log
-bench/results/*.json
-bench/results/*.jsonl
-bench/results/*.db
-bench/results/transcripts/
+bench/results/**
+!bench/results/.gitkeep
+!bench/results/answer-memo.md
 
 # Python
 __pycache__/

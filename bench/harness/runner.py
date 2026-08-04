@@ -71,29 +71,6 @@ def _run_instance(system: MemorySystem, instance: BenchmarkInstance) -> list[tup
     return results
 
 
-def _write_longmemeval_predictions(path: Path, results: list[tuple[Question, Answer]]) -> None:
-    with path.open("w", encoding="utf-8") as f:
-        for question, answer in results:
-            line = {
-                "question_id": question.question_id,
-                "hypothesis": answer.text,
-            }
-            f.write(json.dumps(line, ensure_ascii=False) + "\n")
-
-
-def _write_mab_predictions(path: Path, results: list[tuple[Question, Answer]], split: str, source: str) -> None:
-    with path.open("w", encoding="utf-8") as f:
-        for question, answer in results:
-            line = {
-                "qa_pair_id": question.question_id,
-                "hypothesis": answer.text,
-                "gold_answers": question.gold_answers,
-                "source": source,
-                "split": split,
-            }
-            f.write(json.dumps(line, ensure_ascii=False) + "\n")
-
-
 def _write_metadata(path: Path, rows: list[dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8") as f:
         for row in rows:
@@ -102,27 +79,24 @@ def _write_metadata(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def _run_probes(
     system: MemorySystem,
-    system_name: str,
     instance: BenchmarkInstance,
     client: LLMClient,
 ) -> list[dict[str, Any]]:
     """Run update probes against the system for this instance (structured/flat only)."""
-    if system_name not in ("structured", "flat"):
+    if isinstance(system, LongContextBaseline):
         return []
     if not any(_is_update_question(q, instance.metadata) for q in instance.questions):
-        return []
-    # Ensure the system is brain-backed.
-    brain = getattr(system, "brain", None)
-    if brain is None:
         return []
 
     probes = extract_probes([instance], client)
     results: list[dict[str, Any]] = []
     for probe in probes:
-        if system_name == "structured":
-            correct = probe_structured(brain, probe)
+        if isinstance(system, StructuredBrainMemory):
+            correct = probe_structured(system.brain, probe)
+        elif isinstance(system, FlatMemoryBaseline):
+            correct = probe_flat(system.brain, probe, client)
         else:
-            correct = probe_flat(brain, probe, client)
+            continue
         results.append(
             {
                 "question_id": probe.question_id,
@@ -159,7 +133,7 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
         system = _make_system(config, client=config.get("client"))
         try:
             results = _run_instance(system, instance)
-            probe_results.extend(_run_probes(system, system_name, instance, system.client))
+            probe_results.extend(_run_probes(system, instance, system.client))
         finally:
             system.close()
 
@@ -247,9 +221,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--temperature", type=float, default=TEMPERATURE)
     args = parser.parse_args(argv)
 
-    if args.system != "longctx":
-        ensure_llm_credentials()
-    # longctx also needs credentials, so always verify.
     ensure_llm_credentials()
 
     config = {

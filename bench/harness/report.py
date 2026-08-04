@@ -33,33 +33,41 @@ def _load_metrics(run_dir: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _build_accuracy_table(metrics_list: list[dict[str, Any]]) -> str:
-    """Build a per-ability × system accuracy table from LongMemEval judge metrics."""
-    longmemeval = [m for m in metrics_list if m["dataset"] == "longmemeval"]
-    if not longmemeval:
+def _build_pivot_table(
+    metrics_list: list[dict[str, Any]],
+    *,
+    dataset: str,
+    metric_key: str,
+    overall_key: str,
+    per_key: str,
+    row_header: str,
+) -> str:
+    """Build a system x metric-key markdown table from a list of metrics dicts."""
+    filtered = [m for m in metrics_list if m["dataset"] == dataset]
+    if not filtered:
         return ""
 
-    systems = sorted({m["system"] for m in longmemeval})
-    all_types: set[str] = set()
+    systems = sorted({m["system"] for m in filtered})
+    all_keys: set[str] = set()
     per_system: dict[str, dict[str, float]] = defaultdict(dict)
     overall: dict[str, float] = {}
-    for m in longmemeval:
+    for m in filtered:
         system = m["system"]
-        judge = m.get("judge", {})
-        overall[system] = judge.get("overall", 0.0)
-        for qtype, acc in judge.get("per_question_type", {}).items():
-            all_types.add(qtype)
-            per_system[system][qtype] = acc
+        metric = m.get(metric_key, {})
+        overall[system] = metric.get(overall_key, 0.0)
+        for key, acc in metric.get(per_key, {}).items():
+            all_keys.add(key)
+            per_system[system][key] = acc
 
-    rows = []
-    header = ["Ability / System"] + systems
+    rows: list[str] = []
+    header = [row_header] + systems
     rows.append("| " + " | ".join(header) + " |")
     rows.append("| " + " | ".join(["---"] * len(header)) + " |")
 
-    for qtype in sorted(all_types):
-        row = [qtype]
+    for key in sorted(all_keys):
+        row = [key]
         for system in systems:
-            row.append(_fmt_pct(per_system[system].get(qtype)))
+            row.append(_fmt_pct(per_system[system].get(key)))
         rows.append("| " + " | ".join(row) + " |")
 
     overall_row = ["**Overall**"]
@@ -68,43 +76,30 @@ def _build_accuracy_table(metrics_list: list[dict[str, Any]]) -> str:
     rows.append("| " + " | ".join(overall_row) + " |")
 
     return "\n".join(rows)
+
+
+def _build_accuracy_table(metrics_list: list[dict[str, Any]]) -> str:
+    """Build a per-ability × system accuracy table from LongMemEval judge metrics."""
+    return _build_pivot_table(
+        metrics_list,
+        dataset="longmemeval",
+        metric_key="judge",
+        overall_key="overall",
+        per_key="per_question_type",
+        row_header="Ability / System",
+    )
 
 
 def _build_subem_table(metrics_list: list[dict[str, Any]]) -> str:
     """Build a SubEM table for MemoryAgentBench runs."""
-    mab = [m for m in metrics_list if m["dataset"] == "mab"]
-    if not mab:
-        return ""
-
-    systems = sorted({m["system"] for m in mab})
-    all_groups: set[str] = set()
-    per_system: dict[str, dict[str, float]] = defaultdict(dict)
-    overall: dict[str, float] = {}
-    for m in mab:
-        system = m["system"]
-        subem = m.get("subem", {})
-        overall[system] = subem.get("overall", 0.0)
-        for group, acc in subem.get("per_group", {}).items():
-            all_groups.add(group)
-            per_system[system][group] = acc
-
-    rows = []
-    header = ["Source group / System"] + systems
-    rows.append("| " + " | ".join(header) + " |")
-    rows.append("| " + " | ".join(["---"] * len(header)) + " |")
-
-    for group in sorted(all_groups):
-        row = [group]
-        for system in systems:
-            row.append(_fmt_pct(per_system[system].get(group)))
-        rows.append("| " + " | ".join(row) + " |")
-
-    overall_row = ["**Overall**"]
-    for system in systems:
-        overall_row.append(_fmt_pct(overall.get(system)))
-    rows.append("| " + " | ".join(overall_row) + " |")
-
-    return "\n".join(rows)
+    return _build_pivot_table(
+        metrics_list,
+        dataset="mab",
+        metric_key="subem",
+        overall_key="overall",
+        per_key="per_group",
+        row_header="Source group / System",
+    )
 
 
 def _build_probe_table(metrics_list: list[dict[str, Any]]) -> str:

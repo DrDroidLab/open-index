@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -80,32 +80,6 @@ def ensure_llm_credentials() -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 # Run configuration
 # ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class RunConfig:
-    """Configuration for one benchmark run."""
-
-    dataset: str
-    split: Optional[str] = None
-    source_filter: Optional[str] = None
-    system_name: str = "flat"
-    max_instances: Optional[int] = None
-    k: int = 5
-    temperature: float = TEMPERATURE
-    model: str = AGENT_MODEL
-    judge: str = JUDGE_MODEL
-    seed: int = 42
-    keep_state: bool = False
-    smoke: bool = False
-    smoke_n: int = 5
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if self.k < 1:
-            raise ValueError("k must be positive")
-        if self.temperature < 0 or self.temperature > 2:
-            raise ValueError("temperature must be in [0, 2]")
-
 
 @dataclass(frozen=True)
 class DatasetCacheConfig:

@@ -55,17 +55,6 @@ class BenchmarkInstance:
 # ---------------------------------------------------------------------------
 
 
-def _to_json(obj: Any) -> Any:
-    """Recursively convert dataclasses to dicts."""
-    if isinstance(obj, (EvidenceEvent, Question, BenchmarkInstance)):
-        return asdict(obj)
-    if isinstance(obj, list):
-        return [_to_json(x) for x in obj]
-    if isinstance(obj, dict):
-        return {k: _to_json(v) for k, v in obj.items()}
-    return obj
-
-
 def _from_json_event(data: dict[str, Any]) -> EvidenceEvent:
     return EvidenceEvent(
         event_id=data["event_id"],
@@ -99,17 +88,17 @@ def _from_json_instance(data: dict[str, Any]) -> BenchmarkInstance:
 
 def event_to_json(event: EvidenceEvent) -> str:
     """Serialize one EvidenceEvent to a JSON line."""
-    return json.dumps(_to_json(event), ensure_ascii=False, sort_keys=True)
+    return json.dumps(asdict(event), ensure_ascii=False, sort_keys=True)
 
 
 def question_to_json(question: Question) -> str:
     """Serialize one Question to a JSON line."""
-    return json.dumps(_to_json(question), ensure_ascii=False, sort_keys=True)
+    return json.dumps(asdict(question), ensure_ascii=False, sort_keys=True)
 
 
 def instance_to_json(instance: BenchmarkInstance) -> str:
     """Serialize one BenchmarkInstance to a JSON line."""
-    return json.dumps(_to_json(instance), ensure_ascii=False, sort_keys=True)
+    return json.dumps(asdict(instance), ensure_ascii=False, sort_keys=True)
 
 
 def event_from_json(line: str) -> EvidenceEvent:
