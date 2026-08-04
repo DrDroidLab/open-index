@@ -133,3 +133,12 @@ def test_probe_long_context() -> None:
     ]
     probe = UpdateProbe("q1", "user", "manager", "Alice")
     assert probe_long_context(events, probe, fake) is True
+
+
+def test_fact_entity_id_normalizes_multi_word_subject() -> None:
+    """Multi-word subjects are slugified so the probe and entity IDs match."""
+    from bench.systems._utils import fact_entity_id
+
+    assert fact_entity_id("Project Alpha", "status") == "user_fact:project-alpha-status"
+    assert fact_entity_id("project alpha", "status") == "user_fact:project-alpha-status"
+    assert fact_entity_id(" current  manager ", "name") == "user_fact:current-manager-name"

@@ -78,6 +78,12 @@ def _run_smoke(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-cost", type=float, default=5.0, help="Hard cost cap in USD")
     parser.add_argument("--out", default=str(RESULTS_DIR / "smoke"), help="Output directory")
     parser.add_argument(
+        "--k", type=int, default=5, help="Retrieval budget for each system (default 5)"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42, help="LLM seed for deterministic tool loops (default 42)"
+    )
+    parser.add_argument(
         "--judge-model",
         default=JUDGE_MODEL,
         help="Judge model for LongMemEval scoring",
@@ -121,6 +127,8 @@ def _run_smoke(argv: list[str] | None = None) -> int:
             "temperature": 0.0,
             "model": AGENT_MODEL,
             "client": agent_client,
+            "k": args.k,
+            "seed": args.seed,
         }
         runner.run(config)
         if agent_client.ledger.total_cost_usd > args.max_cost:
@@ -148,6 +156,8 @@ def _run_smoke(argv: list[str] | None = None) -> int:
                 "instances": cr_instances,
                 "out": str(out_dir),
                 "client": agent_client,
+                "k": args.k,
+                "seed": args.seed,
             }
             runner.run(config)
             if agent_client.ledger.total_cost_usd > args.max_cost:
@@ -169,6 +179,8 @@ def _run_smoke(argv: list[str] | None = None) -> int:
                 "instances": ar_instances,
                 "out": str(out_dir),
                 "client": agent_client,
+                "k": args.k,
+                "seed": args.seed,
             }
             runner.run(config)
             if agent_client.ledger.total_cost_usd > args.max_cost:

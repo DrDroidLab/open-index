@@ -18,16 +18,22 @@ from bench.config import (
 from bench.data import longmemeval, memoryagentbench
 from bench.harness.probes import UpdateProbe, _is_update_question, extract_probes, probe_flat, probe_structured
 from bench.ir.types import BenchmarkInstance, Question
-from bench.llm.client import LLMClient
+from bench.llm.client import LLMClient, Usage
 from bench.systems import FlatMemoryBaseline, LongContextBaseline, StructuredBrainMemory
 from bench.systems.base import Answer, MemorySystem
 
 
-SYSTEMS: dict[str, Callable[[LLMClient], MemorySystem]] = {
-    "structured": lambda client: StructuredBrainMemory(client),
-    "flat": lambda client: FlatMemoryBaseline(client),
-    "longctx": lambda client: LongContextBaseline(client),
+SYSTEMS: dict[str, Callable[[LLMClient, int, int], MemorySystem]] = {
+    "structured": lambda client, k, seed: StructuredBrainMemory(client, k=k, seed=seed),
+    "flat": lambda client, k, seed: FlatMemoryBaseline(client, k=k, seed=seed),
+    "longctx": lambda client, k, seed: LongContextBaseline(client, seed=seed),
 }
+
+
+def _instance_question_timestamp(instance: BenchmarkInstance) -> Optional[str]:
+    """Return the bounding question timestamp for an instance, or None for MAB."""
+    timestamps = [q.question_timestamp for q in instance.questions if q.question_timestamp is not None]
+    return max(timestamps) if timestamps else None
 
 
 def _load_instances(config: dict[str, Any]) -> Iterator[BenchmarkInstance]:
@@ -49,7 +55,9 @@ def _load_instances(config: dict[str, Any]) -> Iterator[BenchmarkInstance]:
         raise ValueError(f"Unknown dataset: {dataset}")
 
 
-def _make_system(config: dict[str, Any], client: LLMClient | None = None) -> MemorySystem:
+def _make_system(
+    config: dict[str, Any], client: LLMClient | None = None, k: int = 5, seed: int = 42
+) -> MemorySystem:
     system_name = config["system"]
     factory = SYSTEMS.get(system_name)
     if factory is None:
@@ -59,11 +67,13 @@ def _make_system(config: dict[str, Any], client: LLMClient | None = None) -> Mem
             model=config.get("model", AGENT_MODEL),
             temperature=config.get("temperature", TEMPERATURE),
         )
-    return factory(client)
+    return factory(client, k, seed)
 
 
-def _run_instance(system: MemorySystem, instance: BenchmarkInstance) -> list[tuple[Question, Answer]]:
-    system.ingest(iter(instance.events))
+def _run_instance(
+    system: MemorySystem, instance: BenchmarkInstance, question_timestamp: Optional[str] = None
+) -> list[tuple[Question, Answer]]:
+    system.ingest(iter(instance.events), question_timestamp=question_timestamp)
     results: list[tuple[Question, Answer]] = []
     for question in instance.questions:
         answer = system.answer(question)
@@ -82,9 +92,7 @@ def _run_probes(
     instance: BenchmarkInstance,
     client: LLMClient,
 ) -> list[dict[str, Any]]:
-    """Run update probes against the system for this instance (structured/flat only)."""
-    if isinstance(system, LongContextBaseline):
-        return []
+    """Run update probes against the system for this instance."""
     if not any(_is_update_question(q, instance.metadata) for q in instance.questions):
         return []
 
@@ -95,6 +103,9 @@ def _run_probes(
             correct = probe_structured(system.brain, probe)
         elif isinstance(system, FlatMemoryBaseline):
             correct = probe_flat(system.brain, probe, client)
+        elif isinstance(system, LongContextBaseline):
+            # system._events is already filtered to the instance's question_timestamp by ingest.
+            correct = probe_long_context(system._events, probe, client)
         else:
             continue
         results.append(
@@ -109,6 +120,16 @@ def _run_probes(
     return results
 
 
+def _share_usage(usage: Usage, n: int) -> dict[str, float]:
+    """Divide a Usage object evenly across n questions."""
+    if n <= 0:
+        return {"prompt_tokens": 0.0, "completion_tokens": 0.0}
+    return {
+        "prompt_tokens": usage.prompt_tokens / n,
+        "completion_tokens": usage.completion_tokens / n,
+    }
+
+
 def run(config: dict[str, Any]) -> dict[str, Any]:
     """Run one dataset x system combination and write result files."""
     dataset = config["dataset"]
@@ -120,27 +141,69 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
     metadata_path = out_dir / "metadata.jsonl"
     probe_results_path = out_dir / "probe_results.json"
 
+    k = int(config.get("k", 5))
+    seed = int(config.get("seed", 42))
+    split = config.get("split", "")
+
     prediction_rows: list[dict[str, Any]] = []
     metadata_rows: list[dict[str, Any]] = []
     probe_results: list[dict[str, Any]] = []
     total_cost = 0.0
     instance_count = 0
     question_count = 0
+    failure_count = 0
 
     instances = config.get("instances") or _load_instances(config)
     for instance in instances:
         instance_count += 1
-        system = _make_system(config, client=config.get("client"))
+        system = _make_system(config, client=config.get("client"), k=k, seed=seed)
+        cost_before = system.client.ledger.total_cost_usd
+        usage_before = system.client.ledger.usage()
+        instance_error: str | None = None
+        instance_results: list[tuple[Question, Answer]] = []
+
         try:
-            results = _run_instance(system, instance)
+            results = _run_instance(
+                system,
+                instance,
+                question_timestamp=_instance_question_timestamp(instance),
+            )
             probe_results.extend(_run_probes(system, instance, system.client))
+            instance_results = results
+        except Exception as exc:
+            instance_error = f"{type(exc).__name__}: {exc}"
+            failure_count += 1
+            for question in instance.questions:
+                instance_results.append(
+                    (
+                        question,
+                        Answer(
+                            text="",
+                            source_ids=[],
+                            tool_calls=0,
+                            usage=Usage(),
+                            latency_ms=0.0,
+                            metadata={"error": instance_error},
+                        ),
+                    )
+                )
         finally:
             system.close()
 
-        cost = system.client.ledger.total_cost_usd
-        total_cost += cost
+        cost_after = system.client.ledger.total_cost_usd
+        usage_after = system.client.ledger.usage()
+        delta_cost = cost_after - cost_before
+        delta_usage = Usage(
+            prompt_tokens=usage_after.prompt_tokens - usage_before.prompt_tokens,
+            completion_tokens=usage_after.completion_tokens - usage_before.completion_tokens,
+        )
+        total_cost += delta_cost
 
-        for question, answer in results:
+        num_questions = max(len(instance.questions), 1)
+        shared_usage = _share_usage(delta_usage, num_questions)
+        per_question_cost = delta_cost / num_questions
+
+        for question, answer in instance_results:
             question_count += 1
             if dataset == "longmemeval":
                 prediction_rows.append(
@@ -150,15 +213,14 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
                     }
                 )
             else:
-                split = config.get("split", "")
                 source = str(instance.metadata.get("source", ""))
                 prediction_rows.append(
                     {
                         "qa_pair_id": question.question_id,
                         "hypothesis": answer.text,
-                        "gold_answers": question.gold_answers,
                         "source": source,
                         "split": split,
+                        "instance_id": instance.instance_id,
                     }
                 )
             metadata_rows.append(
@@ -167,16 +229,19 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
                     "question_id": question.question_id,
                     "system": system_name,
                     "dataset": dataset,
-                    "usage": {
-                        "prompt_tokens": answer.usage.prompt_tokens,
-                        "completion_tokens": answer.usage.completion_tokens,
+                    "usage": shared_usage,
+                    "instance_usage": {
+                        "prompt_tokens": delta_usage.prompt_tokens,
+                        "completion_tokens": delta_usage.completion_tokens,
                     },
                     "latency_ms": answer.latency_ms,
                     "tool_calls": answer.tool_calls,
                     "retrieved_source_ids": answer.source_ids,
                     "truncated": answer.metadata.get("truncated", False),
                     "dropped_events": answer.metadata.get("dropped_events", 0),
-                    "cost_usd": cost,
+                    "cost_usd": per_question_cost,
+                    "instance_cost_usd": delta_cost,
+                    "error": instance_error,
                 }
             )
 
@@ -196,8 +261,12 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
     summary = {
         "dataset": dataset,
         "system": system_name,
+        "split": split,
         "instances": instance_count,
         "questions": question_count,
+        "failures": failure_count,
+        "k": k,
+        "seed": seed,
         "total_cost_usd": total_cost,
         "predictions_path": str(predictions_path),
         "metadata_path": str(metadata_path),
@@ -216,7 +285,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--system", required=True, choices=list(SYSTEMS))
     parser.add_argument("--max-instances", type=int, default=None)
     parser.add_argument("--out", default=str(RESULTS_DIR))
-    parser.add_argument("--parallelism", type=int, default=1)
+    parser.add_argument("--k", type=int, default=5, help="Retrieval budget (default 5)")
+    parser.add_argument("--seed", type=int, default=42, help="LLM seed for deterministic tool loops")
     parser.add_argument("--model", default=AGENT_MODEL)
     parser.add_argument("--temperature", type=float, default=TEMPERATURE)
     args = parser.parse_args(argv)
@@ -230,7 +300,8 @@ def main(argv: list[str] | None = None) -> int:
         "system": args.system,
         "max_instances": args.max_instances,
         "out": args.out,
-        "parallelism": args.parallelism,
+        "k": args.k,
+        "seed": args.seed,
         "model": args.model,
         "temperature": args.temperature,
     }

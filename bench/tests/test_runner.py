@@ -7,6 +7,8 @@ import tempfile
 from pathlib import Path
 from typing import Iterator, Optional
 
+import pytest
+
 from bench.harness import runner
 from bench.ir.types import BenchmarkInstance, EvidenceEvent, Question
 from bench.llm.client import FakeLLMClient, Usage
@@ -35,7 +37,7 @@ class _FakeSystem(MemorySystem):
 
 
 def test_runner_longmemeval_output_format(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(runner, "SYSTEMS", {"fake": lambda client: _FakeSystem(client)})
+    monkeypatch.setattr(runner, "SYSTEMS", {"fake": lambda client, k, seed: _FakeSystem(client)})
     monkeypatch.setattr(
         runner,
         "_load_instances",
@@ -74,7 +76,7 @@ def test_runner_longmemeval_output_format(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_runner_mab_output_format(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(runner, "SYSTEMS", {"fake": lambda client: _FakeSystem(client)})
+    monkeypatch.setattr(runner, "SYSTEMS", {"fake": lambda client, k, seed: _FakeSystem(client)})
     monkeypatch.setattr(
         runner,
         "_load_instances",
@@ -110,5 +112,163 @@ def test_runner_mab_output_format(tmp_path: Path, monkeypatch) -> None:
     predictions_path = Path(summary["predictions_path"])
     preds = [json.loads(line) for line in predictions_path.read_text().splitlines()]
     assert preds[0]["qa_pair_id"] == "ar_0_0"
-    assert preds[0]["gold_answers"] == ["answer A"]
-    assert "source" in preds[0]
+    assert "gold_answers" not in preds[0]
+    assert preds[0]["instance_id"] == "ar_0"
+    assert preds[0]["source"] == "longmemeval_s_0"
+    assert preds[0]["split"] == "Accurate_Retrieval"
+
+
+def test_runner_forwards_question_timestamp(tmp_path: Path, monkeypatch) -> None:
+    received_timestamps: list[Optional[str]] = []
+
+    class _TimestampCapturingSystem(_FakeSystem):
+        def ingest(
+            self, events: Iterator[EvidenceEvent], *, question_timestamp: Optional[str] = None
+        ) -> None:
+            received_timestamps.append(question_timestamp)
+            super().ingest(events, question_timestamp=question_timestamp)
+
+    monkeypatch.setattr(
+        runner, "SYSTEMS", {"fake": lambda client, k, seed: _TimestampCapturingSystem(client)}
+    )
+    monkeypatch.setattr(
+        runner,
+        "_load_instances",
+        lambda cfg: [
+            BenchmarkInstance(
+                instance_id="lme_0",
+                events=[EvidenceEvent(event_id="e1", source_id="s0", timestamp="2023-05-20", text="x")],
+                questions=[
+                    Question(
+                        question_id="lme_0",
+                        text="q?",
+                        question_timestamp="2023-05-21",
+                    )
+                ],
+            )
+        ],
+    )
+
+    config = {
+        "dataset": "longmemeval",
+        "system": "fake",
+        "max_instances": 1,
+        "out": str(tmp_path / "results"),
+        "temperature": 0.0,
+        "model": "gpt-4o-mini",
+    }
+    runner.run(config)
+    assert received_timestamps == ["2023-05-21"]
+
+
+def test_runner_mab_passes_none_question_timestamp(tmp_path: Path, monkeypatch) -> None:
+    received_timestamps: list[Optional[str]] = []
+
+    class _TimestampCapturingSystem(_FakeSystem):
+        def ingest(
+            self, events: Iterator[EvidenceEvent], *, question_timestamp: Optional[str] = None
+        ) -> None:
+            received_timestamps.append(question_timestamp)
+            super().ingest(events, question_timestamp=question_timestamp)
+
+    monkeypatch.setattr(
+        runner, "SYSTEMS", {"fake": lambda client, k, seed: _TimestampCapturingSystem(client)}
+    )
+    monkeypatch.setattr(
+        runner,
+        "_load_instances",
+        lambda cfg: [
+            BenchmarkInstance(
+                instance_id="ar_0",
+                events=[EvidenceEvent(event_id="e1", source_id="s0", timestamp="0", text="x")],
+                questions=[Question(question_id="ar_0_0", text="What is A?")],
+                metadata={"source": "longmemeval_s_0", "split": "Accurate_Retrieval"},
+            )
+        ],
+    )
+
+    config = {
+        "dataset": "mab",
+        "split": "Accurate_Retrieval",
+        "system": "fake",
+        "max_instances": 1,
+        "out": str(tmp_path / "results"),
+        "temperature": 0.0,
+        "model": "gpt-4o-mini",
+    }
+    runner.run(config)
+    assert received_timestamps == [None]
+
+
+def test_runner_per_instance_cost_delta(tmp_path: Path, monkeypatch) -> None:
+    """Cost is recorded per-instance, not cumulative across instances."""
+    monkeypatch.setattr(runner, "SYSTEMS", {"fake": lambda client, k, seed: _FakeSystem(client)})
+    monkeypatch.setattr(
+        runner,
+        "_load_instances",
+        lambda cfg: [
+            BenchmarkInstance(
+                instance_id=f"lme_{i}",
+                events=[EvidenceEvent(event_id=f"e{i}", source_id=f"s{i}", timestamp="2023-05-20", text="x")],
+                questions=[Question(question_id=f"lme_{i}", text="q?")],
+            )
+            for i in range(3)
+        ],
+    )
+
+    config = {
+        "dataset": "longmemeval",
+        "system": "fake",
+        "max_instances": 3,
+        "out": str(tmp_path / "results"),
+        "temperature": 0.0,
+        "model": "gpt-4o-mini",
+    }
+    summary = runner.run(config)
+    metadata_path = Path(summary["metadata_path"])
+    rows = [json.loads(line) for line in metadata_path.read_text().splitlines()]
+    costs = [round(row["cost_usd"], 8) for row in rows]
+    assert len(set(costs)) == 1, f"Per-question costs should be equal, got {costs}"
+    instance_costs = [round(row["instance_cost_usd"], 8) for row in rows]
+    assert len(set(instance_costs)) == 1, f"Instance costs should be equal, got {instance_costs}"
+    assert summary["total_cost_usd"] == pytest.approx(sum(row["instance_cost_usd"] for row in rows), rel=1e-6)
+
+
+def test_runner_catches_instance_error_and_continues(tmp_path: Path, monkeypatch) -> None:
+    class _FailingSystem(_FakeSystem):
+        def answer(self, question: Question) -> Answer:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(runner, "SYSTEMS", {"fake": lambda client, k, seed: _FailingSystem(client)})
+    monkeypatch.setattr(
+        runner,
+        "_load_instances",
+        lambda cfg: [
+            BenchmarkInstance(
+                instance_id="lme_0",
+                events=[EvidenceEvent(event_id="e1", source_id="s0", timestamp="2023-05-20", text="x")],
+                questions=[Question(question_id="lme_0", text="q?")],
+            )
+        ],
+    )
+
+    config = {
+        "dataset": "longmemeval",
+        "system": "fake",
+        "max_instances": 1,
+        "out": str(tmp_path / "results"),
+        "temperature": 0.0,
+        "model": "gpt-4o-mini",
+    }
+    summary = runner.run(config)
+    assert summary["instances"] == 1
+    assert summary["questions"] == 1
+    assert summary["failures"] == 1
+
+    predictions_path = Path(summary["predictions_path"])
+    preds = [json.loads(line) for line in predictions_path.read_text().splitlines()]
+    assert preds[0]["hypothesis"] == ""
+
+    metadata_path = Path(summary["metadata_path"])
+    rows = [json.loads(line) for line in metadata_path.read_text().splitlines()]
+    assert rows[0]["error"].startswith("RuntimeError")

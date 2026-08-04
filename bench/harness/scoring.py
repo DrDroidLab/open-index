@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from bench.config import AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, JUDGE_MODEL, RESULTS_DIR
-from bench.data import longmemeval
+from bench.data import longmemeval, memoryagentbench
 from bench.data.memoryagentbench import _derive_coarse_group
 from bench.llm.client import LLMClient
 
@@ -42,12 +42,24 @@ def _subem_normalize(text: str) -> str:
 
 
 def subem_score(hypothesis: str, gold_answers: list[str]) -> int:
-    """Return 1 if any normalized gold answer is a substring of the normalized hypothesis."""
+    """Return 1 if any gold answer is a substring of the hypothesis.
+
+    Official SubEM semantics: case-insensitive LITERAL substring match first.
+    If the literal match fails, fall back to the normalized (strip punctuation,
+    articles, whitespace) match. An empty gold string never matches.
+    """
     if not gold_answers:
         return 0
+    hyp = str(hypothesis).lower()
     norm_hyp = _subem_normalize(hypothesis)
     for gold in gold_answers:
-        if _subem_normalize(gold) in norm_hyp:
+        gold_str = str(gold)
+        if not gold_str:
+            continue
+        if gold_str.lower() in hyp:
+            return 1
+        norm_gold = _subem_normalize(gold_str)
+        if norm_gold and norm_gold in norm_hyp:
             return 1
     return 0
 
@@ -172,6 +184,21 @@ def _load_longmemeval_references() -> dict[str, dict[str, Any]]:
     return {str(row.get("question_id", "")): row for row in rows if row.get("question_id")}
 
 
+def _load_mab_references(split: str) -> dict[str, dict[str, Any]]:
+    """Load the MemoryAgentBench split keyed by qa_pair_id."""
+    refs: dict[str, dict[str, Any]] = {}
+    for instance in memoryagentbench.iter_instances(split=split):
+        source = str(instance.metadata.get("source", ""))
+        for question in instance.questions:
+            refs[question.question_id] = {
+                "gold_answers": question.gold_answers,
+                "source": source,
+                "split": split,
+                "instance_id": instance.instance_id,
+            }
+    return refs
+
+
 def _mean(values: list[float]) -> float:
     if not values:
         return 0.0
@@ -214,7 +241,7 @@ def run_longmemeval_judge(
             temperature=0,
             max_tokens=10,
         )
-        label = "yes" in response.content.strip().lower()
+        label = response.content.strip().lower().startswith("yes")
         results.append(
             {
                 "question_id": qid,
@@ -248,8 +275,15 @@ def aggregate_judge_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def score_mab_predictions(predictions: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compute SubEM per split and per coarse source group for MAB predictions."""
+def score_mab_predictions(
+    predictions: list[dict[str, Any]],
+    references: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Compute SubEM per split and per coarse source group for MAB predictions.
+
+    Gold answers are joined from `references` so that prediction files never
+    contain the ground truth.
+    """
     if not predictions:
         return {
             "overall": 0.0,
@@ -261,11 +295,13 @@ def score_mab_predictions(predictions: list[dict[str, Any]]) -> dict[str, Any]:
     per_group: dict[str, list[int]] = defaultdict(list)
     all_scores: list[int] = []
     for pred in predictions:
-        gold = pred.get("gold_answers", [])
+        qid = str(pred.get("qa_pair_id", ""))
+        ref = references.get(qid)
+        gold = ref["gold_answers"] if ref else []
         score = subem_score(pred.get("hypothesis", ""), gold)
         all_scores.append(score)
-        split = str(pred.get("split", ""))
-        source = str(pred.get("source", ""))
+        split = str(pred.get("split", "")) or (ref["split"] if ref else "")
+        source = str(pred.get("source", "")) or (ref["source"] if ref else "")
         group = _derive_coarse_group(source, split)
         per_split[split].append(score)
         per_group[group].append(score)
@@ -280,8 +316,13 @@ def score_mab_predictions(predictions: list[dict[str, Any]]) -> dict[str, Any]:
 def compute_recall_at_k(
     metadata: list[dict[str, Any]],
     references: Optional[dict[str, dict[str, Any]]] = None,
+    k: int = 5,
 ) -> dict[str, Any]:
-    """Compute Recall@k for LongMemEval from metadata retrieved_source_ids."""
+    """Compute Recall@k for LongMemEval from metadata retrieved_source_ids.
+
+    The retrieved source id list is capped to the top-k entries before computing
+    coverage of the gold evidence ids.
+    """
     if references is None:
         references = _load_longmemeval_references()
     recalls: list[float] = []
@@ -293,7 +334,7 @@ def compute_recall_at_k(
         gold = set(str(x) for x in ref.get("answer_session_ids", []))
         if not gold:
             continue
-        retrieved = set(str(x) for x in row.get("retrieved_source_ids", []))
+        retrieved = set(str(x) for x in row.get("retrieved_source_ids", [])[:k])
         recalls.append(len(gold & retrieved) / len(gold))
     return {
         "mean": round(_mean(recalls), 4),
@@ -301,8 +342,41 @@ def compute_recall_at_k(
     }
 
 
+def compute_window_coverage(
+    metadata: list[dict[str, Any]],
+    references: Optional[dict[str, dict[str, Any]]] = None,
+) -> dict[str, Any]:
+    """Compute coverage of gold evidence ids by the long-context included window.
+
+    Unlike Recall@k, this uses the full list of source_ids the long-context arm
+    actually included in its window (which may be larger or smaller than k).
+    """
+    if references is None:
+        references = _load_longmemeval_references()
+    coverages: list[float] = []
+    for row in metadata:
+        qid = str(row.get("question_id", ""))
+        ref = references.get(qid)
+        if not ref:
+            continue
+        gold = set(str(x) for x in ref.get("answer_session_ids", []))
+        if not gold:
+            continue
+        included = set(str(x) for x in row.get("retrieved_source_ids", []))
+        coverages.append(len(gold & included) / len(gold))
+    return {
+        "mean": round(_mean(coverages), 4),
+        "count": len(coverages),
+    }
+
+
 def aggregate_ops(metadata: list[dict[str, Any]], summary: dict[str, Any]) -> dict[str, Any]:
-    """Aggregate operations metrics from metadata and summary."""
+    """Aggregate operations metrics from metadata and summary.
+
+    Token counts are summed from the per-question usage shares, which add up to
+    the total per-instance ledger deltas. This makes ops.total_tokens comparable
+    across arms that include ingest and probe costs.
+    """
     if not metadata:
         return {
             "total_tokens": 0,
@@ -310,20 +384,22 @@ def aggregate_ops(metadata: list[dict[str, Any]], summary: dict[str, Any]) -> di
             "mean_latency_ms": 0.0,
             "total_tool_calls": 0,
             "truncation_rate": 0.0,
+            "failure_count": 0,
         }
-    total_tokens = 0
+    total_tokens = 0.0
     for row in metadata:
         usage = row.get("usage", {})
-        total_tokens += int(usage.get("prompt_tokens", 0)) + int(usage.get("completion_tokens", 0))
+        total_tokens += float(usage.get("prompt_tokens", 0)) + float(usage.get("completion_tokens", 0))
     latencies = [float(row.get("latency_ms", 0.0)) for row in metadata]
     tool_calls = [int(row.get("tool_calls", 0)) for row in metadata]
     truncated = sum(1 for row in metadata if row.get("truncated", False))
     return {
-        "total_tokens": total_tokens,
+        "total_tokens": int(round(total_tokens)),
         "total_cost_usd": round(float(summary.get("total_cost_usd", 0.0)), 6),
         "mean_latency_ms": round(_mean(latencies), 2),
         "total_tool_calls": sum(tool_calls),
         "truncation_rate": round(truncated / len(metadata), 4),
+        "failure_count": int(summary.get("failures", 0)),
     }
 
 
@@ -356,9 +432,12 @@ def _render_metrics_md(metrics: dict[str, Any]) -> str:
     ops = metrics["ops"]
     lines.append(f"- Total tokens: {ops['total_tokens']:,}")
     lines.append(f"- Total cost USD: ${ops['total_cost_usd']:.6f}")
+    lines.append(f"- Judge cost USD: ${metrics.get('judge_cost_usd', 0.0):.6f}")
     lines.append(f"- Mean latency / question: {ops['mean_latency_ms']} ms")
     lines.append(f"- Total tool calls: {ops['total_tool_calls']}")
     lines.append(f"- Truncation rate: {ops['truncation_rate']:.2%}")
+    if metrics.get("failures", 0):
+        lines.append(f"- Failed instances: {metrics['failures']}")
     lines.append("")
 
     probes = metrics.get("probes")
@@ -401,6 +480,12 @@ def _render_metrics_md(metrics: dict[str, Any]) -> str:
         lines.append(f"- Count: {metrics['recall_at_k']['count']}")
         lines.append("")
 
+    if "window_coverage" in metrics:
+        lines.append("## Long-context window coverage")
+        lines.append(f"- Mean: {metrics['window_coverage']['mean']:.2%}")
+        lines.append(f"- Count: {metrics['window_coverage']['count']}")
+        lines.append("")
+
     return "\n".join(lines)
 
 
@@ -439,6 +524,8 @@ def score_run(
         "system": system,
         "instances": summary["instances"],
         "questions": summary["questions"],
+        "failures": summary.get("failures", 0),
+        "k": summary.get("k", 5),
     }
 
     # Probe results (if present)
@@ -453,7 +540,10 @@ def score_run(
     metrics["ops"] = aggregate_ops(metadata, summary)
 
     if dataset == "mab":
-        metrics["subem"] = score_mab_predictions(predictions)
+        split = summary.get("split") or (predictions[0].get("split") if predictions else "")
+        if references is None:
+            references = _load_mab_references(split)
+        metrics["subem"] = score_mab_predictions(predictions, references)
     elif dataset == "longmemeval":
         if judge_client is None:
             judge_client = LLMClient(
@@ -462,11 +552,18 @@ def score_run(
                 endpoint=AZURE_OPENAI_ENDPOINT,
                 api_key=AZURE_OPENAI_API_KEY,
             )
+        if references is None:
+            references = _load_longmemeval_references()
         judge_results = run_longmemeval_judge(run_dir / "predictions.jsonl", judge_client, references=references)
         metrics["judge"] = aggregate_judge_results(judge_results)
-        metrics["recall_at_k"] = compute_recall_at_k(metadata, references)
+        if system == "longctx":
+            metrics["window_coverage"] = compute_window_coverage(metadata, references)
+        else:
+            metrics["recall_at_k"] = compute_recall_at_k(metadata, references, k=metrics["k"])
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
+
+    metrics["judge_cost_usd"] = round(judge_client.ledger.total_cost_usd if judge_client else 0.0, 6)
 
     (run_dir / "metrics.json").write_text(
         json.dumps(metrics, indent=2, ensure_ascii=False),

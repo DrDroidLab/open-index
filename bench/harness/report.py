@@ -120,7 +120,7 @@ def _build_probe_table(metrics_list: list[dict[str, Any]]) -> str:
 
 
 def _build_recall_table(metrics_list: list[dict[str, Any]]) -> str:
-    """Build a Recall@k table for LongMemEval."""
+    """Build a Recall@k table for LongMemEval brain arms."""
     longmemeval = [m for m in metrics_list if m["dataset"] == "longmemeval"]
     if not longmemeval:
         return ""
@@ -138,14 +138,35 @@ def _build_recall_table(metrics_list: list[dict[str, Any]]) -> str:
     return "\n".join(rows)
 
 
+def _build_window_coverage_table(metrics_list: list[dict[str, Any]]) -> str:
+    """Build a long-context window coverage table for LongMemEval."""
+    longmemeval = [m for m in metrics_list if m["dataset"] == "longmemeval"]
+    if not longmemeval:
+        return ""
+
+    rows = []
+    header = ["System", "Mean window coverage", "Evaluated questions"]
+    rows.append("| " + " | ".join(header) + " |")
+    rows.append("| --- | --- | --- |")
+
+    for m in sorted(longmemeval, key=lambda x: x["system"]):
+        coverage = m.get("window_coverage", {})
+        rows.append(
+            f"| {m['system']} | {_fmt_pct(coverage.get('mean'))} | {coverage.get('count', 0)} |"
+        )
+    return "\n".join(rows)
+
+
 def _build_cost_table(metrics_list: list[dict[str, Any]]) -> str:
     """Build a cost/latency/operations table."""
     rows = []
     header = [
         "Dataset / System",
         "Questions",
+        "Failures",
         "Total tokens",
         "Total cost",
+        "Judge cost",
         "Mean latency (ms)",
         "Tool calls",
         "Truncation rate",
@@ -161,8 +182,10 @@ def _build_cost_table(metrics_list: list[dict[str, Any]]) -> str:
                 [
                     f"{m['dataset']} / {m['system']}",
                     str(m.get("questions", 0)),
+                    str(m.get("failures", 0)),
                     f"{ops.get('total_tokens', 0):,}",
                     _fmt_usd(ops.get("total_cost_usd", 0.0)),
+                    _fmt_usd(m.get("judge_cost_usd", 0.0)),
                     _fmt_num(ops.get("mean_latency_ms", 0.0)),
                     str(ops.get("total_tool_calls", 0)),
                     _fmt_pct(ops.get("truncation_rate", 0.0)),
@@ -241,6 +264,13 @@ def build_report(metrics_list: list[dict[str, Any]]) -> str:
         lines.append("## Recall@k (LongMemEval)")
         lines.append("")
         lines.append(recall_table)
+        lines.append("")
+
+    window_table = _build_window_coverage_table(metrics_list)
+    if window_table:
+        lines.append("## Long-context window coverage (LongMemEval)")
+        lines.append("")
+        lines.append(window_table)
         lines.append("")
 
     lines.append("## Cost, latency, and operations")

@@ -12,7 +12,19 @@ from bench.harness import scoring
 from bench.llm.client import FakeLLMClient, Usage
 
 
-def test_subem_normalization_punctuation_and_articles() -> None:
+def test_subem_literal_substring_first() -> None:
+    # Official semantics: literal case-insensitive substring match.
+    assert scoring.subem_score("I saw a cat", ["a"]) == 1
+    assert scoring.subem_score("The cat sat on the mat", ["the"]) == 1
+    assert scoring.subem_score("I saw a cat", ["a cat"]) == 1
+
+
+def test_subem_empty_gold_never_matches() -> None:
+    assert scoring.subem_score("I saw a cat", [""]) == 0
+    assert scoring.subem_score("I saw a cat", ["", "cat"]) == 1
+
+
+def test_subem_normalization_fallback_punctuation_and_articles() -> None:
     assert scoring.subem_score("The manager is Alice Smith.", ["Alice Smith"]) == 1
     assert scoring.subem_score("Manager: Alice", ["alice"]) == 1
     assert scoring.subem_score("A quick, brown fox!", ["quick brown fox"]) == 1
@@ -90,13 +102,18 @@ def test_judge_aggregation() -> None:
     assert agg["count"] == 3
 
 
-def test_mab_subem_scoring() -> None:
+def test_mab_subem_scoring_uses_references() -> None:
     predictions = [
-        {"qa_pair_id": "ar_0_0", "hypothesis": "The answer is Alice", "gold_answers": ["Alice"], "source": "longmemeval_s_0", "split": "Accurate_Retrieval"},
-        {"qa_pair_id": "cr_1_0", "hypothesis": "Latest", "gold_answers": ["latest"], "source": "factconsolidation_sh_6k", "split": "Conflict_Resolution"},
-        {"qa_pair_id": "cr_2_0", "hypothesis": "Stale", "gold_answers": ["new"], "source": "factconsolidation_mh_6k", "split": "Conflict_Resolution"},
+        {"qa_pair_id": "ar_0_0", "hypothesis": "The answer is Alice", "source": "longmemeval_s_0", "split": "Accurate_Retrieval"},
+        {"qa_pair_id": "cr_1_0", "hypothesis": "Latest", "source": "factconsolidation_sh_6k", "split": "Conflict_Resolution"},
+        {"qa_pair_id": "cr_2_0", "hypothesis": "Stale", "source": "factconsolidation_mh_6k", "split": "Conflict_Resolution"},
     ]
-    result = scoring.score_mab_predictions(predictions)
+    references = {
+        "ar_0_0": {"gold_answers": ["Alice"], "source": "longmemeval_s_0", "split": "Accurate_Retrieval"},
+        "cr_1_0": {"gold_answers": ["latest"], "source": "factconsolidation_sh_6k", "split": "Conflict_Resolution"},
+        "cr_2_0": {"gold_answers": ["new"], "source": "factconsolidation_mh_6k", "split": "Conflict_Resolution"},
+    }
+    result = scoring.score_mab_predictions(predictions, references)
     assert result["overall"] == pytest.approx(2 / 3, rel=1e-3)
     assert result["per_group"]["accurate_retrieval"] == 1.0
     assert result["per_group"]["conflict_resolution_sh"] == 1.0
@@ -186,6 +203,7 @@ def test_score_run_mab_writes_metrics(tmp_path: Path) -> None:
             {
                 "dataset": "mab",
                 "system": "flat",
+                "split": "Accurate_Retrieval",
                 "instances": 1,
                 "questions": 2,
                 "total_cost_usd": 0.01,
@@ -207,20 +225,118 @@ def test_score_run_mab_writes_metrics(tmp_path: Path) -> None:
         )
         + "\n"
     )
+    # Predictions must NOT contain gold answers; scorer joins them from references.
     (run_dir / "predictions.jsonl").write_text(
         json.dumps(
             {
                 "qa_pair_id": "ar_0_0",
                 "hypothesis": "Alice",
-                "gold_answers": ["Alice"],
                 "source": "longmemeval_s_0",
                 "split": "Accurate_Retrieval",
             }
         )
         + "\n"
     )
+    references = {
+        "ar_0_0": {"gold_answers": ["Alice"], "source": "longmemeval_s_0", "split": "Accurate_Retrieval"}
+    }
 
-    metrics = scoring.score_run(run_dir)
+    metrics = scoring.score_run(run_dir, references=references)
     assert metrics["dataset"] == "mab"
     assert metrics["subem"]["overall"] == 1.0
     assert (run_dir / "metrics.json").exists()
+    assert metrics.get("judge_cost_usd", 0.0) == 0.0
+
+
+def test_recall_at_k_capped_to_top_k() -> None:
+    references = {"q1": {"answer_session_ids": ["s1", "s2", "s3"]}}
+    metadata = [
+        {"question_id": "q1", "retrieved_source_ids": ["s1", "s2", "s3", "s4", "s5", "s6"]}
+    ]
+    result = scoring.compute_recall_at_k(metadata, references, k=3)
+    assert result["mean"] == 1.0
+    assert result["count"] == 1
+
+    result = scoring.compute_recall_at_k(metadata, references, k=2)
+    assert result["mean"] == pytest.approx(2 / 3, rel=1e-3)
+
+
+def test_window_coverage_uses_full_included_list() -> None:
+    references = {"q1": {"answer_session_ids": ["s1", "s2", "s3"]}}
+    metadata = [
+        {"question_id": "q1", "retrieved_source_ids": ["s1", "s2", "s3", "s4", "s5", "s6"]}
+    ]
+    result = scoring.compute_window_coverage(metadata, references)
+    assert result["mean"] == 1.0
+    assert result["count"] == 1
+
+
+def test_judge_cost_usd_recorded(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "dataset": "longmemeval",
+                "system": "flat",
+                "instances": 1,
+                "questions": 1,
+                "total_cost_usd": 0.01,
+                "k": 5,
+            }
+        )
+    )
+    (run_dir / "metadata.jsonl").write_text(
+        json.dumps(
+            {
+                "question_id": "q1",
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                "latency_ms": 100.0,
+                "tool_calls": 1,
+                "retrieved_source_ids": ["s1"],
+                "truncated": False,
+                "dropped_events": 0,
+                "cost_usd": 0.01,
+            }
+        )
+        + "\n"
+    )
+    (run_dir / "predictions.jsonl").write_text(
+        json.dumps({"question_id": "q1", "hypothesis": "answer"}) + "\n"
+    )
+
+    fake = FakeLLMClient(model="gpt-4o", temperature=0)
+    fake.queue_text("yes")
+    references = {
+        "q1": {
+            "question_type": "single-session-user",
+            "question": "q?",
+            "answer": "answer",
+            "answer_session_ids": ["s1"],
+        }
+    }
+    metrics = scoring.score_run(run_dir, judge_client=fake, references=references)
+    assert metrics["judge_cost_usd"] > 0.0
+    assert metrics["judge_cost_usd"] == round(fake.ledger.total_cost_usd, 6)
+
+
+def test_judge_label_parsing_startswith_yes() -> None:
+    """The judge must parse labels with startswith, not substring."""
+    fake = FakeLLMClient(model="gpt-4o", temperature=0)
+    fake.queue_text("yes, the answer is correct")
+    references = {
+        "q1": {
+            "question_type": "single-session-user",
+            "question": "q?",
+            "answer": "answer",
+        }
+    }
+    predictions_path = Path(tempfile.mkdtemp()) / "preds.jsonl"
+    predictions_path.write_text(json.dumps({"question_id": "q1", "hypothesis": "answer"}) + "\n")
+    results = scoring.run_longmemeval_judge(predictions_path, fake, references)
+    assert results[0]["correct"] is True
+
+    fake2 = FakeLLMClient(model="gpt-4o", temperature=0)
+    fake2.queue_text("not yes")
+    results2 = scoring.run_longmemeval_judge(predictions_path, fake2, references)
+    assert results2[0]["correct"] is False
