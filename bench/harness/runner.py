@@ -16,7 +16,7 @@ from bench.config import (
     ensure_llm_credentials,
 )
 from bench.data import longmemeval, memoryagentbench
-from bench.harness.probes import UpdateProbe, _is_update_question, extract_probes, probe_flat, probe_structured
+from bench.harness.probes import UpdateProbe, _is_update_question, extract_probes, probe_flat, probe_long_context, probe_structured
 from bench.ir.types import BenchmarkInstance, Question, read_instances
 from bench.llm.client import LLMClient, Usage
 from bench.systems import FlatMemoryBaseline, LongContextBaseline, StructuredBrainMemory

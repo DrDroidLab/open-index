@@ -202,9 +202,10 @@ def _run_smoke(argv: list[str] | None = None) -> int:
         for system_dir in sorted(dataset_dir.iterdir()):
             if not system_dir.is_dir():
                 continue
-            if not (system_dir / "metrics.json").exists():
-                run_dirs.append(system_dir)
-                scoring.score_run(system_dir, judge_client=judge_client)
+            # Always (re)score: predictions.jsonl is the immutable artifact;
+            # a stale metrics.json from an earlier run must not exclude an arm.
+            run_dirs.append(system_dir)
+            scoring.score_run(system_dir, judge_client=judge_client)
 
     # -----------------------------------------------------------------------
     # Combined report
