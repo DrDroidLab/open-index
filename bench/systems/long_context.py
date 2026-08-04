@@ -142,7 +142,9 @@ class LongContextBaseline(MemorySystem):
         for m in messages:
             content = m.get("content", "")
             total += per_message_overhead
-            total += len(self._tokenizer.encode(str(content)))
+            # disallowed_special=(): haystack text can contain literal strings
+            # like "<|endoftext|>" that tiktoken refuses to encode by default.
+            total += len(self._tokenizer.encode(str(content), disallowed_special=()))
         return total
 
 

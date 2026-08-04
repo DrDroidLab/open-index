@@ -331,3 +331,14 @@ def test_ingest_prompt_includes_question_timestamp() -> None:
     system_prompt = first_messages[0]["content"]
     assert "2023-05-21" in system_prompt
     assert "dated on or before" in system_prompt
+
+
+def test_long_context_handles_literal_special_token_text() -> None:
+    """Haystack text containing literal '<|endoftext|>' must not crash token counting."""
+    from bench.systems.long_context import LongContextBaseline
+    from bench.llm.client import FakeLLMClient
+
+    system = LongContextBaseline(llm_client=FakeLLMClient(model="gpt-4o-mini"))
+    messages = [{"role": "user", "content": "text with <|endoftext|> and <|im_start|> literals"}]
+    count = system._count_messages(messages)
+    assert count > 0
