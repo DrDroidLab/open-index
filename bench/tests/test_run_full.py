@@ -462,3 +462,47 @@ def test_worker_subprocess_runs_empty_shard(tmp_path: Path) -> None:
     summary = json.loads((out_dir / "summary.json").read_text())
     assert summary["questions"] == 0
     assert summary["instances"] == 0
+
+
+def test_merge_concatenates_shard_probe_results(tmp_path: Path) -> None:
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    for i in range(2):
+        shard_dir = out_dir / f"shard_{i}"
+        shard_dir.mkdir()
+        (shard_dir / "predictions.jsonl").write_text(
+            json.dumps({"question_id": f"q_{i}", "hypothesis": "x"}) + "\n"
+        )
+        (shard_dir / "metadata.jsonl").write_text("{}\n")
+        (shard_dir / "summary.json").write_text(
+            json.dumps({"instances": 1, "questions": 1, "failures": 0, "total_cost_usd": 0.01})
+        )
+        if i == 0:
+            (shard_dir / "probe_results.json").write_text(
+                json.dumps([{"question_id": "q_0", "correct": True}])
+            )
+
+    merged = run_full.merge_shards(out_dir, "longmemeval", "flat", "", 5, 42)
+
+    probe_path = out_dir / "merged" / "probe_results.json"
+    assert probe_path.exists()
+    assert json.loads(probe_path.read_text()) == [{"question_id": "q_0", "correct": True}]
+    assert merged["probe_results_path"] == str(probe_path)
+
+
+def test_merge_without_probes_leaves_probe_path_none(tmp_path: Path) -> None:
+    out_dir = tmp_path / "out"
+    shard_dir = out_dir / "shard_0"
+    shard_dir.mkdir(parents=True)
+    (shard_dir / "predictions.jsonl").write_text(
+        json.dumps({"question_id": "q_0", "hypothesis": "x"}) + "\n"
+    )
+    (shard_dir / "metadata.jsonl").write_text("{}\n")
+    (shard_dir / "summary.json").write_text(
+        json.dumps({"instances": 1, "questions": 1, "failures": 0, "total_cost_usd": 0.01})
+    )
+
+    merged = run_full.merge_shards(out_dir, "longmemeval", "flat", "", 5, 42)
+
+    assert merged["probe_results_path"] is None
+    assert not (out_dir / "merged" / "probe_results.json").exists()

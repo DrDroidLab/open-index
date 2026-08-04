@@ -222,6 +222,25 @@ def _merge_shard_outputs(merged_dir: Path, out_dir: Path) -> dict[str, Any]:
                         if line.strip():
                             meta_out.write(line)
 
+    # Merge per-shard update/contradiction probe results (disjoint by instance,
+    # so plain concatenation is correct). Scoring reads merged/probe_results.json.
+    merged_probes: list[dict[str, Any]] = []
+    for shard_dir in sorted(out_dir.glob("shard_*")):
+        shard_probes = shard_dir / "probe_results.json"
+        if shard_probes.exists():
+            try:
+                data = json.loads(shard_probes.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, list):
+                merged_probes.extend(data)
+    probe_results_path = merged_dir / "probe_results.json"
+    if merged_probes:
+        probe_results_path.write_text(
+            json.dumps(merged_probes, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
     total_instances = 0
     total_questions = 0
     total_failures = 0
@@ -248,7 +267,7 @@ def _merge_shard_outputs(merged_dir: Path, out_dir: Path) -> dict[str, Any]:
         "total_cost_usd": round(total_cost, 6),
         "predictions_path": str(predictions_path),
         "metadata_path": str(metadata_path),
-        "probe_results_path": None,
+        "probe_results_path": str(probe_results_path) if merged_probes else None,
     }
     merged_summary_path = merged_dir / "summary.json"
     merged_summary_path.write_text(
