@@ -16,6 +16,7 @@ from bench.config import (
     ensure_llm_credentials,
 )
 from bench.data import longmemeval, memoryagentbench
+from bench.harness.probes import UpdateProbe, _is_update_question, extract_probes, probe_flat, probe_structured
 from bench.ir.types import BenchmarkInstance, Question
 from bench.llm.client import LLMClient
 from bench.systems import FlatMemoryBaseline, LongContextBaseline, StructuredBrainMemory
@@ -48,15 +49,16 @@ def _load_instances(config: dict[str, Any]) -> Iterator[BenchmarkInstance]:
         raise ValueError(f"Unknown dataset: {dataset}")
 
 
-def _make_system(config: dict[str, Any]) -> MemorySystem:
+def _make_system(config: dict[str, Any], client: LLMClient | None = None) -> MemorySystem:
     system_name = config["system"]
     factory = SYSTEMS.get(system_name)
     if factory is None:
         raise ValueError(f"Unknown system: {system_name}")
-    client = LLMClient(
-        model=config.get("model", AGENT_MODEL),
-        temperature=config.get("temperature", TEMPERATURE),
-    )
+    if client is None:
+        client = LLMClient(
+            model=config.get("model", AGENT_MODEL),
+            temperature=config.get("temperature", TEMPERATURE),
+        )
     return factory(client)
 
 
@@ -98,6 +100,41 @@ def _write_metadata(path: Path, rows: list[dict[str, Any]]) -> None:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def _run_probes(
+    system: MemorySystem,
+    system_name: str,
+    instance: BenchmarkInstance,
+    client: LLMClient,
+) -> list[dict[str, Any]]:
+    """Run update probes against the system for this instance (structured/flat only)."""
+    if system_name not in ("structured", "flat"):
+        return []
+    if not any(_is_update_question(q, instance.metadata) for q in instance.questions):
+        return []
+    # Ensure the system is brain-backed.
+    brain = getattr(system, "brain", None)
+    if brain is None:
+        return []
+
+    probes = extract_probes([instance], client)
+    results: list[dict[str, Any]] = []
+    for probe in probes:
+        if system_name == "structured":
+            correct = probe_structured(brain, probe)
+        else:
+            correct = probe_flat(brain, probe, client)
+        results.append(
+            {
+                "question_id": probe.question_id,
+                "subject": probe.subject,
+                "attribute": probe.attribute,
+                "expected_value": probe.expected_value,
+                "correct": correct,
+            }
+        )
+    return results
+
+
 def run(config: dict[str, Any]) -> dict[str, Any]:
     """Run one dataset x system combination and write result files."""
     dataset = config["dataset"]
@@ -107,18 +144,22 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
 
     predictions_path = out_dir / "predictions.jsonl"
     metadata_path = out_dir / "metadata.jsonl"
+    probe_results_path = out_dir / "probe_results.json"
 
     prediction_rows: list[dict[str, Any]] = []
     metadata_rows: list[dict[str, Any]] = []
+    probe_results: list[dict[str, Any]] = []
     total_cost = 0.0
     instance_count = 0
     question_count = 0
 
-    for instance in _load_instances(config):
+    instances = config.get("instances") or _load_instances(config)
+    for instance in instances:
         instance_count += 1
-        system = _make_system(config)
+        system = _make_system(config, client=config.get("client"))
         try:
             results = _run_instance(system, instance)
+            probe_results.extend(_run_probes(system, system_name, instance, system.client))
         finally:
             system.close()
 
@@ -158,6 +199,7 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
                     },
                     "latency_ms": answer.latency_ms,
                     "tool_calls": answer.tool_calls,
+                    "retrieved_source_ids": answer.source_ids,
                     "truncated": answer.metadata.get("truncated", False),
                     "dropped_events": answer.metadata.get("dropped_events", 0),
                     "cost_usd": cost,
@@ -171,6 +213,12 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
 
     _write_metadata(metadata_path, metadata_rows)
 
+    if probe_results:
+        probe_results_path.write_text(
+            json.dumps(probe_results, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
     summary = {
         "dataset": dataset,
         "system": system_name,
@@ -179,6 +227,7 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
         "total_cost_usd": total_cost,
         "predictions_path": str(predictions_path),
         "metadata_path": str(metadata_path),
+        "probe_results_path": str(probe_results_path) if probe_results else None,
     }
     summary_path = out_dir / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False))

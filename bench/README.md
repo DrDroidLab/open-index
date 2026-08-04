@@ -7,10 +7,24 @@ library and does not change production code.
 
 ## Status
 
-Phase 2 (tasks 5–7) is implemented on top of Phase 1: LLM client wrapper,
-memory-system arms (structured, flat, long-context), runner, and
-update/contradiction probes. The harness writes official-format prediction
-JSONL files and per-instance metadata.
+Phase 3 (tasks 8–10) is implemented on top of Phases 1–2. The runner now also
+records `retrieved_source_ids` and update-probe results. The scorer computes
+SubEM for MemoryAgentBench, runs the official LongMemEval LLM judge against our
+Azure endpoint, computes Recall@k, aggregates operations metrics, and produces
+`metrics.json` + `metrics.md`. The report generator combines scored runs into a
+single markdown report with per-ability tables, probe correctness, and a findings
+skeleton. The smoke runner executes the full validation matrix with a hard cost
+cap and prints the total cost.
+
+### LongMemEval judge provenance
+
+The official LongMemEval evaluation script (`src/evaluation/evaluate_qa.py`) and
+the `print_qa_metrics.py` helper were fetched from
+<https://github.com/xiaowu0162/LongMemEval> into `bench/cache/eval_assets/`.
+The harness uses the official per-question-type rubrics from that script. When
+the script's extra dependencies (`tqdm`, `backoff`) are available, the harness
+imports the `get_anscheck_prompt` function directly; otherwise it falls back to
+a verbatim re-implementation of the same prompts.
 
 ## Prerequisites
 
@@ -63,11 +77,38 @@ python3 -m bench.harness.runner --dataset mab --split Accurate_Retrieval --max-i
 python3 -m bench.harness.runner --dataset mab --split Conflict_Resolution --max-instances 10 --system flat
 ```
 
+Score a run:
+
+```bash
+python3 -m bench.harness.scoring --run-dir bench/results/<dataset>/<system>
+```
+
+Generate a combined report from scored runs:
+
+```bash
+python3 -m bench.harness.report --runs bench/results/<dataset>/<system> [...] --out bench/results/report.md
+```
+
+Run the full smoke matrix (default n=5, all 3 systems, includes MAB):
+
+```bash
+python3 -m bench.run_smoke --n 5 --systems structured,flat,longctx
+```
+
+Validate the wiring with one cheap instance (use `gpt-4o-mini` as the judge if
+the Azure deployment does not expose `gpt-4o`):
+
+```bash
+python3 -m bench.run_smoke --n 1 --systems flat --skip-mab --judge-model gpt-4o-mini
+```
+
 Results are written under `bench/results/<dataset>/<system>/`:
 
 - `predictions.jsonl` — official-format predictions.
-- `metadata.jsonl` — per-question usage, latency, tool calls, truncation flag.
+- `metadata.jsonl` — per-question usage, latency, tool calls, retrieved source ids, truncation flag.
+- `probe_results.json` — update/contradiction probe results (brain-backed systems only).
 - `summary.json` — aggregate cost and instance/question counts.
+- `metrics.json` / `metrics.md` — scored metrics and a human-readable summary.
 
 ## Layout
 
@@ -85,7 +126,10 @@ bench/
 │   └── memoryagentbench.py    # MemoryAgentBench adapter
 ├── harness/
 │   ├── runner.py          # dataset x system matrix executor
-│   └── probes.py          # update/contradiction probe extraction + validation
+│   ├── probes.py          # update/contradiction probe extraction + validation
+│   ├── scoring.py         # SubEM, official judge, Recall@k, ops/probe metrics
+│   └── report.py          # combined markdown report generator
+├── run_smoke.py           # smoke matrix runner with cost cap
 ├── ir/
 │   └── types.py           # EvidenceEvent, Question, BenchmarkInstance
 ├── llm/
