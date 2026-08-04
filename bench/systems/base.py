@@ -39,8 +39,15 @@ class MemorySystem(ABC):
     """Abstract memory system: ingest events, answer questions."""
 
     @abstractmethod
-    def ingest(self, events: Iterator[EvidenceEvent]) -> None:
-        """Stream evidence events into the system in chronological order."""
+    def ingest(
+        self, events: Iterator[EvidenceEvent], *, question_timestamp: Optional[str] = None
+    ) -> None:
+        """Stream evidence events into the system in chronological order.
+
+        When `question_timestamp` is provided, the system should ignore any
+        evidence dated after that point (defense-in-depth for date-bounded
+        benchmarks such as LongMemEval).
+        """
         ...
 
     @abstractmethod

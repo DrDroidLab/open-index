@@ -35,7 +35,7 @@ Available tools:
 - `link_entities(from_id, to_id, relationship_meaning)` — add a relationship edge.
 - `done()` — finish processing this event.
 
-{'' if question_date is None else 'Only store facts from this event that are relevant to answering questions dated on or before ' + question_date + '.'}
+{'' if question_date is None else 'Only record facts from this event that are dated on or before ' + question_date + '. If the event contains no facts from that date range, you may call `done()` immediately.'}
 """
 
     # flat variant
@@ -51,7 +51,7 @@ Available tools:
 - `write_memory(text, memory_id=None)` — write or overwrite a `memory` entity. If `memory_id` is omitted, the event's own `source_id` is used.
 - `done()` — finish processing this event.
 
-{'' if question_date is None else 'Only store facts from this event that are relevant to answering questions dated on or before ' + question_date + '.'}
+{'' if question_date is None else 'Only record facts from this event that are dated on or before ' + question_date + '. If the event contains no facts from that date range, you may call `done()` immediately.'}
 """
 
 
@@ -66,6 +66,8 @@ def answer_system_prompt(
 
 Always prefer the most recent value when facts have been updated. If the brain does not contain the answer, say so clearly. Record the `source_id` of every entity you retrieve and include those ids in the final `answer` tool call.
 
+You must terminate by calling the `answer` tool with your final answer and the source_ids you used. Plain text is not accepted as a final answer.
+
 Available tools:
 - `search_brain(query, doc_types=None, limit=5)` — search the brain.
 - `get_entity(id)` — retrieve one entity by its id, including its relationships.
@@ -77,6 +79,8 @@ Available tools:
     return f"""You are a question-answering agent that uses a flat memory brain. Answer the user's question using only the evidence stored in the brain. You may use tools to search and retrieve memories, then call `answer` to produce the final response.
 
 Always prefer the most recent value when memories have been updated. If the brain does not contain the answer, say so clearly. Record the `source_id` of every memory you retrieve and include those ids in the final `answer` tool call.
+
+You must terminate by calling the `answer` tool with your final answer and the source_ids you used. Plain text is not accepted as a final answer.
 
 Available tools:
 - `search_memory(query, limit=5)` — search flat memories.

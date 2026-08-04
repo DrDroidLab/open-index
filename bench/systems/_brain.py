@@ -34,15 +34,20 @@ class BrainBackedMemorySystem(MemorySystem):
         keep_state: bool = False,
         max_ingest_tools: int = 8,
         max_answer_tools: int = 12,
+        k: int = 5,
+        seed: int = 42,
     ):
         self.client = llm_client
         self.keep_state = keep_state
         self.max_ingest_tools = max_ingest_tools
         self.max_answer_tools = max_answer_tools
+        self._retrieval_k = k
+        self._seed = seed
         self._prompt_variant = prompt_variant
         self._brain_dir = make_temp_brain(config_name)
         self.brain = Brain.open(self._brain_dir)
         self._current_event: EvidenceEvent | None = None
+        self._ingest_dropped_after_date: int = 0
 
     @property
     def _current_source_id(self) -> str:
@@ -91,11 +96,22 @@ class BrainBackedMemorySystem(MemorySystem):
             lines.append(format_fn(entity))
         return lines
 
-    def ingest(self, events: Iterator[EvidenceEvent]) -> None:
+    def ingest(
+        self, events: Iterator[EvidenceEvent], *, question_timestamp: Optional[str] = None
+    ) -> None:
+        self._ingest_dropped_after_date = 0
         for event in events:
+            if question_timestamp is not None and event.timestamp is not None:
+                if event.timestamp > question_timestamp:
+                    self._ingest_dropped_after_date += 1
+                    continue
+
             self._current_event = event
             messages = [
-                {"role": "system", "content": ingest_system_prompt(self._prompt_variant)},
+                {
+                    "role": "system",
+                    "content": ingest_system_prompt(self._prompt_variant, question_timestamp),
+                },
                 {
                     "role": "user",
                     "content": (
@@ -111,6 +127,7 @@ class BrainBackedMemorySystem(MemorySystem):
                 handlers=self._ingest_handlers(),
                 finish_tool="done",
                 max_tool_calls=self.max_ingest_tools,
+                seed=self._seed,
             )
 
     def answer(self, question: Question) -> Answer:
@@ -131,9 +148,14 @@ class BrainBackedMemorySystem(MemorySystem):
             handlers=self._answer_handlers(retrieved_source_ids),
             finish_tool="answer",
             max_tool_calls=self.max_answer_tools,
+            require_finish_tool=True,
+            seed=self._seed,
         )
         latency_ms = (time.perf_counter() - start) * 1000
         all_source_ids = list(dict.fromkeys(result.source_ids + retrieved_source_ids))
+        # Retrieval budget: cap recorded source_ids to the top-k actually used.
+        all_source_ids = all_source_ids[: self._retrieval_k]
+        result.metadata["ingest_dropped_after_date"] = self._ingest_dropped_after_date
         return Answer(
             text=result.content,
             source_ids=all_source_ids,

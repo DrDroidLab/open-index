@@ -11,7 +11,12 @@ from typing import Any, Iterable, Iterator, Optional
 from openai import OpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionMessageToolCall
 
-from bench.config import AGENT_MODEL, AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, TEMPERATURE
+from bench.config import (
+    AGENT_MODEL,
+    DEFAULT_API_KEY,
+    DEFAULT_ENDPOINT,
+    TEMPERATURE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -100,8 +105,8 @@ class LLMClient:
         temperature: float = TEMPERATURE,
         max_retries: int = 6,
     ):
-        self.endpoint = endpoint or AZURE_OPENAI_ENDPOINT
-        self.api_key = api_key or AZURE_OPENAI_API_KEY
+        self.endpoint = endpoint or DEFAULT_ENDPOINT
+        self.api_key = api_key or DEFAULT_API_KEY
         self.model = model
         self.temperature = temperature
         self.max_retries = max_retries
@@ -114,26 +119,33 @@ class LLMClient:
         tools: Optional[list[dict[str, Any]]] = None,
         temperature: Optional[float] = None,
         max_tokens: int = 2048,
+        seed: Optional[int] = None,
     ) -> ChatResponse:
         """Call the chat completions endpoint with exponential-backoff retries.
 
         Retries on rate limits (429) and server errors (5xx). Records token
-        usage and updates the cumulative cost ledger.
+        usage and updates the cumulative cost ledger. Forwards `seed` when
+        provided for deterministic sampling.
         """
         temp = temperature if temperature is not None else self.temperature
         attempt = 0
         backoff = 1.0
         last_exception: Optional[Exception] = None
+        request_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,  # type: ignore[arg-type]
+            "tools": tools,  # type: ignore[arg-type]
+            "temperature": temp,
+            "max_tokens": max_tokens,
+        }
+        if seed is not None:
+            request_kwargs["seed"] = seed
 
         while attempt < self.max_retries:
             attempt += 1
             try:
                 completion: ChatCompletion = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,  # type: ignore[arg-type]
-                    tools=tools,  # type: ignore[arg-type]
-                    temperature=temp,
-                    max_tokens=max_tokens,
+                    **request_kwargs
                 )
                 return self._parse_completion(completion)
             except Exception as exc:  # pragma: no cover - retry path exercised in tests
@@ -206,6 +218,7 @@ class FakeLLMClient:
         self._responses: deque[ChatResponse] = deque()
         self._calls: list[list[dict[str, Any]]] = []
         self._max_tokens: list[int] = []
+        self._seeds: list[Optional[int]] = []
 
     def queue(self, response: ChatResponse) -> "FakeLLMClient":
         self._responses.append(response)
@@ -240,11 +253,13 @@ class FakeLLMClient:
         tools: Optional[list[dict[str, Any]]] = None,
         temperature: Optional[float] = None,
         max_tokens: int = 2048,
+        seed: Optional[int] = None,
     ) -> ChatResponse:
         if not self._responses:
             raise RuntimeError("FakeLLMClient response queue is empty")
         self._calls.append([dict(m) for m in messages])
         self._max_tokens.append(max_tokens)
+        self._seeds.append(seed)
         response = self._responses.popleft()
         self.ledger.add(response.usage, self.model)
         return response
@@ -252,6 +267,10 @@ class FakeLLMClient:
     @property
     def calls(self) -> list[list[dict[str, Any]]]:
         return self._calls
+
+    @property
+    def seeds(self) -> list[Optional[int]]:
+        return self._seeds
 
 
 # ---------------------------------------------------------------------------

@@ -62,19 +62,40 @@ load_env_file()
 AZURE_OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
 AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY", "")
 
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+# Default credentials used by the LLM client: prefer Azure if fully configured,
+# otherwise fall back to a plain OpenAI account.
+if AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY:
+    DEFAULT_ENDPOINT = AZURE_OPENAI_ENDPOINT
+    DEFAULT_API_KEY = AZURE_OPENAI_API_KEY
+elif OPENAI_API_KEY:
+    DEFAULT_ENDPOINT = OPENAI_BASE_URL
+    DEFAULT_API_KEY = OPENAI_API_KEY
+else:
+    DEFAULT_ENDPOINT = ""
+    DEFAULT_API_KEY = ""
+
 
 def ensure_llm_credentials() -> tuple[str, str]:
     """Return (endpoint, api_key) after loading the env file if needed.
 
-    Raises RuntimeError if the credentials are not available.
+    Prefer Azure OpenAI credentials when both are set; otherwise fall back to
+    a standard OpenAI account (`OPENAI_API_KEY` plus optional `OPENAI_BASE_URL`).
+
+    Raises RuntimeError if neither credential set is available.
     """
-    if not AZURE_OPENAI_ENDPOINT or not AZURE_OPENAI_API_KEY:
-        raise RuntimeError(
-            "AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY must be set. "
-            "Put them in /code/.secrets/azure-openai.env (outside the repo) or "
-            "export them as environment variables."
-        )
-    return AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY
+    if AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY:
+        return AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY
+    if OPENAI_API_KEY:
+        return OPENAI_BASE_URL, OPENAI_API_KEY
+    raise RuntimeError(
+        "LLM credentials are not configured. Set either AZURE_OPENAI_ENDPOINT "
+        "and AZURE_OPENAI_API_KEY, or OPENAI_API_KEY (and optionally OPENAI_BASE_URL). "
+        "Put them in /code/.secrets/azure-openai.env (outside the repo) or "
+        "export them as environment variables."
+    )
 
 
 # ---------------------------------------------------------------------------

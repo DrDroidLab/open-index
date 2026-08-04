@@ -51,6 +51,8 @@ def run_tool_loop(
     handlers: dict[str, Callable[[dict[str, Any]], tuple[str, Any]]],
     finish_tool: str = "answer",
     max_tool_calls: int = 15,
+    require_finish_tool: bool = False,
+    seed: Optional[int] = None,
 ) -> ToolLoopResult:
     """Run a tool-calling loop until `finish_tool` is called or the budget is exhausted.
 
@@ -58,13 +60,20 @@ def run_tool_loop(
     `observation` is sent back to the model as a tool message. `extras` is an
     arbitrary dict merged into the result metadata; if the finish tool returns
     `{"text": ..., "source_ids": [...]}`, those become the final answer.
+
+    When `require_finish_tool` is True and `finish_tool` is "answer", a plain-text
+    response is not accepted: the loop sends a corrective message and continues.
+    Plain text is only accepted as a fallback when the round budget is exhausted,
+    and `result.metadata["fallback"] = True` is recorded.
     """
     result = ToolLoopResult()
     tool_count = 0
+    rounds = 0
 
-    while tool_count < max_tool_calls:
+    while rounds < max_tool_calls:
+        rounds += 1
         start = time.perf_counter()
-        response = client.chat(messages=messages, tools=tools, max_tokens=2048)
+        response = client.chat(messages=messages, tools=tools, max_tokens=2048, seed=seed)
         result.usage = Usage(
             prompt_tokens=result.usage.prompt_tokens + response.usage.prompt_tokens,
             completion_tokens=result.usage.completion_tokens + response.usage.completion_tokens,
@@ -91,9 +100,24 @@ def run_tool_loop(
         )
 
         if not response.tool_calls:
-            # Model returned a plain text response; treat it as the answer.
+            if require_finish_tool and finish_tool == "answer" and rounds < max_tool_calls:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "You must call the `answer` tool with your final answer; "
+                            "plain text is not accepted."
+                        ),
+                    }
+                )
+                continue
+
+            # Plain-text acceptance: for ingest this is treated as completion; for
+            # answer it is a last-resort fallback when rounds are exhausted.
             result.content = response.content or ""
             result.tool_calls = tool_count
+            if require_finish_tool and finish_tool == "answer":
+                result.metadata["fallback"] = True
             return result
 
         for tc in response.tool_calls:

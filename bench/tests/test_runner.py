@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Optional
 
 from bench.harness import runner
 from bench.ir.types import BenchmarkInstance, EvidenceEvent, Question
@@ -18,7 +18,9 @@ class _FakeSystem(MemorySystem):
         self.client = client
         self.ingested: list[EvidenceEvent] = []
 
-    def ingest(self, events: Iterator[EvidenceEvent]) -> None:
+    def ingest(
+        self, events: Iterator[EvidenceEvent], *, question_timestamp: Optional[str] = None
+    ) -> None:
         self.ingested.extend(events)
 
     def answer(self, question: Question) -> Answer:

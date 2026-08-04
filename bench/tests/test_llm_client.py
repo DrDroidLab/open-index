@@ -44,6 +44,13 @@ def test_fake_llm_client_queues_and_records_calls() -> None:
     assert fake.ledger.prompt_tokens == 30
 
 
+def test_fake_llm_client_records_seed() -> None:
+    fake = FakeLLMClient()
+    fake.queue_text("hello")
+    fake.chat([{"role": "user", "content": "hi"}], seed=42)
+    assert fake.seeds == [42]
+
+
 def test_fake_llm_client_raises_when_empty() -> None:
     fake = FakeLLMClient()
     with pytest.raises(RuntimeError, match="empty"):

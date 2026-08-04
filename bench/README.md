@@ -32,14 +32,16 @@ a verbatim re-implementation of the same prompts.
 - `droid_brain` installed from the repo root: `pip install -e .`
 - Bench-specific packages already installed: `openai`, `datasets`, `pytest`,
   `pandas`, `tiktoken`, `PyYAML`, `requests`
-- LLM credentials: the harness expects Azure OpenAI credentials in
-  `/code/.secrets/azure-openai.env` (outside the repo, mode 600) as:
-  - `AZURE_OPENAI_ENDPOINT` — base URL ending in `/openai/v1`
-  - `AZURE_OPENAI_API_KEY`
+- LLM credentials: the harness supports either Azure OpenAI or a standard
+  OpenAI account.
+  - Azure OpenAI (preferred): set `AZURE_OPENAI_ENDPOINT` (base URL ending in
+    `/openai/v1`) and `AZURE_OPENAI_API_KEY`.
+  - Standard OpenAI: set `OPENAI_API_KEY` (and optionally `OPENAI_BASE_URL`).
+  - Credentials can be placed in `/code/.secrets/azure-openai.env` (outside the
+    repo, mode 600) or exported as environment variables. If the env file is
+    missing, the harness falls back to the OpenAI credentials when available.
 
-If the environment variables are already exported, the env file is skipped. The
-harness never writes the key into the repository and never logs it. If the env
-file is missing, the harness fails early with a clear message.
+The harness never writes the key into the repository and never logs it.
 
 ## Dataset licenses
 

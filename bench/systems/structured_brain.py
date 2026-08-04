@@ -124,6 +124,8 @@ class StructuredBrainMemory(BrainBackedMemorySystem):
         keep_state: bool = False,
         max_ingest_tools: int = 8,
         max_answer_tools: int = 12,
+        k: int = 5,
+        seed: int = 42,
     ):
         super().__init__(
             llm_client,
@@ -132,6 +134,8 @@ class StructuredBrainMemory(BrainBackedMemorySystem):
             keep_state=keep_state,
             max_ingest_tools=max_ingest_tools,
             max_answer_tools=max_answer_tools,
+            k=k,
+            seed=seed,
         )
 
     def _ingest_tools(self) -> list[dict[str, Any]]:
@@ -223,7 +227,7 @@ class StructuredBrainMemory(BrainBackedMemorySystem):
         def _search_brain(args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             query = args.get("query", "")
             doc_types = args.get("doc_types")
-            limit = args.get("limit", 5)
+            limit = min(args.get("limit", self._retrieval_k), self._retrieval_k)
             results = self.brain.search(query=query, doc_types=doc_types, limit=limit)
             lines = [f"Search results ({results.total} total, limit {limit}):"]
             lines.extend(
