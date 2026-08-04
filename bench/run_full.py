@@ -157,6 +157,14 @@ def shard_instances(
     return [instances[i::workers] for i in range(workers)]
 
 
+def _global_done_qids(out_dir: Path) -> set[str]:
+    """Union of question ids predicted by any shard under out_dir."""
+    done: set[str] = set()
+    for shard_preds in sorted(out_dir.glob("shard_*/predictions.jsonl")):
+        done |= runner._existing_qids_from_predictions(shard_preds)
+    return done
+
+
 def _worker_entry(config: dict[str, Any]) -> int:
     """Internal worker entry: run one shard and write its outputs."""
     out_dir = Path(config["out_dir"])
@@ -165,8 +173,10 @@ def _worker_entry(config: dict[str, Any]) -> int:
     instances_path = Path(config["instances_path"])
     instances = list(read_instances(instances_path))
 
-    # Resume: skip question_ids already present in the shard's predictions.
-    done_qids = runner._existing_qids_from_predictions(out_dir / "predictions.jsonl")
+    # Resume: skip question_ids already present in ANY shard of this run dir.
+    # Re-runs with a different worker count redistribute instances across
+    # shards, so the resume set must be global to the parent out dir.
+    done_qids = _global_done_qids(out_dir.parent)
     todo: list[BenchmarkInstance] = []
     skipped = 0
     for instance in instances:

@@ -529,3 +529,14 @@ def test_merge_dedupes_duplicate_question_ids(tmp_path: Path) -> None:
     assert len(preds) == 1
     assert preds[0]["hypothesis"] == "from_shard_0"  # first occurrence wins
     assert merged["questions"] == 1
+
+
+def test_global_done_qids_unions_across_shards(tmp_path: Path) -> None:
+    out_dir = tmp_path / "out"
+    for i, qid in enumerate(["q_a", "q_b"]):
+        shard_dir = out_dir / f"shard_{i}"
+        shard_dir.mkdir(parents=True)
+        (shard_dir / "predictions.jsonl").write_text(
+            json.dumps({"question_id": qid, "hypothesis": "x"}) + "\n"
+        )
+    assert run_full._global_done_qids(out_dir) == {"q_a", "q_b"}
