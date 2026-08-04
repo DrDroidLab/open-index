@@ -4,6 +4,14 @@
 *.db-wal
 .droid_brain_state.json
 
+# Benchmark harness
+bench/cache/
+bench/results/*.log
+bench/results/*.json
+bench/results/*.jsonl
+bench/results/*.db
+bench/results/transcripts/
+
 # Python
 __pycache__/
 *.py[cod]
