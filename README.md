@@ -69,8 +69,9 @@ my-brain/
 ```
 
 Storage defaults to **SQLite + FTS5** (zero external services). The backend sits
-behind a pluggable interface, so an OpenSearch backend can be dropped in later
-without touching the rest of the code.
+behind a pluggable interface with two implementations: SQLite (default, local/dev)
+and **OpenSearch** (select with `search.backend: opensearch` — see
+[Using the brain from a cloud agent](#using-the-brain-from-a-cloud-agent-production)).
 
 ### Where entities live — `storage: file | index`
 
@@ -236,8 +237,8 @@ MCP/API endpoint → OpenSearch + `serve`.**
 
 **Ranking** — genuine **per-field boosters**: each field's `boost` weights how much a
 match there counts, so you tune "title matters more than description" with one number.
-Storage defaults to SQLite + FTS5; the backend is pluggable (an OpenSearch backend can
-be dropped in behind the same interface).
+Storage defaults to SQLite + FTS5; the OpenSearch backend implements the same
+interface with native per-field boosting and fuzzy matching.
 
 _Not yet implemented (declarable seams exist): semantic/vector search, and type-level &
 temporal boosters._

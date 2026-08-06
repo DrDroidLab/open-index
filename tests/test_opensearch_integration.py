@@ -44,8 +44,29 @@ def os_brain(tmp_path):
 def test_search_and_boost(os_brain):
     res = os_brain.search("checkout")
     assert res.total >= 1
-    # service name (boost 6) should rank the service first
-    assert res.results[0]["doc_type"] == "service"
+    # name matches (boost 6) must outrank description-only matches. The service
+    # ("Checkout Service") and the dashboard ("Checkout Latency") tie on _score —
+    # both names match at equal boost — so assert on the name-match GROUP, not
+    # a single winner (deterministic tie-break is by name.kw).
+    scores = {r["id"]: r["score"] for r in res.results}
+    name_hits = {"service:checkout", "dashboard:checkout-latency"}
+    top = {r["id"] for r in res.results[:2]}
+    assert top == name_hits
+    desc_only = [s for i, s in scores.items() if i not in name_hits]
+    assert all(s < min(scores[i] for i in name_hits) for s in desc_only)
+
+
+def test_unreachable_cluster_gives_clean_error(os_brain):
+    # Point a backend at a dead port: ensure_schema must exit with an
+    # actionable message, not a raw ConnectionError traceback.
+    import pytest as _pytest
+
+    from droid_brain.storage.opensearch_backend import OpenSearchBackend
+
+    cfg = os_brain.config
+    cfg.search.hosts = ["http://localhost:9999"]
+    with _pytest.raises(SystemExit, match="cannot reach OpenSearch"):
+        OpenSearchBackend(cfg).ensure_schema({})
 
 
 def test_counts_only(os_brain):

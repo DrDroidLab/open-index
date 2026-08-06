@@ -153,7 +153,9 @@ class OpenSearchBackend:
                     "type": "best_fields",
                 }
             }
-            sort = ["_score"]
+            # Deterministic tie-break on equal _score (parity with SQLite's
+            # name tie-break); without it tied docs order by Lucene doc id.
+            sort = ["_score", {"name.kw": "asc"}]
         else:
             must = {"match_all": {}}
             sort = [{"name.kw": "asc"}]
@@ -170,8 +172,17 @@ class OpenSearchBackend:
 
     def ensure_schema(self, doc_types: dict[str, DocType]) -> None:
         self._doc_types = dict(doc_types)
-        if not self._client.indices.exists(index=self.index):
-            self._client.indices.create(index=self.index, body=self.mapping())
+        from opensearchpy.exceptions import ConnectionError as OSConnectionError
+
+        try:
+            exists = self._client.indices.exists(index=self.index)
+            if not exists:
+                self._client.indices.create(index=self.index, body=self.mapping())
+        except OSConnectionError as exc:
+            raise SystemExit(
+                f"cannot reach OpenSearch at {self._client.transport.hosts} — "
+                "is the cluster running? (search.backend: opensearch)"
+            ) from exc
 
     def upsert_entity(self, entity: Entity, doc_type: Optional[DocType] = None) -> None:
         if doc_type is not None:
