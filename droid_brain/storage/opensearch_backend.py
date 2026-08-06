@@ -23,15 +23,27 @@ Requires: pip install 'droid-brain[opensearch]'
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from droid_brain.config import expand_env
 from droid_brain.models import Entity
 from droid_brain.schema import DocType
-from droid_brain.storage.base import SearchResults
+from droid_brain.storage.base import (
+    NO_EMBEDDING_PROVIDER_WARNING,
+    SearchResults,
+    iter_semantic_entities,
+    semantic_doc_types,
+    semantic_fields_in_scope,
+    semantic_text_for,
+)
+
+logger = logging.getLogger("droid_brain.storage.opensearch")
 
 # Reserved top-level keys; everything else on an entity is a schema field.
-_RESERVED_KEYS = {"id", "doc_type", "name", "related_to"}
+# `embedding` is reserved so user schema fields can never collide with the vector
+# payload stored at the top level of each OpenSearch document.
+_RESERVED_KEYS = {"id", "doc_type", "name", "related_to", "embedding"}
 _MAX_ALL = 10_000  # cap for all_entities / relationship scans
 
 
@@ -46,6 +58,7 @@ class OpenSearchBackend:
             ) from exc
 
         sc = config.search
+        self._config = config
         self.index = expand_env(sc.index) or f"droid_brain_{config.name}".lower()
         self._doc_types: dict[str, DocType] = {}
 
@@ -62,12 +75,57 @@ class OpenSearchBackend:
             ssl_show_warn=False,
         )
 
+        self._embedding_provider = None  # constructed lazily on first semantic need
+        self._embedding_provider_initialized = False
+        self._warned_no_provider = False
+
+    def _get_embedding_provider(self):
+        """Return the configured provider, constructing it lazily on first use."""
+        if self._embedding_provider is None and not self._embedding_provider_initialized and self._config is not None:
+            from droid_brain.embeddings import get_embedding_provider
+
+            self._embedding_provider = get_embedding_provider(self._config)
+            self._embedding_provider_initialized = True
+        return self._embedding_provider
+
     # -- pure builders (unit-testable without a cluster) ----------------------
 
     @staticmethod
-    def mapping() -> dict:
-        """Index mapping: entity fields are dynamic; related_to is nested so we
-        can query incoming edges (target == id)."""
+    def mapping(dimension: int = 384) -> dict:
+        """Index mapping with the optional knn_vector embedding field.
+
+        Static default dimension is 384 for `BAAI/bge-small-en-v1.5`. Pass a
+        different dimension when the configured provider uses another model."""
+        return {
+            "settings": {"index": {"knn": True}},
+            "mappings": {
+                "properties": {
+                    "id": {"type": "keyword"},
+                    "doc_type": {"type": "keyword"},
+                    "name": {"type": "text", "fields": {"kw": {"type": "keyword"}}},
+                    "related_to": {
+                        "type": "nested",
+                        "properties": {
+                            "target": {"type": "keyword"},
+                            "meaning": {"type": "keyword"},
+                        },
+                    },
+                    "fields": {"type": "object", "dynamic": True},
+                    "embedding": {
+                        "type": "knn_vector",
+                        "dimension": dimension,
+                        "method": {
+                            "name": "hnsw",
+                            "engine": "lucene",
+                            "space_type": "cosinesimil",
+                        },
+                    },
+                }
+            }
+        }
+
+    def _base_mapping(self) -> dict:
+        """Mapping without the embedding field (for keyword-only brains)."""
         return {
             "mappings": {
                 "properties": {
@@ -86,6 +144,18 @@ class OpenSearchBackend:
             }
         }
 
+    def _mapping(self) -> dict:
+        """Instance mapping: only include embedding when at least one loaded
+        doc_type has semantic fields AND a provider is configured. The cheap
+        scope check runs first so keyword-only brains never trigger the lazy
+        provider construction (model load)."""
+        if not semantic_fields_in_scope(self._doc_types):
+            return self._base_mapping()
+        provider = self._get_embedding_provider()
+        if provider is not None:
+            return self.mapping(provider.dim)
+        return self._base_mapping()
+
     @staticmethod
     def entity_to_doc(entity: Entity) -> dict:
         return {
@@ -98,6 +168,21 @@ class OpenSearchBackend:
             ],
             "fields": dict(entity.fields),
         }
+
+    def _doc_with_embedding(self, entity: Entity) -> dict:
+        """Build the OpenSearch document including a vector embedding when the
+        provider is available and the doc_type has semantic fields."""
+        doc = self.entity_to_doc(entity)
+        dt = self._doc_types.get(entity.doc_type)
+        # Check for embeddable text FIRST: doc_types without semantic fields
+        # must not pay for lazy provider construction (model load) on writes.
+        text = semantic_text_for(entity, dt) if dt is not None else ""
+        if not text:
+            return doc
+        provider = self._get_embedding_provider()
+        if provider is not None:
+            doc["embedding"] = provider.encode([text])[0]
+        return doc
 
     @staticmethod
     def doc_to_entity(source: dict) -> Entity:
@@ -177,7 +262,69 @@ class OpenSearchBackend:
         try:
             exists = self._client.indices.exists(index=self.index)
             if not exists:
-                self._client.indices.create(index=self.index, body=self.mapping())
+                self._client.indices.create(index=self.index, body=self._mapping())
+                return
+
+            # Only consider semantic migrations if there are semantic fields and a provider.
+            if not semantic_fields_in_scope(self._doc_types):
+                return
+            provider = self._get_embedding_provider()
+            if provider is None:
+                return
+
+            mapping = self._client.indices.get_mapping(index=self.index)
+            props = mapping[self.index]["mappings"]["properties"]
+            if "embedding" in props:
+                existing_dim = props["embedding"].get("dimension")
+                if existing_dim is not None and existing_dim != provider.dim:
+                    raise SystemExit(
+                        f"OpenSearch index {self.index} has embedding dimension {existing_dim}, "
+                        f"but the configured provider uses dimension {provider.dim}. "
+                        "Recreate the index and run `droid-brain index --reembed` to reindex."
+                    )
+                return
+
+            # Live migration: close → enable knn → open → add knn_vector mapping.
+            # Wrapped so an error never leaves the index closed.
+            closed = False
+            try:
+                settings = self._client.indices.get_settings(index=self.index)
+                knn = settings[self.index]["settings"]["index"].get("knn", "false")
+                if str(knn).lower() != "true":
+                    self._client.indices.close(index=self.index)
+                    closed = True
+                    self._client.indices.put_settings(
+                        index=self.index, body={"index.knn": True}
+                    )
+                    self._client.indices.open(index=self.index)
+                    closed = False
+
+                self._client.indices.put_mapping(
+                    index=self.index,
+                    body={
+                        "properties": {
+                            "embedding": {
+                                "type": "knn_vector",
+                                "dimension": provider.dim,
+                                "method": {
+                                    "name": "hnsw",
+                                    "engine": "lucene",
+                                    "space_type": "cosinesimil",
+                                },
+                            }
+                        }
+                    },
+                )
+            except Exception as exc:
+                logger.error(
+                    "OpenSearch semantic migration failed for %s: %s", self.index, exc
+                )
+                if closed:
+                    try:
+                        self._client.indices.open(index=self.index)
+                    except Exception as open_exc:
+                        logger.error("Could not reopen index %s: %s", self.index, open_exc)
+                raise
         except OSConnectionError as exc:
             raise SystemExit(
                 f"cannot reach OpenSearch at {self._client.transport.hosts} — "
@@ -188,7 +335,7 @@ class OpenSearchBackend:
         if doc_type is not None:
             self._doc_types[doc_type.doc_type] = doc_type
         self._client.index(
-            index=self.index, id=entity.id, body=self.entity_to_doc(entity), refresh=True
+            index=self.index, id=entity.id, body=self._doc_with_embedding(entity), refresh=True
         )
 
     def get_entity(self, entity_id: str) -> Optional[Entity]:
@@ -245,9 +392,67 @@ class OpenSearchBackend:
             for b in res["aggregations"]["by_doc_type"]["buckets"]
         }
 
-    def search(
-        self, query: Optional[str] = None, doc_types: Optional[list[str]] = None,
-        limit: int = 20, counts_only: bool = False,
+    def reembed(self) -> None:
+        if self._get_embedding_provider() is None:
+            return
+        if not semantic_doc_types(self._doc_types):
+            return
+
+        # Paginate through the whole index so we never silently skip >10k entities.
+        scroll_timeout = "1m"
+        filters = []
+        body = {
+            "size": _MAX_ALL,
+            "query": {"match_all": {}},
+            "sort": [{"name.kw": "asc"}],
+        }
+        res = self._client.search(index=self.index, body=body, scroll=scroll_timeout)
+        scroll_id = res.get("_scroll_id")
+        try:
+            while True:
+                hits = res["hits"]["hits"]
+                if not hits:
+                    break
+                for entity in iter_semantic_entities(
+                    self._doc_types, (self.doc_to_entity(h["_source"]) for h in hits)
+                ):
+                    self._client.index(
+                        index=self.index,
+                        id=entity.id,
+                        body=self._doc_with_embedding(entity),
+                        refresh=True,
+                    )
+                res = self._client.scroll(scroll_id=scroll_id, scroll=scroll_timeout)
+                scroll_id = res.get("_scroll_id")
+        finally:
+            if scroll_id:
+                try:
+                    self._client.clear_scroll(scroll_id=scroll_id)
+                except Exception as exc:
+                    logger.warning("clear_scroll failed: %s", exc)
+
+    def _build_knn_body(
+        self, vector: list[float], doc_types: Optional[list[str]], k: int
+    ) -> dict:
+        knn_clause: dict[str, Any] = {
+            "vector": vector,
+            "k": k,
+        }
+        if doc_types:
+            knn_clause["filter"] = {"terms": {"doc_type": doc_types}}
+        return {
+            "size": k,
+            "query": {"knn": {"embedding": knn_clause}},
+        }
+
+    def _warn_no_embedding_provider(self) -> None:
+        if not self._warned_no_provider:
+            logger.warning(NO_EMBEDDING_PROVIDER_WARNING)
+            self._warned_no_provider = True
+
+    def _run_keyword_search(
+        self, query: Optional[str], doc_types: Optional[list[str]],
+        limit: int, counts_only: bool,
     ) -> SearchResults:
         body = self.build_search_body(query, doc_types, limit, counts_only)
         res = self._client.search(index=self.index, body=body)
@@ -269,6 +474,73 @@ class OpenSearchBackend:
                 "score": float(h["_score"]) if h.get("_score") is not None else 0.0,
                 "entity": self.doc_to_entity(src).to_json(),
             })
+        return SearchResults(
+            total=total, results=results, doc_type_counts=doc_type_counts, limited=total > limit,
+        )
+
+    def search(
+        self, query: Optional[str] = None, doc_types: Optional[list[str]] = None,
+        limit: int = 20, counts_only: bool = False,
+    ) -> SearchResults:
+        if counts_only or not query:
+            return self._run_keyword_search(query, doc_types, limit, counts_only)
+
+        semantic_scope = semantic_fields_in_scope(self._doc_types, doc_types)
+        provider = self._get_embedding_provider() if semantic_scope else None
+        if provider is None:
+            if semantic_scope:
+                self._warn_no_embedding_provider()
+            return self._run_keyword_search(query, doc_types, limit, counts_only)
+
+        # Hybrid search: run the keyword and k-NN queries in parallel, merge by id,
+        # normalize each source by its own max _score, and combine with
+        # search.semantic_weight. The k-NN filter uses doc_types so the merged
+        # candidate set and doc_type_counts stay consistent with the keyword arm.
+        k = max(limit, 50)
+        kw_body = self.build_search_body(query, doc_types, k, counts_only=False)
+        kw_res = self._client.search(index=self.index, body=kw_body)
+
+        vector = provider.encode([query])[0]
+        knn_body = self._build_knn_body(vector, doc_types, k)
+        knn_res = self._client.search(index=self.index, body=knn_body)
+
+        candidates: dict[str, dict] = {}
+        kw_scores: dict[str, float] = {}
+        sem_scores: dict[str, float] = {}
+        for h in kw_res["hits"]["hits"]:
+            candidates[h["_id"]] = h["_source"]
+            kw_scores[h["_id"]] = float(h["_score"]) if h.get("_score") is not None else 0.0
+        for h in knn_res["hits"]["hits"]:
+            candidates[h["_id"]] = h["_source"]
+            sem_scores[h["_id"]] = float(h["_score"]) if h.get("_score") is not None else 0.0
+
+        kw_max = max(kw_scores.values()) if kw_scores else 0.0
+        sem_max = max(sem_scores.values()) if sem_scores else 0.0
+        semantic_weight = self._config.search.semantic_weight
+
+        merged = []
+        for eid, src in candidates.items():
+            kw_norm = kw_scores.get(eid, 0.0) / kw_max if kw_max else 0.0
+            sem_norm = sem_scores.get(eid, 0.0) / sem_max if sem_max else 0.0
+            score = (1 - semantic_weight) * kw_norm + semantic_weight * sem_norm
+            merged.append((score, src))
+        merged.sort(key=lambda s: (-s[0], s[1].get("name", "")))
+        picked = merged[:limit]
+        results = [
+            {
+                "id": src["id"],
+                "doc_type": src["doc_type"],
+                "name": src.get("name", ""),
+                "score": round(score, 3),
+                "entity": self.doc_to_entity(src).to_json(),
+            }
+            for score, src in picked
+        ]
+        doc_type_counts = {}
+        for src in candidates.values():
+            dt = src.get("doc_type")
+            doc_type_counts[dt] = doc_type_counts.get(dt, 0) + 1
+        total = len(candidates)
         return SearchResults(
             total=total, results=results, doc_type_counts=doc_type_counts, limited=total > limit,
         )

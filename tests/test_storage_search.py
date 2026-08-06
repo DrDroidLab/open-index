@@ -56,6 +56,10 @@ def test_per_field_weight_is_exact(brain):
         "doc_type": "issue", "id": "issue:zephyr-body",
         "name": "other", "description": "a zephyr appeared", "status": "open"}))
 
+    # This test checks the exact keyword-only scoring; disable the embedding
+    # provider so semantic weighting does not alter the raw per-field scores.
+    brain.backend._embedding_provider = None
+    brain.backend._embedding_provider_initialized = True
     results = brain.search("zephyr")
     by_id = {r["id"]: r["score"] for r in results.results}
     assert results.results[0]["id"] == "issue:zephyr-title"      # title hit ranks first

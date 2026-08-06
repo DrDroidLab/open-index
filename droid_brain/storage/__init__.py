@@ -10,7 +10,7 @@ def get_backend(config):
     """Construct the search backend named in a BrainConfig."""
     name = config.search.backend
     if name == "sqlite":
-        return SQLiteBackend(config.db_path())
+        return SQLiteBackend(config.db_path(), config)
     if name == "opensearch":
         from droid_brain.storage.opensearch_backend import OpenSearchBackend
 

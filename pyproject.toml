@@ -34,6 +34,11 @@ serve = [
     "uvicorn>=0.30",
     "starlette>=1.0",
 ]
+# Semantic/vector search (local ONNX model + OpenAI-compatible API support).
+semantic = [
+    "fastembed>=0.3",
+    "numpy>=1.26",
+]
 dev = [
     "pytest>=8.0",
 ]
@@ -44,6 +49,8 @@ all = [
     "opensearch-py>=2.4",
     "uvicorn>=0.30",
     "starlette>=1.0",
+    "fastembed>=0.3",
+    "numpy>=1.26",
     "pytest>=8.0",
 ]
 

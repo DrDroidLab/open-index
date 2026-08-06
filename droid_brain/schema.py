@@ -23,9 +23,9 @@ FieldType = Literal["string", "text", "number", "boolean", "timestamp"]
 # the reference index (index_metadata.py) without its infra-specific analyzers.
 Processing = Literal["keyword", "text", "timestamp"]
 
-# The kind of search enabled on the field. `syntactic` = keyword/full-text (what
-# SQLite FTS5 backs today); `semantic` is declarable now and keyword-backed until
-# a vector backend lands. `none` excludes the field from the search index.
+# The kind of search enabled on the field. `syntactic` = keyword/full-text;
+# `semantic` = dense vector search (embeds the field and uses cosine similarity).
+# `none` excludes the field from the search index.
 SearchKind = Literal["syntactic", "semantic", "none"]
 
 # Where a doc_type's entities live / what is their source of truth:

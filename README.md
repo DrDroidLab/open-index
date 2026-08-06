@@ -232,13 +232,32 @@ MCP/API endpoint → OpenSearch + `serve`.**
 # Controlling search
 
 **Schema** (per field): data `type` (string/number/boolean/timestamp), `processing`
-(keyword/text/timestamp), and `search` kind (`syntactic` = keyword+prefix today,
-`semantic` declarable and keyword-backed until a vector backend lands, `none` = not indexed).
+(keyword/text/timestamp), and `search` kind (`syntactic` = keyword+prefix,
+`semantic` = vector-backed dense search, `none` = not indexed).
+Mark a field `search: semantic` and the backend automatically embeds it at index time.
 
 **Ranking** — genuine **per-field boosters**: each field's `boost` weights how much a
 match there counts, so you tune "title matters more than description" with one number.
+For hybrid queries, keyword and semantic scores are blended with `search.semantic_weight`
+(default `0.5`). `semantic_weight: 0` gives keyword-only behavior; `1.0` gives semantic-only.
 Storage defaults to SQLite + FTS5; the OpenSearch backend implements the same
-interface with native per-field boosting and fuzzy matching.
+interface with native per-field boosting, fuzzy matching, and k-NN semantic search.
 
-_Not yet implemented (declarable seams exist): semantic/vector search, and type-level &
-temporal boosters._
+**Embedding model** — install the `[semantic]` extra (`pip install 'droid-brain[semantic]'`)
+to enable local embeddings. The default model is `BAAI/bge-small-en-v1.5` (384-D). Override
+it with `search.embedding_model` in `brain.yaml`, or use an OpenAI-compatible API by setting
+`DROID_BRAIN_EMBEDDING_BASE_URL`, `DROID_BRAIN_EMBEDDING_API_KEY`, `DROID_BRAIN_EMBEDDING_MODEL`,
+and `DROID_BRAIN_EMBEDDING_DIM`.
+
+Changing the embedding dimension (e.g., switching from the local 384-D model to a 512-D API
+provider) requires rebuilding the index: `droid-brain index --reembed` on SQLite, or a full
+`droid-brain index --reembed` on OpenSearch after recreating the index.
+
+**Re-embedding** — the reserved field `embedding` stores the per-entity vector. If you enable
+semantic search on an existing index, run `droid-brain index --reembed` to backfill vectors.
+
+**SQLite semantic ceiling** — the SQLite backend performs a brute-force cosine scan over the
+entities in scope. This is fine up to roughly **10,000 entities**; for larger brains, switch to
+the OpenSearch backend or a future `sqlite-vec` integration.
+
+_Not yet implemented (declarable seams exist): type-level & temporal boosters._

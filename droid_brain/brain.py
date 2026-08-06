@@ -169,6 +169,10 @@ class Brain:
     def counts(self) -> dict[str, int]:
         return self.backend.counts()
 
+    def reembed(self) -> None:
+        """Recompute embeddings for every stored entity."""
+        self.backend.reembed()
+
     def observed_relationships(self, doc_type: str) -> dict[str, int]:
         """Distinct outgoing edge meanings actually used by a doc_type's entities,
         with how many edges use each. Surfaces the real correlation vocabulary."""
