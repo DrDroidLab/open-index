@@ -239,7 +239,9 @@ Mark a field `search: semantic` and the backend automatically embeds it at index
 **Ranking** — genuine **per-field boosters**: each field's `boost` weights how much a
 match there counts, so you tune "title matters more than description" with one number.
 For hybrid queries, keyword and semantic scores are blended with `search.semantic_weight`
-(default `0.5`). `semantic_weight: 0` gives keyword-only behavior; `1.0` gives semantic-only.
+(default `0.3` — keyword matches dominate; semantic similarity rescues queries that use
+different words than the text). `semantic_weight: 0` gives keyword-only behavior; `1.0`
+gives semantic-only.
 Storage defaults to SQLite + FTS5; the OpenSearch backend implements the same
 interface with native per-field boosting, fuzzy matching, and k-NN semantic search.
 
