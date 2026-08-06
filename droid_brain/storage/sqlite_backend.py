@@ -456,6 +456,24 @@ class SQLiteBackend:
             dim = provider.dim
             emb_map = self._load_embeddings([r["id"] for r in rows], dim)
 
+            # Vectorized cosine for all embedded rows in one numpy pass (a
+            # per-row Python loop costs ~10x more at 1k+ entities). Rows
+            # without an embedding get sem=0 via the mask.
+            sem_by_id: dict[str, float] = {}
+            if emb_map:
+                import numpy as np
+
+                ids = list(emb_map)
+                mat = np.array([emb_map[i] for i in ids], dtype=np.float32)
+                qv = np.array(query_emb, dtype=np.float32)
+                qn = np.linalg.norm(qv)
+                mn = np.linalg.norm(mat, axis=1)
+                valid = (qn > 0) & (mn > 0)
+                cos = np.zeros(len(ids), dtype=np.float32)
+                if qn > 0:
+                    cos[valid] = (mat[valid] @ qv) / (mn[valid] * qn)
+                sem_by_id = {i: (float(c) + 1.0) / 2.0 for i, c in zip(ids, cos)}
+
             scored: list[tuple[float, float, sqlite3.Row, dict]] = []
             kw_max = 0.0
             sem_max = 0.0
@@ -463,11 +481,7 @@ class SQLiteBackend:
                 data = json.loads(r["data"])
                 dt = self._doc_types.get(r["doc_type"])
                 kw = self._score_entity(query_terms, dt, r["name"], _fields_of(data))
-                vec = emb_map.get(r["id"])
-                sem = 0.0
-                if vec:
-                    cos = cosine_similarity(query_emb, vec)
-                    sem = (cos + 1.0) / 2.0
+                sem = sem_by_id.get(r["id"], 0.0)
                 kw_max = max(kw_max, kw)
                 sem_max = max(sem_max, sem)
                 scored.append((kw, sem, r, data))
