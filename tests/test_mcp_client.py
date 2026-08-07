@@ -1,4 +1,4 @@
-from droid_brain.connectors.mcp_client import extract_json
+from open_index.connectors.mcp_client import extract_json
 
 
 def test_extract_json_spreads_list():

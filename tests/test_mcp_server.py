@@ -17,7 +17,7 @@ def _text(res) -> str:
 
 class _Server:
     def __init__(self, brain):
-        from droid_brain.mcp_server import build_server
+        from open_index.mcp_server import build_server
 
         self.server = build_server(brain)
         self.loop = asyncio.new_event_loop()
@@ -42,7 +42,7 @@ def test_exposes_all_five_tools(srv):
 def test_read_only_mode_hides_write_tools(brain):
     import asyncio
 
-    from droid_brain.mcp_server import build_server
+    from open_index.mcp_server import build_server
 
     server = build_server(brain, read_only=True)
     names = {t.name for t in asyncio.new_event_loop().run_until_complete(server.list_tools())}

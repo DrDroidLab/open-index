@@ -1,6 +1,6 @@
 import pytest
 
-from droid_brain.models import Entity
+from open_index.models import Entity
 
 
 def test_entity_from_dict_folds_fields_and_edges():

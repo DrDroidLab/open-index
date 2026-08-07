@@ -5,9 +5,9 @@ body — the logic that would talk to a real cluster. A live round-trip test liv
 behind the OPENSEARCH_URL env var (skipped by default).
 """
 
-from droid_brain.models import Entity
-from droid_brain.schema import DocType, DocTypeDisplay, FieldSpec
-from droid_brain.storage.opensearch_backend import OpenSearchBackend
+from open_index.models import Entity
+from open_index.schema import DocType, DocTypeDisplay, FieldSpec
+from open_index.storage.opensearch_backend import OpenSearchBackend
 
 
 def _backend_with_types(doc_types):

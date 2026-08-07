@@ -13,7 +13,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from droid_brain.brain import Brain
+from open_index.brain import Brain
 
 _DEFAULT_COLOR = "#6b7280"
 

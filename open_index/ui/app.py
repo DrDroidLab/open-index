@@ -1,6 +1,6 @@
-"""Streamlit explorer for a droid-brain: Structure | Search | Map.
+"""Streamlit explorer for a brain: Structure | Search | Map.
 
-Launched via `droid-brain ui`; the brain directory arrives in DROID_BRAIN_DIR.
+Launched via `open-index ui`; the brain directory arrives in OPEN_INDEX_DIR.
 The Map tab is the point of the whole thing — pick an anchor entity, choose a
 depth, and see the context graph, with click-to-re-anchor for exploration.
 """
@@ -11,10 +11,10 @@ import os
 
 import streamlit as st
 
-from droid_brain.brain import Brain
-from droid_brain.graph import ContextGraph, build_graph
+from open_index.brain import Brain
+from open_index.graph import ContextGraph, build_graph
 
-st.set_page_config(page_title="Droid Brain", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Open Index", page_icon="🧠", layout="wide")
 
 
 @st.cache_resource
@@ -26,13 +26,13 @@ def _open_brain(brain_dir: str) -> Brain:
 def _engine_backend(brain_dir: str, engine: str):
     """Construct a search backend by engine name for the Search-tab toggle,
     so both engines can be compared over the same brain."""
-    from droid_brain.config import load_brain_config
-    from droid_brain.storage import SQLiteBackend
+    from open_index.config import load_brain_config
+    from open_index.storage import SQLiteBackend
 
     cfg = load_brain_config(brain_dir)
     if engine == "sqlite":
         return SQLiteBackend(cfg.db_path(), cfg)
-    from droid_brain.storage.opensearch_backend import OpenSearchBackend
+    from open_index.storage.opensearch_backend import OpenSearchBackend
 
     return OpenSearchBackend(cfg)
 
@@ -47,7 +47,7 @@ def render_graph(brain: Brain, graph: ContextGraph) -> None:
     try:
         from streamlit_agraph import Config, Edge, Node, agraph
     except ImportError:
-        st.warning("Install the map renderer: pip install 'droid-brain[ui]'")
+        st.warning("Install the map renderer: pip install 'open-index[ui]'")
         st.write({"nodes": [n.__dict__ for n in graph.nodes],
                   "edges": [e.__dict__ for e in graph.edges]})
         return
@@ -85,7 +85,7 @@ def render_graph(brain: Brain, graph: ContextGraph) -> None:
 
 
 def main() -> None:
-    brain = _open_brain(os.environ.get("DROID_BRAIN_DIR", "."))
+    brain = _open_brain(os.environ.get("OPEN_INDEX_DIR", "."))
 
     st.title(f"🧠 {brain.config.name}")
     if brain.config.description:
@@ -264,10 +264,10 @@ def render_search(brain: Brain) -> None:
     )
     weight_override = {"Hybrid": None, "Keyword": 0.0, "Semantic": 1.0}[mode]
     if mode == "Semantic":
-        from droid_brain.embeddings import embedding_provider_available
+        from open_index.embeddings import embedding_provider_available
         if not embedding_provider_available():
             st.warning("No embedding provider available — results are keyword-only. "
-                       "Install `droid-brain[semantic]` to enable semantic search.")
+                       "Install `open-index[semantic]` to enable semantic search.")
     configured = brain.config.search.backend
     engine = st.radio(
         "Engine", ["opensearch", "sqlite"],
@@ -321,7 +321,7 @@ def render_map(brain: Brain) -> None:
     counts = brain.counts()
     doc_types = [dt for dt in brain.config.doc_types if counts.get(dt)]
     if not doc_types:
-        st.info("No entities yet. Add some and run `droid-brain index`.")
+        st.info("No entities yet. Add some and run `open-index index`.")
         return
 
     # 1) Anchor on a doc_type. Changing it resets the selection.
@@ -384,7 +384,7 @@ def render_edit_guide(brain: Brain) -> None:
     is files + the validated write path. This tab tells you how to connect."""
     from pathlib import Path
 
-    brain_dir = os.environ.get("DROID_BRAIN_DIR", ".")
+    brain_dir = os.environ.get("OPEN_INDEX_DIR", ".")
     st.info(
         "**Recommended: humans don't edit the brain directly.** Let it be written "
         "either by an **agent** (via MCP or the CLI) or by your code via the **API** "
@@ -398,7 +398,7 @@ def render_edit_guide(brain: Brain) -> None:
         "It follows the bundled **`edit-brain` skill** "
         "(`.claude/skills/edit-brain/SKILL.md`)"
         if skill_path.exists()
-        else "Run `droid-brain init` on a new brain to also scaffold an **`edit-brain` "
+        else "Run `open-index init` on a new brain to also scaffold an **`edit-brain` "
              "skill** the agent follows"
     )
     st.markdown(
@@ -407,10 +407,10 @@ def render_edit_guide(brain: Brain) -> None:
         "first, so it reuses your existing doc_types and relationship vocabulary."
     )
     st.code(
-        '// .mcp.json (droid-brain init writes this for you)\n'
+        '// .mcp.json (open-index init writes this for you)\n'
         '{\n'
         '  "mcpServers": {\n'
-        '    "droid-brain": { "command": "droid-brain", "args": ["mcp", "--brain", "."] }\n'
+        '    "open-index": { "command": "open-index", "args": ["mcp", "--brain", "."] }\n'
         '  }\n'
         '}',
         language="json",
@@ -425,20 +425,20 @@ def render_edit_guide(brain: Brain) -> None:
     if skill_path.exists():
         skill_text = skill_path.read_text()
     else:
-        from droid_brain.scaffold import SKILL_MD
+        from open_index.scaffold import SKILL_MD
         skill_text = SKILL_MD
     st.code(skill_text, language="markdown")  # st.code shows a copy button
 
     st.subheader("Or edit from the CLI / files")
     st.code(
         f"# define a concept\n"
-        f"droid-brain add-doc-type service --brain {brain_dir}\n"
+        f"open-index add-doc-type service --brain {brain_dir}\n"
         f"#   → edit doc_types/service.yaml (fields, boosts, relationships)\n\n"
         f"# add an entity (file-backed types): write entities/<type>/<slug>.json, then\n"
-        f"droid-brain index --brain {brain_dir}\n"
-        f"droid-brain validate --brain {brain_dir}\n\n"
+        f"open-index index --brain {brain_dir}\n"
+        f"open-index validate --brain {brain_dir}\n\n"
         f"# pull entities from a tool on a schedule\n"
-        f"droid-brain ingest <connector> --brain {brain_dir}",
+        f"open-index ingest <connector> --brain {brain_dir}",
         language="bash",
     )
 
@@ -449,7 +449,7 @@ def render_edit_guide(brain: Brain) -> None:
     )
     st.markdown("**In-process (co-located with the brain files):**")
     st.code(
-        "from droid_brain import Brain, Entity\n\n"
+        "from open_index import Brain, Entity\n\n"
         f'brain = Brain.open("{brain_dir}")\n'
         'e = brain.get_entity("service:api") or Entity(id="service:api", '
         'doc_type="service", name="API")\n'
@@ -457,11 +457,11 @@ def render_edit_guide(brain: Brain) -> None:
         "brain.put_entity(e)                   # validated upsert (honors storage policy)",
         language="python",
     )
-    st.markdown("**Over HTTP (remote brain running `droid-brain serve`):** call the "
+    st.markdown("**Over HTTP (remote brain running `open-index serve`):** call the "
                 "`put_entity` MCP tool as plain JSON-RPC — no LLM involved.")
     st.code(
         "curl -X POST https://brain.example.com/mcp \\\n"
-        '  -H "Authorization: Bearer $DROID_BRAIN_TOKEN" \\\n'
+        '  -H "Authorization: Bearer $OPEN_INDEX_TOKEN" \\\n'
         '  -H "Content-Type: application/json" \\\n'
         '  -H "Accept: application/json, text/event-stream" \\\n'
         "  -d '{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"tools/call\",\n"
@@ -470,7 +470,7 @@ def render_edit_guide(brain: Brain) -> None:
         "         \"fields\":{\"status\":\"degraded\"}}}}'",
         language="bash",
     )
-    st.caption("Serve it with:  droid-brain serve --brain <dir> --token $DROID_BRAIN_TOKEN")
+    st.caption("Serve it with:  open-index serve --brain <dir> --token $OPEN_INDEX_TOKEN")
 
     with st.expander("What can I change, and where does it live?"):
         st.markdown(
@@ -491,8 +491,8 @@ def render_connectors(brain: Brain) -> None:
     st.caption("Ingestion scripts in `connectors/*.py` that pull entities from an "
                "MCP server into the brain.")
     try:
-        from droid_brain.connectors.runner import discover_connectors
-        from droid_brain.scheduling import RunState
+        from open_index.connectors.runner import discover_connectors
+        from open_index.scheduling import RunState
     except Exception:
         st.caption("connectors unavailable")
         return
@@ -525,7 +525,7 @@ def render_connectors(brain: Brain) -> None:
                 except (OSError, TypeError):
                     src = "(source unavailable)"
                 st.code(src, language="python")
-            st.caption(f"Run now: `droid-brain ingest {name}` · or `droid-brain run` "
+            st.caption(f"Run now: `open-index ingest {name}` · or `open-index run` "
                        "for all due jobs (wire into cron / CI).")
 
 

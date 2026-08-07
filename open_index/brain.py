@@ -9,11 +9,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-from droid_brain.config import BrainConfig, iter_entity_files, load_brain_config
-from droid_brain.models import Entity
-from droid_brain.schema import DocType
-from droid_brain.storage import get_backend
-from droid_brain.storage.base import SearchBackend, SearchResults
+from open_index.config import BrainConfig, iter_entity_files, load_brain_config
+from open_index.models import Entity
+from open_index.schema import DocType
+from open_index.storage import get_backend
+from open_index.storage.base import SearchBackend, SearchResults
 
 
 class Brain:
@@ -73,7 +73,7 @@ class Brain:
         This is how an agent (or `add-doc-type`) defines a concept at runtime:
         the YAML file is the durable, git-tracked artifact; the in-memory config
         and backend are updated so it's immediately usable."""
-        from droid_brain.config import write_doc_type
+        from open_index.config import write_doc_type
 
         if self.config.root is None:
             raise RuntimeError("brain has no directory; cannot persist doc_type")

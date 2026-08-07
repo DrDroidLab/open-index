@@ -1,13 +1,13 @@
-"""droid-brain command line.
+"""open-index command line.
 
-    droid-brain init <name> [dir]      scaffold a new brain
-    droid-brain add-doc-type <name>    add a doc_type schema stub
-    droid-brain add-entity <file>      validate + store an entity JSON file
-    droid-brain index                  (re)load entities/ into the search index
-    droid-brain ingest <connector>     run a connector to pull entities from MCP
-    droid-brain search <query>         search from the terminal
-    droid-brain ui                     launch the Streamlit map explorer
-    droid-brain mcp                    run the MCP server (stdio)
+    open-index init <name> [dir]      scaffold a new brain
+    open-index add-doc-type <name>    add a doc_type schema stub
+    open-index add-entity <file>      validate + store an entity JSON file
+    open-index index                  (re)load entities/ into the search index
+    open-index ingest <connector>     run a connector to pull entities from MCP
+    open-index search <query>         search from the terminal
+    open-index ui                     launch the Streamlit map explorer
+    open-index mcp                    run the MCP server (stdio)
 
 `--brain <dir>` selects the brain directory (default: current directory).
 """
@@ -30,7 +30,7 @@ BrainOpt = typer.Option(".", "--brain", "-b", help="Brain directory.")
 
 
 def _open_brain(brain_dir: str):
-    from droid_brain.brain import Brain
+    from open_index.brain import Brain
 
     try:
         return Brain.open(brain_dir)
@@ -45,7 +45,7 @@ def init(
     directory: str = typer.Argument(None, help="Target directory (default: ./<name>)."),
 ):
     """Scaffold a new brain directory."""
-    from droid_brain.scaffold import init_brain
+    from open_index.scaffold import init_brain
 
     target = Path(directory) if directory else Path(name)
     if (target / "brain.yaml").exists():
@@ -53,7 +53,7 @@ def init(
         raise typer.Exit(1)
     init_brain(target, name)
     typer.secho(f"✓ created brain '{name}' in {target}/", fg=typer.colors.GREEN)
-    typer.echo(f"  next: droid-brain index --brain {target} && droid-brain ui --brain {target}")
+    typer.echo(f"  next: open-index index --brain {target} && open-index ui --brain {target}")
 
 
 @app.command("add-doc-type")
@@ -64,7 +64,7 @@ def add_doc_type(
     storage: str = typer.Option("index", help="Source of truth: 'index' (DB) or 'file' (git)."),
 ):
     """Add a doc_type schema stub under doc_types/."""
-    from droid_brain.scaffold import DOC_TYPE_TEMPLATE, color_for_index
+    from open_index.scaffold import DOC_TYPE_TEMPLATE, color_for_index
 
     if storage not in ("index", "file"):
         typer.secho("--storage must be 'index' or 'file'", fg=typer.colors.RED, err=True)
@@ -91,7 +91,7 @@ def add_entity(
     brain: str = BrainOpt,
 ):
     """Validate an entity file and store it in the brain."""
-    from droid_brain.models import Entity
+    from open_index.models import Entity
 
     b = _open_brain(brain)
     raw = json.loads(Path(file).read_text())
@@ -131,7 +131,7 @@ def ingest(
     brain: str = BrainOpt,
 ):
     """Run a connector to pull entities from an MCP server into the brain."""
-    from droid_brain.connectors.runner import ingest as run_ingest
+    from open_index.connectors.runner import ingest as run_ingest
 
     b = _open_brain(brain)
     try:
@@ -169,7 +169,7 @@ def run(
     """Run every connector whose schedule is due. Wire into cron/CI, or --loop."""
     import time
 
-    from droid_brain.connectors.runner import run_due
+    from open_index.connectors.runner import run_due
 
     b = _open_brain(brain)
 
@@ -198,12 +198,12 @@ def validate(brain: str = BrainOpt):
     """Validate brain.yaml, all doc_type schemas, and every entity file."""
     import json
 
-    from droid_brain.models import Entity
+    from open_index.models import Entity
 
     b = _open_brain(brain)
     problems: list[str] = []
     validated = 0
-    from droid_brain.config import iter_entity_files
+    from open_index.config import iter_entity_files
 
     for path in iter_entity_files(b.config.root):
         try:
@@ -237,7 +237,7 @@ def validate(brain: str = BrainOpt):
 @app.command("list-connectors")
 def list_connectors(brain: str = BrainOpt):
     """List connectors available in this brain."""
-    from droid_brain.connectors.runner import discover_connectors
+    from open_index.connectors.runner import discover_connectors
 
     b = _open_brain(brain)
     found = discover_connectors(b)
@@ -259,7 +259,7 @@ def ui(
     import subprocess
 
     app_path = Path(__file__).parent / "ui" / "app.py"
-    env = dict(os.environ, DROID_BRAIN_DIR=str(Path(brain).resolve()))
+    env = dict(os.environ, OPEN_INDEX_DIR=str(Path(brain).resolve()))
     cmd = [
         sys.executable, "-m", "streamlit", "run", str(app_path),
         "--server.port", str(port),
@@ -267,7 +267,7 @@ def ui(
     try:
         subprocess.run(cmd, env=env, check=True)
     except FileNotFoundError:
-        typer.secho("Streamlit not installed: pip install 'droid-brain[ui]'",
+        typer.secho("Streamlit not installed: pip install 'open-index[ui]'",
                     fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
@@ -278,7 +278,7 @@ def mcp(
     read_only: bool = typer.Option(False, "--read-only", help="Expose only read tools."),
 ):
     """Run the MCP server over stdio (local agents / Claude Code)."""
-    from droid_brain.mcp_server import serve
+    from open_index.mcp_server import serve
 
     serve(str(Path(brain).resolve()), read_only=read_only)
 
@@ -289,8 +289,8 @@ def serve(
     host: str = typer.Option("0.0.0.0", help="Bind host."),
     port: int = typer.Option(8080, help="Bind port."),
     token: Optional[str] = typer.Option(
-        None, envvar="DROID_BRAIN_TOKEN",
-        help="Bearer token required on requests (or set DROID_BRAIN_TOKEN).",
+        None, envvar="OPEN_INDEX_TOKEN",
+        help="Bearer token required on requests (or set OPEN_INDEX_TOKEN).",
     ),
     read_only: bool = typer.Option(False, "--read-only", help="Expose only read tools."),
 ):
@@ -299,7 +299,7 @@ def serve(
     Register http://<host>:<port>/mcp as a remote MCP server in your agent.
     Pair with the OpenSearch backend for a shared, multi-writer brain.
     """
-    from droid_brain.mcp_server import serve_http
+    from open_index.mcp_server import serve_http
 
     mode = "read-only" if read_only else "read+write"
     typer.secho(f"serving brain '{Path(brain).name}' MCP ({mode}) at http://{host}:{port}/mcp",

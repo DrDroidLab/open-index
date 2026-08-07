@@ -3,13 +3,13 @@ server (examples/cloud-brain/tools_server.py) and maps it to entities with
 relationships. Produces 210 entities.
 
 Run the server, then:
-    CLOUD_MCP_URL=http://127.0.0.1:9920 droid-brain ingest k8s --brain examples/cloud-brain
+    CLOUD_MCP_URL=http://127.0.0.1:9920 open-index ingest k8s --brain examples/cloud-brain
     # or, since schedule is set, let the scheduler decide:
-    droid-brain run --brain examples/cloud-brain
+    open-index run --brain examples/cloud-brain
 """
 import os
 
-from droid_brain.connectors import Connector, EntitySpec
+from open_index.connectors import Connector, EntitySpec
 
 
 class K8sConnector(Connector):

@@ -15,13 +15,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional, Protocol, runtime_checkable
 
-from droid_brain.models import Entity
-from droid_brain.schema import DocType
+from open_index.models import Entity
+from open_index.schema import DocType
 
 
 NO_EMBEDDING_PROVIDER_WARNING = (
     "Semantic fields are declared but no embedding provider is available. "
-    "Install 'droid-brain[semantic]' or set DROID_BRAIN_EMBEDDING_* env vars. "
+    "Install 'open-index[semantic]' or set OPEN_INDEX_EMBEDDING_* env vars. "
     "Falling back to keyword-only search."
 )
 

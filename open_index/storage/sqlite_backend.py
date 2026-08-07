@@ -21,10 +21,10 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from droid_brain.embeddings import cosine_similarity
-from droid_brain.models import Entity, Relationship
-from droid_brain.schema import DocType
-from droid_brain.storage.base import (
+from open_index.embeddings import cosine_similarity
+from open_index.models import Entity, Relationship
+from open_index.schema import DocType
+from open_index.storage.base import (
     NO_EMBEDDING_PROVIDER_WARNING,
     SearchResults,
     iter_semantic_entities,
@@ -33,7 +33,7 @@ from droid_brain.storage.base import (
     semantic_text_for,
 )
 
-logger = logging.getLogger("droid_brain.storage.sqlite")
+logger = logging.getLogger("open_index.storage.sqlite")
 
 # How many FTS candidates to re-rank with the weighted score before truncating.
 _CANDIDATE_POOL = 500
@@ -76,7 +76,7 @@ class SQLiteBackend:
     def _get_embedding_provider(self):
         """Return the configured provider, constructing it lazily on first use."""
         if self._embedding_provider is None and not self._embedding_provider_initialized and self._config is not None:
-            from droid_brain.embeddings import get_embedding_provider
+            from open_index.embeddings import get_embedding_provider
 
             self._embedding_provider = get_embedding_provider(self._config)
             self._embedding_provider_initialized = True
@@ -172,7 +172,7 @@ class SQLiteBackend:
                 if not self._warned_dim_mismatch:
                     logger.warning(
                         "Stored embedding dimension for %s does not match provider dimension "
-                        "(%d vs %d). Run `droid-brain index --reembed` to rebuild embeddings.",
+                        "(%d vs %d). Run `open-index index --reembed` to rebuild embeddings.",
                         r["entity_id"],
                         len(blob) // 4,
                         dim,

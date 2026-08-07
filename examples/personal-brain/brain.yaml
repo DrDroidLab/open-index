@@ -2,7 +2,7 @@ name: personal-brain
 description: >-
   A personal context graph — your life areas, the goals within them, the projects
   that advance those goals, the people involved, and journal notes that reflect on
-  them. Proof that droid-brain is domain-agnostic — same primitives, nothing to do
+  them. Proof that open-index is domain-agnostic — same primitives, nothing to do
   with a company.
 
 storage:

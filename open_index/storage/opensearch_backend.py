@@ -12,13 +12,13 @@ Enable in brain.yaml:
     search:
       backend: opensearch
       hosts: ["https://my-opensearch:9200"]
-      index: droid_brain_acme          # optional; defaults to droid_brain_<name>
+      index: open_index_acme          # optional; defaults to open_index_<name>
       username: "${OPENSEARCH_USER}"    # ${ENV} resolved at connect time
       password: "${OPENSEARCH_PASSWORD}"
       use_ssl: true
       verify_certs: true
 
-Requires: pip install 'droid-brain[opensearch]'
+Requires: pip install 'open-index[opensearch]'
 """
 
 from __future__ import annotations
@@ -26,10 +26,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from droid_brain.config import expand_env
-from droid_brain.models import Entity
-from droid_brain.schema import DocType
-from droid_brain.storage.base import (
+from open_index.config import expand_env
+from open_index.models import Entity
+from open_index.schema import DocType
+from open_index.storage.base import (
     NO_EMBEDDING_PROVIDER_WARNING,
     SearchResults,
     iter_semantic_entities,
@@ -38,7 +38,7 @@ from droid_brain.storage.base import (
     semantic_text_for,
 )
 
-logger = logging.getLogger("droid_brain.storage.opensearch")
+logger = logging.getLogger("open_index.storage.opensearch")
 
 # Reserved top-level keys; everything else on an entity is a schema field.
 # `embedding` is reserved so user schema fields can never collide with the vector
@@ -54,12 +54,12 @@ class OpenSearchBackend:
         except ImportError as exc:  # pragma: no cover - optional dependency
             raise SystemExit(
                 "the OpenSearch backend needs opensearch-py: "
-                "pip install 'droid-brain[opensearch]'"
+                "pip install 'open-index[opensearch]'"
             ) from exc
 
         sc = config.search
         self._config = config
-        self.index = expand_env(sc.index) or f"droid_brain_{config.name}".lower()
+        self.index = expand_env(sc.index) or f"open_index_{config.name}".lower()
         self._doc_types: dict[str, DocType] = {}
 
         auth = None
@@ -82,7 +82,7 @@ class OpenSearchBackend:
     def _get_embedding_provider(self):
         """Return the configured provider, constructing it lazily on first use."""
         if self._embedding_provider is None and not self._embedding_provider_initialized and self._config is not None:
-            from droid_brain.embeddings import get_embedding_provider
+            from open_index.embeddings import get_embedding_provider
 
             self._embedding_provider = get_embedding_provider(self._config)
             self._embedding_provider_initialized = True
@@ -280,7 +280,7 @@ class OpenSearchBackend:
                     raise SystemExit(
                         f"OpenSearch index {self.index} has embedding dimension {existing_dim}, "
                         f"but the configured provider uses dimension {provider.dim}. "
-                        "Recreate the index and run `droid-brain index --reembed` to reindex."
+                        "Recreate the index and run `open-index index --reembed` to reindex."
                     )
                 return
 

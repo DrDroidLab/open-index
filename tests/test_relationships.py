@@ -1,7 +1,7 @@
 """Declared relationship slots + surfacing (relationships aren't blind)."""
 
-from droid_brain.brain import Brain
-from droid_brain.models import Entity
+from open_index.brain import Brain
+from open_index.models import Entity
 
 
 def test_declared_relationships_loaded(brain):

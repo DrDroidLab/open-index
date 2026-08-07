@@ -3,8 +3,8 @@
 Deliberately dependency-free: schedules are human intervals ("6h", "30m", "1d",
 "1w"), the keyword "manual" (never auto-run), or a plain number of seconds. This
 covers the "run every N" intent without pulling in a cron parser. For exact
-wall-clock cron, point your system crontab / CI at `droid-brain run` (or
-`droid-brain ingest <name>`) — droid-brain tracks *whether a connector is due*,
+wall-clock cron, point your system crontab / CI at `open-index run` (or
+`open-index ingest <name>`) — open-index tracks *whether a connector is due*,
 and lets your existing scheduler drive the *clock*.
 
 Last-run state lives in a gitignored JSON file in the brain dir, so it survives
@@ -27,7 +27,7 @@ _KEYWORDS = {
     "weekly": 604800,
 }
 
-_STATE_FILE = ".droid_brain_state.json"
+_STATE_FILE = ".open_index_state.json"
 
 
 def parse_schedule(schedule: str | int | None) -> Optional[int]:

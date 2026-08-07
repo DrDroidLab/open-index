@@ -18,7 +18,7 @@ from typing import Any, Optional
 import httpx
 
 _PROTOCOL_VERSION = "2024-11-05"
-_CLIENT_INFO = {"name": "droid-brain-connector", "version": "0.1.0"}
+_CLIENT_INFO = {"name": "open-index-connector", "version": "0.1.0"}
 
 
 class McpError(RuntimeError):

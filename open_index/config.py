@@ -19,7 +19,7 @@ from typing import Any, Optional
 import yaml
 from pydantic import BaseModel, Field
 
-from droid_brain.schema import DocType
+from open_index.schema import DocType
 
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -47,7 +47,7 @@ class SearchConfig(BaseModel):
     # -- OpenSearch options (used when backend == "opensearch"). Secrets may be
     #    ${ENV} references, resolved at connect time. --
     hosts: list[str] = Field(default_factory=lambda: ["http://localhost:9200"])
-    index: Optional[str] = None          # defaults to droid_brain_<name>
+    index: Optional[str] = None          # defaults to open_index_<name>
     username: Optional[str] = None
     password: Optional[str] = None
     use_ssl: bool = False
@@ -94,7 +94,7 @@ def load_brain_config(brain_dir: str | Path) -> BrainConfig:
     brain_yaml = root / "brain.yaml"
     if not brain_yaml.exists():
         raise FileNotFoundError(
-            f"no brain.yaml found in {root} — run `droid-brain init` first"
+            f"no brain.yaml found in {root} — run `open-index init` first"
         )
 
     raw = yaml.safe_load(brain_yaml.read_text()) or {}

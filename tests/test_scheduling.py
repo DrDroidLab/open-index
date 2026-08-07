@@ -2,7 +2,7 @@ from datetime import timedelta
 
 import pytest
 
-from droid_brain.scheduling import RunState, is_due, parse_schedule, utcnow
+from open_index.scheduling import RunState, is_due, parse_schedule, utcnow
 
 
 def test_parse_schedule_forms():
