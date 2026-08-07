@@ -145,9 +145,11 @@ serialization pattern above for multi-writer workloads.
 
 ## Source provenance convention
 
-Droid Brain has no reserved or automatically populated provenance fields. When
-an entity represents an ordinary source record, define user-owned fields such
-as the following and populate them in the complete write:
+**Add user-defined provenance fields to make source records traceable.**
+These fields are user-owned conventions: Droid Brain neither reserves nor
+automatically populates them, and they are not a built-in lineage API. When an
+entity represents an ordinary source record, define fields such as the following
+and populate them in the complete write:
 
 ```yaml
 schema:
@@ -160,17 +162,18 @@ schema:
     - { name: observed_at, type: timestamp, processing: timestamp, search: none }
 ```
 
-These names are a convention, not a built-in schema or lineage API. `search:
-none` is appropriate for metadata that should not contribute to retrieval; it
-does not make the field private or enforce access control. Choose immutable
-source revisions and content hashes where the upstream system provides them.
+`search: none` keeps metadata out of retrieval; it neither makes the field
+private nor enforces access control. Choose immutable source revisions and
+content hashes where the upstream system provides them.
 
 ## AI-distillation run-manifest convention
 
-For an AI-distillation workflow, keep one immutable external manifest per run.
-Droid Brain neither generates nor validates this manifest, and a same-ID
-replacement destroys the prior current value. This synthetic JSON shows a
-complete convention-only manifest:
+**Pair each distillation run with an immutable external manifest for
+reproducibility.** Each manifest is an external operator artifact: Droid Brain
+neither generates nor validates it. Apply the complete-write and current-state
+rules in [Replacement and concurrency](#replacement-and-concurrency) when a run
+writes an existing entity ID. This synthetic JSON shows a complete
+convention-only manifest:
 
 ```json
 {
@@ -227,20 +230,19 @@ For small reviewable output, use `storage: file`, commit entity and manifest
 revisions, and record the Git commit. For larger output, use `storage: index`
 for current state plus an external append-only manifest/object store and a
 SQLite/OpenSearch snapshot and source snapshot sufficient to replay the run.
-Neither strategy is supplied automatically by Droid Brain.
+Both strategies are operated externally; Droid Brain stores current entities
+according to their storage policy.
 
 ## Conflicting claims convention
 
-Represent each source assertion as a separate `claim` entity and link it to the
-subject it asserts something about. Preserve source/provenance fields and, when
-useful, link the claim to a run manifest retained outside the brain. For example,
-`claim:payments-policy-2026-08-07-a` and
+**Model source assertions as separate claim entities so agents can compare
+competing evidence.** Claim comparison, contradiction detection, adjudication,
+and automatic ranking remain external workflow responsibilities. Link each claim
+to the subject it asserts something about, preserve source/provenance fields,
+and, when useful, link the claim to a run manifest retained outside the brain.
+For example, `claim:payments-policy-2026-08-07-a` and
 `claim:payments-policy-2026-08-07-b` may both point to
 `policy:refund-window` with an `asserts_about` relationship.
-
-Droid Brain does not detect contradictions, adjudicate conflicting assertions,
-or automatically rank one claim as true. A caller or external workflow must
-decide how to present, reconcile, or supersede them.
 
 ## Periodically refreshed and upserted records
 

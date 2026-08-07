@@ -2,10 +2,11 @@
 
 ## Ways to contribute
 
-Contributions can improve core code, bundled examples, connectors,
-documentation, and reproducible bug or behavior reports. Keep reports small
-enough to run locally and use synthetic data rather than customer or production
-data.
+Help make Droid Brain more useful for real agent workflows: model a domain
+brain, build an offline-safe connector, improve retrieval, refine the explorer
+UI, or contribute a reproducible evaluation. Code, examples, documentation, and
+small reproducible bug or behavior reports are all welcome. Use synthetic data
+rather than customer or production data.
 
 ## Development and CI setup
 
@@ -71,10 +72,11 @@ not real organization data.
 - Keep the default example path runnable without network access. Make any live
   service dependency optional and test the offline behavior.
 
-## Documentation truthfulness
+## Documentation accuracy
 
-Documentation must describe the checked-out implementation and its tests, not a
-desired design.
+Accurate documentation helps readers choose the right installation, storage,
+retrieval, and security approach before they invest in an integration. Describe
+the checked-out implementation and its tests, not a desired design.
 
 - Recheck source installation instructions and the PyPI package state before
   claiming a published install path. Use the correct optional extras and reserve
@@ -102,21 +104,13 @@ desired design.
 
 ### Current controls and limits
 
-Current HTTP serving can require one bearer token, `--read-only` can disable
-write tools for an entire server, and local stdio relies on the local process
-boundary. These controls are not first-class caller authorization. There is no
-principal or claims model, deny-by-default RBAC/ABAC evaluation, tenant or
-workspace policy, resource ACL enforcement, policy-aware filtering, write
-ownership, or authorization audit trail in the current repository.
+Current HTTP bearer-token and server-wide `--read-only` modes are coarse
+transport/tool controls, not first-class caller authorization. For the complete
+current boundary—including local stdio, absent principals and resource policy,
+and deployment segregation—see [Authentication, authorization, and trust
+boundaries](./entity-management.md#authentication-authorization-and-trust-boundaries).
 
-For distinct trust boundaries today, use separate brain directories, databases
-or OpenSearch indexes, MCP processes/endpoints, tokens, and least-privileged
-process/backend identities. This is operational segregation, not in-brain
-multi-tenant authorization. Caller-supplied doc-type filters, prompts,
-`tenant_id` or visibility-like fields, and OpenSearch credentials do not enforce
-application authorization.
-
-### Future roadmap acceptance expectations — not current features or tests
+### Future authorization test matrix
 
 Once first-class authorization exists, contributions must include allow, deny,
 and adversarial no-leak coverage for:
@@ -131,8 +125,8 @@ and adversarial no-leak coverage for:
 - SQLite/OpenSearch parity, embeddings and reindexing, exports, backups, and
   migrations where applicable.
 
-This is a roadmap acceptance matrix. It does **not** describe authorization
-code or allow/deny/no-leak tests currently present in this repository.
+This is a roadmap acceptance matrix, not a description of authorization code
+or allow/deny/no-leak tests currently present in this repository.
 
 ## Change checklist
 

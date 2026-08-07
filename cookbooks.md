@@ -1,9 +1,9 @@
 # Droid Brain cookbooks
 
-These recipes use the repository checkout as the working directory. The bundled
-data is synthetic. A recipe describes current behavior; it is not a promise of
-workflow automation, policy enforcement, or historical versioning that the
-running brain does not provide.
+Use these recipes to turn structured, reviewable knowledge into useful agent
+context: search support answers, connect alert signals to runbooks, write back
+typed memories, and operate clear trust boundaries. They use the repository
+checkout as the working directory and synthetic bundled data.
 
 ## Choose a recipe
 
@@ -14,7 +14,7 @@ running brain does not provide.
 | Write controlled distilled memories | A new, purpose-specific brain | Small reviewed files, or high-volume index records with an external manifest | `[mcp]` only to use MCP write tools | Provenance convention, immutable external run record, and complete replacement write |
 | Refresh an upstream source | `examples/support-brain/connectors/example_connector.py` | Connector-owned index or file entities | None | Deterministic source-to-entity mapping, due-state, and per-record errors |
 | Add semantic/hybrid retrieval | Any brain with `search: semantic` fields | Existing storage backend plus embeddings | `[semantic]`; `[opensearch]` when using OpenSearch | Local or compatible remote embeddings and re-embedding |
-| Separate untrusted audiences | One brain directory and backend per boundary | Operationally separate deployments | `[serve]`; `[opensearch]` for an OpenSearch backend | Separate read/read-write endpoints and external gateway controls |
+| Isolate knowledge by trust boundary | One brain directory and backend per boundary | Operationally separate deployments | `[serve]`; `[opensearch]` for an OpenSearch backend | Separate read/read-write endpoints and external gateway controls |
 
 Install the base package once before any recipe:
 
@@ -66,8 +66,8 @@ JSON
 ```
 
 `droid-brain init my-new-brain` generates `.mcp.json` for that **new** brain.
-It does not retroactively create client configuration for an existing bundled
-example.
+For an existing bundled example, create the client configuration where the MCP
+client expects it.
 
 ### Run
 
@@ -98,12 +98,12 @@ JSON file and its indexed current value. Commit reviewed JSON changes if a
 recoverable revision is needed. `droid-brain index` reloads the file-backed
 types from disk.
 
-### Current limits
+### Usage notes
 
-This is a knowledge lookup workflow, not a ticketing integration or a policy
-engine. MCP client configuration and any agent instructions are local client
-configuration, not access control. The agent should treat search results as
-leads and use `get_entity` before drawing a conclusion.
+Use `get_entity` to confirm the complete context behind a search result. MCP
+client configuration and agent instructions connect the local client; access
+control belongs in the deployment boundary described in [Deploy isolated
+knowledge boundaries](#6-deploy-isolated-knowledge-boundaries).
 
 ## 2. Infrastructure troubleshooting agent
 
@@ -117,7 +117,8 @@ datastores from `examples/infra-brain`.
 The stable infrastructure map is file-backed, while `alert` is `storage: index`.
 The `infra-alerts` connector therefore writes operational alert records to the
 SQLite index without creating alert JSON files in Git. It models alerts as
-**periodically refreshed/upserted current records**, not as a historical feed.
+**periodically refreshed/upserted current records**; use run-scoped IDs when
+you also need historical observations.
 
 ### Install
 
@@ -177,27 +178,24 @@ stable alert; ordinary `alert:checkout-5xx` is only its latest current value.
 Back up the SQLite database or make the connector ingestion repeatable: alert
 records are index-backed and are not entity JSON files.
 
-### Current limits
+### Freshness and operations
 
-The offline connector is demonstration data, not a live alert feed. A due run
-tracks connector cadence; it does not establish freshness or remove missing
-source records. SQLite is local storage and does not turn this into a
-multi-writer incident system.
+The offline sample makes the workflow easy to explore. In production, a due run
+tracks connector cadence; freshness comes from emitting explicit current states
+or from the reconciliation/rebuild process described above.
 
 ## 3. Controlled AI distillation or memory write-back
 
 ### Goal
 
-Let an external agent transform selected source material into a validated,
-traceable current memory while retaining enough external evidence to review or
-replay the transformation.
+Give an agent a typed, searchable memory it can write through MCP: the result
+is a validated current entity that other agents can discover and inspect.
 
 ### Why this model
 
-Droid Brain stores a current entity, not an immutable extraction ledger. Treat
-the model invocation, source selection, and retained artifacts as an external
-workflow; use ordinary schema fields for provenance and an immutable external
-manifest for each run.
+Use `storage: file` for a small, reviewable memory set. The external agent owns
+source selection and the distillation decision; Droid Brain validates and stores
+the resulting typed current memory.
 
 ### Install
 
@@ -209,18 +207,14 @@ python -m pip install '.[mcp]'
 
 ### Setup
 
-Define provenance fields on the target doc type. They are user-defined,
-non-reserved fields; `search: none` keeps metadata out of retrieval. This
-synthetic `memory` type is file-backed for a small reviewable workflow. Create
-a named disposable brain, save this file as `$DISTILL_BRAIN/doc_types/memory.yaml`,
-then index and validate it:
+Create a named disposable brain. Save the following schema as
+`$DISTILL_BRAIN/doc_types/memory.yaml`; the provenance fields are ordinary,
+non-reserved fields, and `search: none` keeps them out of retrieval.
 
 ```bash
 DISTILL_BRAIN="$(mktemp -d "${TMPDIR:-/tmp}/droid-brain-distillation.XXXXXX")"
 droid-brain init distillation-brain "$DISTILL_BRAIN"
-```
-
-```yaml
+cat > "$DISTILL_BRAIN/doc_types/memory.yaml" <<'YAML'
 doc_type: memory
 description: A distilled operational memory with external-run provenance.
 storage: file
@@ -236,9 +230,7 @@ schema:
     - { name: source_content_hash, type: string, processing: keyword, search: none }
     - { name: source_uri, type: string, processing: keyword, search: none }
     - { name: observed_at, type: timestamp, processing: timestamp, search: none }
-```
-
-```bash
+YAML
 droid-brain index --brain "$DISTILL_BRAIN"
 droid-brain validate --brain "$DISTILL_BRAIN"
 ```
@@ -250,61 +242,6 @@ configuration resolves correctly, or start the same stdio server explicitly:
 ```bash
 droid-brain mcp --brain "$DISTILL_BRAIN"
 ```
-
-Before a write, the external workflow should record one immutable manifest per
-run. This complete synthetic JSON example has all the fields needed to identify
-inputs, code, prompt, model settings, output, and retained recovery material;
-Droid Brain neither creates nor validates it.
-
-```json
-{
-  "run_id": "distill-2026-08-07T120000Z-001",
-  "run_timestamp_utc": "2026-08-07T12:00:00Z",
-  "sources": [
-    {
-      "source_system": "synthetic-support-export",
-      "source_id": "case-482",
-      "source_revision": "rev-17",
-      "source_uri": "https://support.example.invalid/cases/482",
-      "source_content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    }
-  ],
-  "extractor": {
-    "repository": "https://git.example.invalid/knowledge/distiller",
-    "code_commit": "4f6c3a1"
-  },
-  "prompt": {
-    "template_name": "support-memory-distillation",
-    "template_version": "2026-08-01",
-    "template_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-  },
-  "generation": {
-    "provider": "synthetic-compatible-provider",
-    "model": "synthetic-model-1",
-    "temperature": 0.0,
-    "top_p": 1.0,
-    "seed": 42,
-    "max_tokens": 800,
-    "structured_output_schema_version": "memory-v1"
-  },
-  "outputs": [
-    {
-      "entity_id": "memory:wallet-eu-guidance",
-      "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-    }
-  ],
-  "retained_artifacts": {
-    "prior_entity_versions": ["s3://knowledge-audit.invalid/prior/memory-wallet-eu-guidance-v3.json"],
-    "source_artifacts": ["s3://knowledge-audit.invalid/sources/case-482-rev-17.json"],
-    "store_snapshots": ["s3://knowledge-audit.invalid/stores/distill-2026-08-07T120000Z-001.sqlite"],
-    "manifest_uri": "s3://knowledge-audit.invalid/manifests/distill-2026-08-07T120000Z-001.json"
-  }
-}
-```
-
-Set provider credentials in the external agent's environment, for example
-`${LLM_API_KEY}`. Do not place source credentials or provider keys in entity
-JSON, MCP configuration, or the manifest.
 
 ### Run
 
@@ -338,8 +275,8 @@ After the agent has called `navigation_guidelines`, send a complete MCP
 
 The write is validated and persists to
 `entities/memory/wallet-eu-guidance.json` for this file-backed type. The MCP
-result reports that path. The external manifest remains the evidence for how
-the entity was generated.
+result reports that path, giving agents a searchable memory with explicit source
+provenance.
 
 ### Persistence/history
 
@@ -353,17 +290,34 @@ external run record. For larger output, use `storage: index` for current state
 and retain an append-only manifest/object store plus source artifacts and a
 SQLite/OpenSearch store backup sufficient to replay the run.
 
-The scaffold's reflection/write-back hook is only a stub: an external agent
-workflow decides when to extract, validates the proposed payload, retains the
-manifest, and calls `put_entity`. No in-process hook autonomously runs or
-approves a reflection.
+### Reproducibility and collaboration
 
-### Current limits
+Record one immutable external manifest per distillation run. A compact synthetic
+excerpt looks like this:
 
-There is no built-in provenance validation, immutable entity versioning,
-approval workflow, conflict resolution, or write precondition. Read-construct-
-write can help an agent send a complete payload, but concurrent writers can
-still lose an intervening update.
+```json
+{
+  "run_id": "distill-2026-08-07T120000Z-001",
+  "run_timestamp_utc": "2026-08-07T12:00:00Z",
+  "sources": [{"source_id": "case-482", "source_revision": "rev-17", "source_content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
+  "extractor": {"repository": "https://git.example.invalid/knowledge/distiller", "code_commit": "4f6c3a1"},
+  "outputs": [{"entity_id": "memory:wallet-eu-guidance", "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}]
+}
+```
+
+Use the [full run-manifest convention in entity management](./entity-management.md#ai-distillation-run-manifest-convention)
+for prompt/template identity, model and generation settings, retained source
+artifacts, prior entity versions, and store snapshots. Set provider credentials
+in the external agent environment, for example `${LLM_API_KEY}`, rather than in
+entity JSON, MCP configuration, or a manifest. The scaffold reflection hook is
+a starting point for an external agent workflow that chooses when to distill,
+retains the manifest, and calls `put_entity`.
+
+### Usage notes
+
+The manifest is managed by the external workflow. Send a complete replacement
+payload for an existing ID; read-construct-write supports completeness, while
+one writer or external serialization protects against competing updates.
 
 ## 4. Connector refresh
 
@@ -387,8 +341,8 @@ No extra is required.
 
 Replace the example connector's source declaration and mapping with a stable
 source identifier, complete fields, and explicit source state. This synthetic
-adaptation uses environment-expanded source credentials; it does not put a
-secret in the file.
+adaptation keeps source credentials in environment variables rather than in the
+connector file.
 
 ```python
 from droid_brain.connectors import Connector, EntitySpec
@@ -470,12 +424,11 @@ File-backed issue entities are persisted as JSON; index-backed targets are
 durable backend state and need backup, repeatable ingestion, or an external
 immutable record for recovery.
 
-### Current limits
+### Refresh operations
 
-There is no built-in distributed lock, transaction across the source and brain,
-absence-as-deletion behavior, or automatic historical record of each run. A
-connector's schedule records due-state only; it is not evidence that all source
-records were fetched successfully.
+Use external serialization when multiple producers share an ID namespace, and
+keep a run record when history matters. Connector due-state records cadence;
+monitor source and per-entity errors to confirm a refresh completed as expected.
 
 ## 5. Optional hybrid retrieval
 
@@ -555,7 +508,7 @@ Embeddings are derived index artifacts, not a source-of-truth version history.
 Record the provider, model, dimension, and rebuild procedure with the data
 backup or external run record so the index can be reproduced.
 
-### Current limits
+### Scaling characteristics
 
 SQLite reranks at most 500 FTS candidates for keyword search and caps its
 brute-force semantic scan at 10,000 entities. OpenSearch uses the shipped k-NN
@@ -563,20 +516,20 @@ query path for the semantic arm. These implementation caps are not performance,
 recall, latency, or relevance guarantees; measure the workload and backend you
 actually deploy.
 
-## 6. Policy-gated or multi-tenant knowledge deployment today
+## 6. Deploy isolated knowledge boundaries
 
 ### Goal
 
-Deploy knowledge for distinct trust boundaries without implying that a single
-brain has tenant-aware authorization.
+Deploy separate, least-privileged knowledge endpoints for each customer,
+workspace, or sensitivity boundary.
 
 ### Why this model
 
 Start by defining boundaries such as `workspace-a` versus `workspace-b`, or
 `public` versus `internal` versus `restricted`. Give every boundary a separate
 brain directory and dedicated SQLite database, or a separate OpenSearch
-index/backend. This is operational/physical segregation, not in-brain RBAC,
-ABAC, or tenant policy.
+index/backend. This is deployment isolation, not in-brain multi-tenancy,
+RBAC/ABAC, or tenant policy.
 
 ### Install
 
@@ -660,25 +613,19 @@ Each separate brain/backend has independent current data and recovery material.
 Back up and export each boundary independently; do not combine stores or
 embedding artifacts when doing so would cross the defined boundary.
 
-### Current limits
+### Security boundary
 
-There is no principal/claims model, tenant/workspace isolation inside a brain,
-per-brain/doc-type/entity/field/relationship/source ACL, RBAC/ABAC, policy
-engine, row-level filtering, write ownership, policy-aware audit trail, or
-common deny-by-default check on all data paths. `--read-only` is process-wide,
-not per-principal authorization.
+`--read-only` is process-wide and the static bearer token gates an endpoint.
+Use the external gateway for caller identity, authorization policy, network
+controls, token rotation, and durable audit logs.
 
-> **Anti-patterns — not authorization**
+> **Keep the boundary real.**
 >
-> Never treat an agent prompt such as “only answer for tenant A”, a caller-
-> provided `doc_types` filter, `tenant_id`, `visibility`, or ACL-like fields,
-> entity name prefixes, or OpenSearch credentials as authorization. Prompts are
-> advisory; `doc_types` scopes a query; those fields and prefixes are ordinary
-> data; OpenSearch credentials secure backend connectivity. None enforces what
-> an application caller may read or write. A real policy would need the same
-> enforced decision on get, search, count, navigation, incoming/outgoing
-> relationship traversal, writes, exports, and every related data path. Current
-> Droid Brain does not provide that common enforcement.
+> Prompts, caller-provided `doc_types`, `tenant_id`/`visibility`/ACL-like
+> fields, name prefixes, and OpenSearch credentials are useful context or
+> backend connectivity—not authorization. Keep callers on their boundary's
+> endpoint; enforcing a policy inside one brain would require the same decision
+> across get, search, count, navigation, relationships, writes, and exports.
 
 ## Modeling ideas, not runnable recipes
 

@@ -1,73 +1,65 @@
 # Roadmap
 
-## Purpose and status
+## Status
 
-This document records possible future work. Every item below is **not
-implemented**, is **not a delivery commitment**, and has **no promised date**.
-For behavior that ships today, use the [README](./README.md).
+These are product opportunities, not implemented features, delivery
+commitments, or dated plans. The [README](./README.md) describes what ships
+today.
 
-## Standard provenance and distillation manifests
+## Reproducible ingestion and distillation
 
-Future support could provide built-in immutable source and run metadata,
-lineage, output history, and audit support for ingestion and AI-distillation
-workflows. Today, provenance fields and immutable run manifests are
-user-defined or maintained in external systems; Droid Brain does not generate
-or validate them.
+Make it easier to reproduce how knowledge entered a brain: built-in immutable
+source and run metadata, lineage, output history, and audit support for
+connectors and AI-distillation workflows. Today, teams can use user-defined
+provenance fields and external immutable run manifests, but Droid Brain does
+not generate or validate them.
 
-## Conflict and write control
+## Safe collaborative writes and history
 
-Potential work includes contradiction handling, patch/merge operations, version
-preconditions, optimistic concurrency, writer coordination, and historical
-versions. Today, a same-ID write replaces the complete current entity and its
-outgoing relationships; concurrent writes are last-write-wins. Read,
-construct, and write is a completeness practice, not concurrency control.
+Enable teams to evolve shared knowledge confidently with contradiction handling,
+patch/merge operations, version preconditions, optimistic concurrency, writer
+coordination, and historical versions. Today, a same-ID write replaces the
+complete current entity and its outgoing relationships; concurrent writes are
+last-write-wins.
 
-## Lifecycle and reconciliation
+## Automated lifecycle management
 
-Potential lifecycle controls include delete and tombstone APIs, full-source
-reconciliation, TTL, stale-record cleanup, temporal filters, decay, and
-recency ranking. Current connector runs update the records they emit; an
-omitted source record is not inferred to be deleted.
+Help current-state brains stay current with delete and tombstone APIs,
+full-source reconciliation, TTL, stale-record cleanup, temporal filters, decay,
+and recency ranking. Today, connector runs update records they emit; an omitted
+source record is not inferred to be deleted.
 
-## Search controls
+## Faster local semantic retrieval
 
-Potential search controls include type-level boosts and **SQLite-native vector
-indexing**. OpenSearch k-NN semantic search is available now; SQLite semantic
+Bring type-level boosts and **SQLite-native vector indexing** to local search
+workflows. OpenSearch k-NN semantic search is available now; SQLite semantic
 search currently uses a bounded brute-force scan rather than a native vector
 index.
 
-## Policy-aware authorization and data segregation
+## First-class policy-aware access
 
-First-class policy-aware authorization and data segregation are future work,
-not a security footnote. A complete design needs all of the following:
+Make shared access safe by providing:
 
-- authenticated human and service principals with verifiable claims;
-- deny-by-default RBAC and/or ABAC policy evaluation;
-- explicit tenant/workspace boundaries and a backend/index isolation strategy;
-- permissions for exact reads, search, writes, doc-type and schema changes,
-  connector and service operations, and administration;
-- policy filtering before candidate ranking, vector, keyword, or hybrid
-  scoring, result counts, aggregations, or navigation examples are produced;
-- prevention of incoming and outgoing relationship or traversal leakage,
-  including edges to hidden entities;
-- connector and service identities, destination scopes, write ownership, and
-  schema-write scopes;
-- durable authorization and audit logs with explainable allow/deny outcomes;
-- secure policy propagation through embeddings and indexes, exports, backups,
-  reindexing, re-embedding, and migration paths; and
-- migration from existing unscoped brains, backend-parity coverage, and
-  adversarial no-leak tests.
+- authenticated human and service identities with verifiable claims;
+- deny-by-default policy evaluation for resources and operations;
+- policy-aware exact reads, search, counts, navigation, and graph access before
+  ranking or relationships can leak hidden resources; and
+- auditable, isolated operations across tenants/workspaces, connectors,
+  backends/indexes, embeddings, exports, backups, and migrations.
 
-Field-level redaction is possible later scope only after resource-level policy
-enforcement and leak prevention are correct.
+This work includes migration from unscoped brains and backend-parity,
+adversarial no-leak coverage. See the detailed [future authorization test
+matrix](./CONTRIBUTING.md#future-authorization-test-matrix). Field-level
+redaction is later scope only after resource-level policy enforcement and leak
+prevention are correct.
 
-## Benchmarks and compatibility
+## Reproducible performance and quality evaluation
 
-Future benchmark and compatibility work could publish reproducible corpora and
-queries; quality measures; latency and throughput methodology; hardware,
-backend, and model disclosure; and versioned results. No benchmark suite or
-published results exist today.
+Help users compare configurations with reproducible corpora and queries, quality
+measures, latency and throughput methodology, hardware/backend/model disclosure,
+and versioned results. No benchmark suite or published results exist today.
 
 ## Contribute
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for the current contributor workflow.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for current ways to help shape these
+opportunities.
