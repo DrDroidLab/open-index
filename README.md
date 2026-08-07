@@ -1,265 +1,341 @@
-### Droid Brain
+# Droid Brain
 
+**An open context graph and memory layer for AI agents.** Droid Brain gives an
+agent a typed entity model, explicit relationships, deterministic lookup, and
+MCP read/write tools over an inspectable local brain.
 
-The Droid Brain helps you build and maintain accurate organisational information in form of structured data to assist agents to operate in a complex environment effectively.
+[Quickstart](#quickstart-from-source) · [Why it fits](#where-it-fits) · [Status](#what-works-today) · [Cookbooks](./cookbooks.md) · [Entity lifecycle](./entity-management.md) · [Roadmap](./ROADMAP.md)
 
-It is **domain-agnostic**: model a support org (`product → "has common issue" → issue`), a sales pipeline (`customer → order`), your infrastructure (`service → runbook`), or anything else. You define the concepts; the brain stores them, searches them, and draws the map.
+## Why domain-specialized agents need a context layer
 
-The primitives of creating a brain are as follows:
-- doc_types: the different types of docs that you want to generate and maintain. This can be considered the equivalent of concepts you want to maintain in your knowledge.
-- doc_schema: the schema of information stored for a given doc_type
-- entity: an instance of a given doc_type, stored as per the schema is an entity. Every entity can declare relationships to other entities via `related_to` (the target) + `relationship_edge_meaning` (free-text edge semantics).
-- connectors: the origin from where you extract the information (in case this is extracted from a given source)
+An agent operating in a support, infrastructure, or business domain needs more
+than transient prompt context. It needs stable concepts, relationships across
+sources, predictable lookup, controlled write-back of current state, and
+persistence that an operator can inspect. Droid Brain models those concepts as
+typed entities and directed, labeled relationships. It is not a general-purpose
+policy engine, historical event store, or autonomous knowledge-improvement
+system.
 
+## Where it fits
 
-## Quickstart
+Droid Brain composes with files and agent skills, and with chunk-based RAG; it
+does not replace them. Files and skills carry instructions and source material.
+Chunk RAG retrieves unstructured passages. Droid Brain stores modeled current
+facts and relationships when an agent benefits from entity identity, a schema,
+relationship traversal, or deterministic exact lookup. Use the combination that
+matches the task.
+
+## What works today
+
+| Area | Available now | Important current limit |
+| --- | --- | --- |
+| Model and validation | Typed doc types, fields, entities, declared relationship vocabulary, and required-field checks | Validation is limited; it is not comprehensive JSON Schema type validation. Declared edges are checked for target type only when the target already exists; undeclared meanings and forward references are allowed. |
+| Relationships | Directed `related_to` edges, relationship-aware exact reads, navigation guidance, and read-only map exploration | Relationships are data, not access-control boundaries. |
+| Search | SQLite FTS5 keyword search, field boosts, optional semantic/hybrid search, and OpenSearch fuzzy search | See [Search and embeddings](#search-and-embeddings) for provider requirements and exact caps. |
+| OpenSearch | Optional backend with field boosts and k-NN semantic search | Requires a separately configured backend; it does not add caller authorization. |
+| Agent surfaces | MCP over local stdio; optional HTTP MCP; server-wide read-only mode | MCP has five tools; HTTP token authentication is an endpoint gate, not resource authorization. |
+| Connectors and UI | Trusted local Python connectors, due/interval checks, per-entity write-error reporting, and a read-only UI | Entity-construction or extraction failures can abort a run; only write failures after successful construction are isolated per entity. Scheduling is not cron parsing; use an external scheduler where required. The UI has no edit/upload form. |
+| State and history | Per-type file or index current-state storage | File records are Git-versionable only when an operator commits them. Same-ID writes replace current state; provenance and run manifests are conventions. |
+| Not available | Policy-aware authorization, tenant isolation, temporal lifecycle controls, type-level boosts, SQLite-native vector indexing, and published benchmarks | These are current limits or [roadmap](./ROADMAP.md) items, not implied capabilities. |
+
+## Quickstart from source
+
+The supported acquisition path is a source checkout.
 
 ```bash
-pip install -e '.[all]'          # core + UI (Streamlit) + MCP server
+git clone https://github.com/DrDroidLab/droid-brain.git
+cd droid-brain
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install .
 
-# Try the bundled example (support brain: products, issues, segments, comments)
 droid-brain index --brain examples/support-brain
-droid-brain ui    --brain examples/support-brain      # open the Map tab, pick an anchor
-
-# Or start your own brain from scratch
-droid-brain init my-brain
-droid-brain add-doc-type customer --brain my-brain
-# ...add entities under my-brain/entities/**/*.json...
-droid-brain index --brain my-brain
-droid-brain ui    --brain my-brain
+droid-brain validate --brain examples/support-brain
+droid-brain search "payment declined" --brain examples/support-brain --doc-type issue
 ```
 
-### Commands
+The base install supports keyword search. The support example declares semantic
+fields, but without an embedding provider Droid Brain logs a warning and falls
+back to keyword search rather than requiring `fastembed`.
 
-| Command | What it does |
-|---|---|
-| `droid-brain init <name> [dir]` | Scaffold a new brain directory. |
-| `droid-brain add-doc-type <name>` | Add a doc_type schema stub under `doc_types/`. |
-| `droid-brain add-entity <file>` | Validate + store an entity JSON file. |
-| `droid-brain index` | (Re)load `entities/**/*.json` into the search index. |
-| `droid-brain validate` | Validate `brain.yaml`, schemas, and every entity file (use in CI). |
-| `droid-brain ingest <connector>` | Run a connector now to pull entities from an MCP server. |
-| `droid-brain run [--force] [--loop N]` | Run every connector whose `schedule` is due (wire into cron/CI). |
-| `droid-brain search <query> [-t doc_type]` | Search from the terminal. |
-| `droid-brain ui` | Launch the Streamlit explorer (Structure / Search / **Map** / Contribute). |
-| `droid-brain mcp` | Run the MCP server (stdio) so a local agent can **read and write** the brain. |
-| `droid-brain serve [--port --token]` | Serve the MCP server over **HTTP** for remote/cloud agents (bearer-token auth). |
+## Add optional surfaces
 
-### Built for Claude Code (and any agent)
+Install an extra immediately before using its surface:
 
-`droid-brain init` also drops a `.mcp.json` and a `CLAUDE.md` in the brain, so the
-moment you open Claude Code in that folder it can drive the brain over MCP:
+```bash
+# Read-only map explorer
+python -m pip install '.[ui]'
+droid-brain ui --brain examples/support-brain
 
-- **read** — `navigation_guidelines()` (what doc_types exist + how to query), `search_brain()`, `get_entity()`
-- **write** — `put_entity()` (add/update an entity), `create_doc_type()` (define a concept)
+# MCP over local stdio
+python -m pip install '.[mcp]'
+droid-brain mcp --brain examples/support-brain
 
-So you *define* doc_types and *populate* entities by talking to the agent — it
-writes the YAML/JSON files (the git source of truth) for you. Entities also arrive
-via manual JSON, connectors (MCP ingestion on a `schedule`), or an agent
-write-back loop (a Stop hook that records learnings via `put_entity`).
-
-### A brain on disk
-
-```
-my-brain/
-  brain.yaml            # name + storage/search backend
-  doc_types/*.yaml      # one schema per doc_type (fields, boosts, display color)
-  entities/**/*.json    # entities, with related_to edges
-  connectors/*.py       # optional ingestion scripts (MCP → entities)
+# Local semantic embeddings and hybrid retrieval
+python -m pip install '.[semantic]'
+droid-brain index --brain examples/support-brain --reembed
 ```
 
-Storage defaults to **SQLite + FTS5** (zero external services). The backend sits
-behind a pluggable interface with two implementations: SQLite (default, local/dev)
-and **OpenSearch** (select with `search.backend: opensearch` — see
-[Using the brain from a cloud agent](#using-the-brain-from-a-cloud-agent-production)).
+## Five-minute support-agent walkthrough
 
-### Where entities live — `storage: file | index`
+The bundled support brain contains queryable `product`, `issue`, `user_segment`,
+and `comment` entities. Its files are curated current state; index them first:
 
-Each doc_type declares its source of truth, so curated and machine-generated data
-don't fight over git:
+```bash
+droid-brain index --brain examples/support-brain
+droid-brain search "checkout" --brain examples/support-brain
+```
 
-- **`storage: index`** (default) — the search DB owns these entities; they are
-  **not** written to files. Right for connector-pulled, high-volume, or temporal
-  data (hundreds of services, memories, alerts) that would otherwise churn the repo.
-- **`storage: file`** — JSON files under `entities/<doc_type>/` are the source of
-  truth, git-tracked and PR-reviewable. Right for curated, human/agent-authored
-  entities.
+For a local MCP client, create client configuration yourself. The bundled
+example deliberately does not contain `.mcp.json`; do not add this generated
+configuration to it merely to use the example.
 
-`droid-brain index` reconciles **file**-backed types from disk on each run and
-leaves **index**-backed entities (written by connectors/agents) untouched. So
-`brain.db` is durable state for index-backed types — back it up or re-ingest;
-it's gitignored by default.
+```bash
+test ! -e examples/support-brain/.mcp.json
+cat > .mcp.json <<'JSON'
+{
+  "mcpServers": {
+    "support-brain": {
+      "command": "droid-brain",
+      "args": ["mcp", "--brain", "examples/support-brain"]
+    }
+  }
+}
+JSON
+```
 
+`droid-brain init my-brain` generates `.mcp.json` only for a newly scaffolded
+brain; it does not create configuration for existing examples. After the MCP
+client loads this configuration, start with `navigation_guidelines`, then
+search and inspect entities. For example:
 
-# Creating a brain, step by step
+> Call `navigation_guidelines` first. Then investigate a customer reporting a
+> declined payment at checkout: search the relevant issues, inspect the best
+> candidate and its relationships, and identify related product, segment, or
+> comment context before answering.
 
-`droid-brain init <name>` scaffolds the directory below; then you author two kinds
-of file — **doc_types** (schemas) and **entities** (instances). Sample doc_types:
-infra (`service`, `datastore`, `dashboard`, `runbook`, `alert`), sales (`lead`,
-`deal`, `account`), lending (`loan`, `borrower`, `application`), or personal
-(`goal`, `project`, `person`, `area`, `note`). Three runnable examples ship in
-[`examples/`](./examples): `support-brain`, `infra-brain`, and `personal-brain`.
+This is a retrieval and context workflow, not a guarantee that the result is
+complete or correct for a live customer case.
 
-### 1. Define a doc_type
+## Core model
 
-A doc_type is a concept plus its schema — one YAML file in `doc_types/`:
+A **doc type** is a named domain concept with a schema, storage policy, display
+settings, and optional relationship vocabulary. An **entity** is one typed,
+current instance with an ID of the form `<doc_type>:<slug>`. A **relationship**
+is an outgoing `related_to` record containing a target and free-text meaning. A
+**connector** is trusted local Python code that emits complete entities through
+the same validation/write path.
 
 ```yaml
 # doc_types/service.yaml
 doc_type: service
 description: A deployed service.
-storage: file                 # file = git source of truth · index = DB-owned (default)
+storage: file
 display:
   label_field: name
   color: "#7c3aed"
 schema:
   fields:
-    - { name: name,        type: string, search: syntactic, boost: 6 }   # weighted 6× in ranking
-    - { name: description, type: text,   search: semantic }
-    - { name: owner,       type: string, search: syntactic }
-relationships:                # the correlations this type uses — optional but recommended
-  - { name: "writes to",       target_doc_type: datastore }
-  - { name: "is monitored by", target_doc_type: dashboard }
+    - { name: name, type: string, processing: keyword, search: syntactic, boost: 6, required: true }
+    - { name: description, type: text, processing: text, search: semantic }
+    - { name: owner, type: string, processing: keyword, search: syntactic }
+relationships:
+  - { name: "writes to", target_doc_type: datastore }
 ```
 
-- **`boost`** sets per-field search weight — a hit in a `boost: 6` title outranks a
-  `boost: 1` description hit 6-to-1. Optional; defaults to 1.
-- **`relationships`** declares the edge vocabulary so correlations are discoverable
-  (shown in the UI + navigation guide) and lightly validated (right target type).
-  Optional — entities may still use undeclared meanings.
-
-Create one with `droid-brain add-doc-type service` (writes a stub you edit), or ask your agent.
-
-### 2. Add entities
-
-An entity is one instance. For `storage: file` types, write one JSON per entity
-under `entities/<doc_type>/`:
-
 ```json
-// entities/service/checkout.json
 {
   "doc_type": "service",
   "id": "service:checkout",
   "name": "Checkout",
   "owner": "payments-team",
   "related_to": [
-    { "target": "datastore:postgres-main",     "relationship_edge_meaning": "writes to" },
-    { "target": "dashboard:checkout-latency",   "relationship_edge_meaning": "is monitored by" }
+    {
+      "target": "datastore:postgres-main",
+      "relationship_edge_meaning": "writes to"
+    }
   ]
 }
 ```
 
-- `id` must be `<doc_type>:<slug>`.
-- **`related_to`** is the reserved correlation field present on **every** entity — it
-  defines the graph edges (`target` + `relationship_edge_meaning`). This is how you
-  say "this ticket is about that service" without any graph database.
+A field's `search` is `syntactic`, `semantic`, or `none`; `boost` is a positive
+relative field weight. Required field presence is validated. A declared
+relationship can be lightly checked against an already stored target's type;
+that is not a complete schema or graph-integrity system.
 
-Then `droid-brain index` (loads file-backed entities) and `droid-brain validate`.
+## Where current data lives
 
-### 3. Populate at scale (four ways, one validated store)
+Choose storage per doc type; this controls Droid Brain's current-state source of
+truth, not necessarily the upstream business authority.
 
-1. **Manual / agent** — write JSON, or open Claude Code in the folder and let it call
-   `put_entity` / `create_doc_type` over MCP.
-2. **Bulk** — hand a file of records to your agent, or a connector.
-3. **Connectors** — `connectors/*.py` pull from an MCP server on a `schedule`; run with
-   `droid-brain ingest <name>` or `droid-brain run` (cron/CI-friendly).
-4. **Agent write-back** — a Stop hook that records learnings via `put_entity` (the
-   "continuously improving" loop).
+| Storage | Current source of truth | `index` behavior | History and recovery |
+| --- | --- | --- | --- |
+| `file` | JSON in `entities/<doc_type>/` | Replaces backend rows for the file-backed type from current files, including file edits/removals | JSON is Git-versionable and operator-committed; review, history, and rollback require retained commits or other backups. |
+| `index` | Configured SQLite or OpenSearch backend | Leaves the type untouched; no entity JSON is written | Same-ID records are current state only. Restore a backend backup, re-ingest, or replay externally retained artifacts. |
 
-See [Entity Management](./entity-management.md) for guidance on cadence and decay.
+File-backed backend rows are materialized copies of current JSON, not history.
+For source provenance, AI-distillation run manifests, conflicting claims, and
+current-state practices, see [entity management](./entity-management.md).
+Those fields and manifests are user conventions; Droid Brain does not create or
+validate them.
 
-### 4. Explore
+## Complete writes and writer ownership
 
-`droid-brain ui` → **Structure** (doc_types, fields, relationships), **Search**, and
-**Map** (anchor a doc_type, pick entities, click a node to expand its correlations).
+A same-ID `put_entity` is replacement, not patch or merge. Make an idempotent
+retry by sending the same **complete** entity, including every desired field and
+outgoing `related_to` edge. Fields omitted by a replacement and outgoing edges
+omitted by that entity disappear; incoming edges owned by other entities remain.
 
-# Enabling your agent to use the brain
+Read → construct the complete desired entity → write prevents accidental
+omissions, but it is not concurrency control. Two writers can race after the
+read and the last write wins, losing the other writer's update. Assign one
+writer to an ID namespace or use external serialization, a queue, lock, or
+transactional system. Droid Brain has no version preconditions or write
+ownership control.
 
-`droid-brain mcp` runs an MCP server (stdio) exposing the brain to any MCP client —
-**read and write**:
+## Periodically refreshed and upserted records
 
-- `navigation_guidelines()` — orient: doc_types, fields, relationships, how to query/write.
-- `search_brain(query, doc_types, limit)` · `get_entity(id)` — read.
-- `put_entity(...)` · `create_doc_type(...)` — write (validated, honors the storage policy).
+Connector and recurring ingestion output is **periodically refreshed/upserted
+current state**, not snapshots. Each run replaces only IDs it emits. An upstream
+record omitted from a later response remains stored and can become stale; a
+source-window query does not delete older records.
 
-`droid-brain init` drops a `.mcp.json` so Claude Code auto-connects, a `CLAUDE.md`
-documenting the model, and an **`edit-brain` skill** (`.claude/skills/edit-brain/SKILL.md`)
-the agent follows when adding or correlating knowledge. The UI's **Contribute** tab
-shows how to connect — editing happens via the agent or CLI, never in the UI, so files
-stay the source of truth and every write is validated.
+Have the source emit `resolved`, `inactive`, or `deleted` when appropriate, or
+use external full reconciliation, deletion, or rebuild. For true history, emit
+run-scoped entity IDs and relate them to a stable subject. See the [lifecycle
+and refresh guidance](./entity-management.md#periodically-refreshed-and-upserted-records).
 
-## Using the brain from a cloud agent (production)
+## Use from agents and ingest connectors
 
-Two shapes, depending on whether one agent or many share the brain:
+MCP exposes five tools:
 
-**Embedded (one agent, you own the runtime).** Bake the package + brain dir into the
-agent's image and let it spawn the MCP server over stdio — no network, works today:
+- `navigation_guidelines()` to orient an agent to doc types, fields, examples, and relationships;
+- `search_brain(query, doc_types, limit)` and `get_entity(id)` to read;
+- `put_entity(...)` and `create_doc_type(...)` to write when the endpoint is not read-only.
 
-```jsonc
-{ "mcpServers": { "brain": { "command": "droid-brain", "args": ["mcp", "--brain", "/app/brain"] } } }
-```
+`droid-brain mcp --brain <path>` uses stdio and trusts the local process/user.
+`droid-brain serve` exposes the same tools over HTTP; `--read-only` removes both
+write tools for that entire endpoint. Connectors are trusted local Python
+extraction code. `droid-brain ingest <connector>` runs one; `droid-brain run`
+checks whether configured connectors are due. After an entity is constructed,
+its `Brain.put_entity` validation/write failure is reported and later entities
+continue. Extraction errors or malformed specs that fail during
+`EntitySpec.to_entity()` can abort the run. Use an external scheduler for
+cron-like orchestration.
 
-**Remote (many agents, shared brain).** Run the brain as a networked MCP server and
-register its URL in each agent:
+## Search and embeddings
+
+SQLite FTS5 provides base keyword search. If a queried scope includes semantic
+fields but no provider is available, Droid Brain warns and uses keyword search.
+Install local embeddings with:
 
 ```bash
-pip install 'droid-brain[serve,opensearch]'
-DROID_BRAIN_TOKEN=… droid-brain serve --brain /srv/acme-brain --port 8080
-# agent registers a remote MCP server:  http://<host>:8080/mcp
-#                                        Authorization: Bearer <DROID_BRAIN_TOKEN>
+python -m pip install '.[semantic]'
 ```
 
-`droid-brain serve` exposes the same read+write tools over **streamable HTTP** with
-**bearer-token auth**. For a shared, multi-writer brain, switch the backend to
-**OpenSearch** (SQLite is single-writer) — flip `search.backend` in `brain.yaml`:
+The local default is `BAAI/bge-small-en-v1.5` (384 dimensions); set
+`search.embedding_model` to choose another supported local model. SQLite
+semantic/hybrid retrieval requires `.[semantic]` for both local and remote
+providers because its vector-scoring path uses NumPy. Then configure an
+OpenAI-compatible embedding endpoint with all four variables:
 
-```yaml
-search:
-  backend: opensearch
-  hosts: ["https://opensearch:9200"]
-  index: droid_brain_acme          # optional; defaults to droid_brain_<name>
-  username: "${OPENSEARCH_USER}"    # ${ENV} resolved at connect time
-  password: "${OPENSEARCH_PASSWORD}"
-  use_ssl: true
-  verify_certs: true
+```bash
+export DROID_BRAIN_EMBEDDING_BASE_URL="https://embeddings.example.invalid/v1"
+export DROID_BRAIN_EMBEDDING_API_KEY="${EMBEDDING_API_KEY}"
+export DROID_BRAIN_EMBEDDING_MODEL="embedding-model-name"
+export DROID_BRAIN_EMBEDDING_DIM="384"
 ```
 
-OpenSearch also gives native per-field boosting and **fuzzy** (typo-tolerant) search.
-The doc_type/file-entity part comes from git; index-backed data lives in the cluster,
-so give it a persistent home. Rule of thumb: **local/dev → SQLite; exposed as an
-MCP/API endpoint → OpenSearch + `serve`.**
+After changing provider, model, or dimensions, re-embed/rebuild the index with
+`droid-brain index --brain <path> --reembed`; recreating an OpenSearch index may
+also be needed for an incompatible vector dimension. `search.semantic_weight`
+controls keyword/semantic blending (default `0.3`; `0` is keyword-only and `1`
+is semantic-only).
 
-# Controlling search
+Exact implementation caps are not benchmark claims: SQLite keyword search
+reranks at most **500** FTS candidates. SQLite semantic and hybrid search scan
+at most **10,000** name-sorted entities in scope and use a bounded brute-force
+vector scan, not SQLite-native vectors. OpenSearch supports fuzzy keyword and
+k-NN semantic search; its all-entity and relationship scans cap at **10,000**
+results. Measure the backend and workload you operate.
 
-**Schema** (per field): data `type` (string/number/boolean/timestamp), `processing`
-(keyword/text/timestamp), and `search` kind (`syntactic` = keyword+prefix,
-`semantic` = vector-backed dense search, `none` = not indexed).
-Mark a field `search: semantic` and the backend automatically embeds it at index time.
+## Authentication is not authorization
 
-**Ranking** — genuine **per-field boosters**: each field's `boost` weights how much a
-match there counts, so you tune "title matters more than description" with one number.
-For hybrid queries, keyword and semantic scores are blended with `search.semantic_weight`
-(default `0.3` — keyword matches dominate; semantic similarity rescues queries that use
-different words than the text). `semantic_weight: 0` gives keyword-only behavior; `1.0`
-gives semantic-only.
-Storage defaults to SQLite + FTS5; the OpenSearch backend implements the same
-interface with native per-field boosting, fuzzy matching, and k-NN semantic search.
+> **Important: current authentication is not policy-aware authorization.** Do
+> not use a single Droid Brain instance as a multi-tenant or per-caller policy
+> boundary.
 
-**Embedding model** — install the `[semantic]` extra (`pip install 'droid-brain[semantic]'`)
-to enable local embeddings. The default model is `BAAI/bge-small-en-v1.5` (384-D). Override
-it with `search.embedding_model` in `brain.yaml`, or use an OpenAI-compatible API by setting
-`DROID_BRAIN_EMBEDDING_BASE_URL`, `DROID_BRAIN_EMBEDDING_API_KEY`, `DROID_BRAIN_EMBEDDING_MODEL`,
-and `DROID_BRAIN_EMBEDDING_DIM`.
+HTTP accepts one optional static bearer token, checked uniformly on every HTTP
+request. Stdio trusts the local process/user. `--read-only` removes both write
+tools for a whole endpoint; it does not establish identities, claims, or
+resource-specific permissions.
 
-Changing the embedding dimension (e.g., switching from the local 384-D model to a 512-D API
-provider) requires rebuilding the index: `droid-brain index --reembed` on SQLite, or a full
-`droid-brain index --reembed` on OpenSearch after recreating the index.
+Caller-selected `doc_types` only scopes a query. Prompts, `tenant_id`,
+`visibility`, and ACL-like fields are ordinary data and do not enforce access.
+OpenSearch credentials protect backend connectivity, not Droid Brain caller
+authorization. Current Droid Brain has no principal or claims model,
+tenant/workspace boundary, ACL, RBAC/ABAC, policy filtering, write ownership,
+relationship-leak prevention, or authorization audit capability.
 
-**Re-embedding** — the reserved field `embedding` stores the per-entity vector. If you enable
-semantic search on an existing index, run `droid-brain index --reembed` to backfill vectors.
+A real policy would need one consistently enforced decision before exact gets;
+keyword, vector, and hybrid ranking; counts and navigation; relationship
+traversal; connector writes; doc types and schemas; embeddings and indexes;
+exports; and backups. Those controls are not present today; see the
+[roadmap](./ROADMAP.md#policy-aware-authorization-and-data-segregation).
 
-**SQLite semantic ceiling** — the SQLite backend performs a brute-force cosine scan over the
-entities in scope. This is fine up to roughly **10,000 entities**; for larger brains, switch to
-the OpenSearch backend or a future `sqlite-vec` integration.
+## Current trust-boundary deployment pattern
 
-_Not yet implemented (declarable seams exist): type-level & temporal boosters._
+For a local agent, use the stdio process boundary. HTTP `serve` binds to
+`0.0.0.0` by default and is writable by default, so set a token and put it
+behind your own network/TLS controls before any network use.
+
+For each trust boundary, use a separate brain directory, SQLite database or
+OpenSearch backend/index, process, endpoint/port, and token. Separate
+read-only and read/write endpoints and tokens; use least-privileged process and
+backend identities. An external gateway or network layer can provide TLS,
+network restrictions, token rotation, and request auditing; back up each
+boundary separately.
+
+Install HTTP serving only when using it, and install OpenSearch only when
+configuring that backend:
+
+```bash
+python -m pip install '.[serve]'
+# only for a configured OpenSearch brain:
+python -m pip install '.[opensearch]'
+
+# Bind locally for an external gateway. Required-variable expansion prevents
+# an unset token from silently starting an unauthenticated endpoint.
+DROID_BRAIN_TOKEN="${WORKSPACE_A_READ_TOKEN:?must be set}" \
+  droid-brain serve --brain /srv/droid-brain/workspace-a --host 127.0.0.1 --port 8101 --read-only
+DROID_BRAIN_TOKEN="${WORKSPACE_A_WRITE_TOKEN:?must be set}" \
+  droid-brain serve --brain /srv/droid-brain/workspace-a --host 127.0.0.1 --port 8102
+DROID_BRAIN_TOKEN="${WORKSPACE_B_READ_TOKEN:?must be set}" \
+  droid-brain serve --brain /srv/droid-brain/workspace-b --host 127.0.0.1 --port 8201 --read-only
+```
+
+This is coarse physical/deployment segregation, **not** in-brain authorization
+or multi-tenant policy enforcement. Do not route distinct trust boundaries to
+the same brain or backend/index and treat caller-controlled metadata as a
+security boundary.
+
+## Benchmarks and known limits
+
+Tests cover current behavior, but there is no standardized published
+quality, latency, throughput, or capacity benchmark. The 500/10,000 search
+caps above are code caps, not performance or recall guarantees. For unshipped
+lifecycle, policy, vector-indexing, provenance, conflict, and benchmark work,
+see the [roadmap](./ROADMAP.md).
+
+## Examples, documentation, and project links
+
+- [Support example](./examples/support-brain): products, issues, user segments, and comments.
+- [Infrastructure example](./examples/infra-brain): services, datastores, dashboards, runbooks, and periodically refreshed alerts.
+- [Personal example](./examples/personal-brain): areas, goals, projects, people, and notes.
+- [Cloud example](./examples/cloud-brain): Kubernetes-style infrastructure entities populated by a connector.
+- [Cookbooks](./cookbooks.md) for runnable patterns and limits.
+- [Entity management](./entity-management.md) for source-of-truth, replacement, provenance, and refresh semantics.
+- [Roadmap](./ROADMAP.md) for future work only.
+- [Contributing](./CONTRIBUTING.md) for contributor/CI setup and validation.
+- [MIT License](./LICENSE).

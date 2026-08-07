@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "droid-brain"
 version = "0.1.0"
-description = "Build and query a continuously-improving, domain-agnostic context graph about your company."
+description = "An open context graph and memory layer for AI agents."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
@@ -24,7 +24,7 @@ ui = [
 mcp = [
     "mcp>=1.2",
 ]
-# Production: OpenSearch backend for a shared, networked, multi-writer brain.
+# Optional OpenSearch backend for shared, networked access.
 opensearch = [
     "opensearch-py>=2.4",
 ]
