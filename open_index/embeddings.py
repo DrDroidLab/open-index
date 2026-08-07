@@ -3,10 +3,10 @@
 The default is a local ONNX model via `fastembed` (BAAI/bge-small-en-v1.5, 384-D).
 An OpenAI-compatible API can be configured via environment variables:
 
-    DROID_BRAIN_EMBEDDING_BASE_URL
-    DROID_BRAIN_EMBEDDING_API_KEY
-    DROID_BRAIN_EMBEDDING_MODEL
-    DROID_BRAIN_EMBEDDING_DIM
+    OPEN_INDEX_EMBEDDING_BASE_URL
+    OPEN_INDEX_EMBEDDING_API_KEY
+    OPEN_INDEX_EMBEDDING_MODEL
+    OPEN_INDEX_EMBEDDING_DIM
 
 Everything is optional: if no provider is configured, the backends fall back to
 keyword-only search and log a one-time warning.
@@ -20,7 +20,7 @@ import math
 import os
 from typing import Optional, Protocol, runtime_checkable
 
-logger = logging.getLogger("droid_brain.embeddings")
+logger = logging.getLogger("open_index.embeddings")
 _warned_once = False
 
 
@@ -60,7 +60,7 @@ class FastEmbedProvider:
             from fastembed import TextEmbedding
         except ImportError as exc:  # pragma: no cover - optional dependency
             raise ImportError(
-                "fastembed is not installed; install 'droid-brain[semantic]'"
+                "fastembed is not installed; install 'open-index[semantic]'"
             ) from exc
         self.model = model
         self._dim = dim or 384
@@ -247,13 +247,13 @@ def embedding_provider_available() -> bool:
     Does not load any model. Used by the UI to warn before the user picks
     Semantic mode in an environment without embeddings.
     """
-    if os.environ.get("DROID_BRAIN_EMBEDDING_BASE_URL"):
+    if os.environ.get("OPEN_INDEX_EMBEDDING_BASE_URL"):
         return all(
             os.environ.get(v)
             for v in (
-                "DROID_BRAIN_EMBEDDING_API_KEY",
-                "DROID_BRAIN_EMBEDDING_MODEL",
-                "DROID_BRAIN_EMBEDDING_DIM",
+                "OPEN_INDEX_EMBEDDING_API_KEY",
+                "OPEN_INDEX_EMBEDDING_MODEL",
+                "OPEN_INDEX_EMBEDDING_DIM",
             )
         )
     import importlib.util
@@ -271,10 +271,10 @@ def get_embedding_provider(config) -> Optional[EmbeddingProvider]:
     multiple backends — e.g. both engines behind the UI's engine toggle —
     share a single loaded model.
     """
-    base_url = os.environ.get("DROID_BRAIN_EMBEDDING_BASE_URL")
-    api_key = os.environ.get("DROID_BRAIN_EMBEDDING_API_KEY")
-    model = os.environ.get("DROID_BRAIN_EMBEDDING_MODEL")
-    dim = os.environ.get("DROID_BRAIN_EMBEDDING_DIM")
+    base_url = os.environ.get("OPEN_INDEX_EMBEDDING_BASE_URL")
+    api_key = os.environ.get("OPEN_INDEX_EMBEDDING_API_KEY")
+    model = os.environ.get("OPEN_INDEX_EMBEDDING_MODEL")
+    dim = os.environ.get("OPEN_INDEX_EMBEDDING_DIM")
     local_model = (config.search.embedding_model if config else None) or "BAAI/bge-small-en-v1.5"
     key = (base_url, api_key, model, dim, None if base_url else local_model)
     if key in _provider_cache:
@@ -284,7 +284,7 @@ def get_embedding_provider(config) -> Optional[EmbeddingProvider]:
     if base_url:
         if not (api_key and model and dim):
             _warn_once(
-                "DROID_BRAIN_EMBEDDING_BASE_URL is set but one of API_KEY/MODEL/DIM is missing; "
+                "OPEN_INDEX_EMBEDDING_BASE_URL is set but one of API_KEY/MODEL/DIM is missing; "
                 "semantic search is disabled."
             )
         else:
@@ -298,7 +298,7 @@ def get_embedding_provider(config) -> Optional[EmbeddingProvider]:
         except ImportError:
             _warn_once(
                 "fastembed is not installed; semantic search is disabled. "
-                "Install 'droid-brain[semantic]' to enable it."
+                "Install 'open-index[semantic]' to enable it."
             )
         else:
             try:

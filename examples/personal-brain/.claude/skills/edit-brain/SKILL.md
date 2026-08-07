@@ -1,20 +1,20 @@
 ---
 name: edit-brain
 description: >-
-  How to add or edit knowledge in this droid-brain — define doc_types, add or
+  How to add or edit knowledge in this brain — define doc_types, add or
   update entities, and correlate them with relationships. Use whenever the user
   asks to add/update knowledge, define a concept, record a learning, or link two
   things in the brain.
 ---
 
-# Editing this droid-brain
+# Editing this brain
 
-This repo is a droid-brain (a context graph). You can edit it two equivalent ways
+This repo is a **brain** (a context graph built with Open Index). You can edit it two equivalent ways
 — both land in the same validated store, so pick whichever fits:
 
-- **Over MCP** (server `droid-brain`): `create_doc_type`, `put_entity`. Preferred
+- **Over MCP** (server `open-index`): `create_doc_type`, `put_entity`. Preferred
   when the server is connected.
-- **By editing files** then running `droid-brain index` and `droid-brain validate`.
+- **By editing files** then running `open-index index` and `open-index validate`.
 
 ## Always start here
 Call `navigation_guidelines()` (MCP) or read `doc_types/*.yaml`. It tells you which
@@ -45,5 +45,5 @@ relationships:            # declare the edges this type uses, so they're discove
 ```
 
 ## After editing files
-Run `droid-brain index` (loads file-backed entities) then `droid-brain validate`.
+Run `open-index index` (loads file-backed entities) then `open-index validate`.
 Fix any reported errors (bad ids, wrong relationship target types) before finishing.

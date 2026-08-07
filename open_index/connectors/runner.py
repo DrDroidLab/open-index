@@ -16,10 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from droid_brain.brain import Brain
-from droid_brain.connectors.base import Connector
-from droid_brain.connectors.mcp_client import McpClient
-from droid_brain.scheduling import RunState, is_due, utcnow
+from open_index.brain import Brain
+from open_index.connectors.base import Connector
+from open_index.connectors.mcp_client import McpClient
+from open_index.scheduling import RunState, is_due, utcnow
 
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -66,7 +66,7 @@ def discover_connectors(brain: Brain) -> dict[str, type[Connector]]:
 def _load_module(path: Path):
     import sys
 
-    name = f"droid_brain_connector_{path.stem}"
+    name = f"open_index_connector_{path.stem}"
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader

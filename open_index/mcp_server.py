@@ -11,7 +11,7 @@ Write (grow the brain — this is what makes it continuously improving):
     put_entity(...) — add/update an entity (validated, persisted to disk).
     create_doc_type(...) — define a new concept.
 
-Run with `droid-brain mcp --brain <dir>`; speaks MCP over stdio, so an agent like
+Run with `open-index mcp --brain <dir>`; speaks MCP over stdio, so an agent like
 Claude Code can both read context from the brain and write learnings back to it
 through the same connection.
 """
@@ -21,9 +21,9 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from droid_brain.brain import Brain
-from droid_brain.models import Entity, Relationship
-from droid_brain.schema import DocType, DocTypeDisplay, FieldSpec
+from open_index.brain import Brain
+from open_index.models import Entity, Relationship
+from open_index.schema import DocType, DocTypeDisplay, FieldSpec
 
 
 def _load_server_class():
@@ -45,7 +45,7 @@ def _load_server_class():
         return FastMCP
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise SystemExit(
-            "the MCP server needs the 'mcp' package: pip install 'droid-brain[mcp]'"
+            "the MCP server needs the 'mcp' package: pip install 'open-index[mcp]'"
         ) from exc
 
 
@@ -58,7 +58,7 @@ def build_server(brain: Brain, read_only: bool = False):
     authenticated read+write endpoint for writers."""
     server_cls = _load_server_class()
     suffix = " (read-only)" if read_only else ""
-    server = server_cls(f"droid-brain:{brain.config.name}{suffix}")
+    server = server_cls(f"open-index:{brain.config.name}{suffix}")
 
     # ---- read ------------------------------------------------------------- #
 
@@ -227,7 +227,7 @@ def serve_http(
         import uvicorn
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise SystemExit(
-            "the HTTP endpoint needs uvicorn: pip install 'droid-brain[serve]'"
+            "the HTTP endpoint needs uvicorn: pip install 'open-index[serve]'"
         ) from exc
 
     brain = Brain.open(brain_dir)
@@ -239,7 +239,7 @@ def serve_http(
         import sys
         print(
             "WARNING: serving with no --token; the writable endpoint is unauthenticated. "
-            "Set DROID_BRAIN_TOKEN or --token for anything networked.",
+            "Set OPEN_INDEX_TOKEN or --token for anything networked.",
             file=sys.stderr,
         )
     uvicorn.run(app, host=host, port=port)

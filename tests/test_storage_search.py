@@ -45,7 +45,7 @@ def test_empty_query_lists_everything(brain):
 
 def test_per_field_weight_is_exact(brain):
     """A term hit in a boost:6 field scores 6× the same hit in a boost:1 field."""
-    from droid_brain.models import Entity
+    from open_index.models import Entity
 
     # 'zephyr' appears once in the name (boost 6) of one issue...
     brain.put_entity(Entity.from_dict({

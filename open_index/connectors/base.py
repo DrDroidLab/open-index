@@ -31,8 +31,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
-from droid_brain.connectors.mcp_client import McpClient, extract_json
-from droid_brain.models import Entity, Relationship
+from open_index.connectors.mcp_client import McpClient, extract_json
+from open_index.models import Entity, Relationship
 
 
 @dataclass
@@ -62,14 +62,14 @@ class EntitySpec:
 class Connector:
     """Base class for ingestion scripts."""
 
-    # Human-readable connector name (used by `droid-brain ingest <name>`).
+    # Human-readable connector name (used by `open-index ingest <name>`).
     name: str = "connector"
     # If set, the runner opens an McpClient to this URL and assigns self.mcp.
     # May reference env vars: "${MY_MCP_URL}".
     mcp_url: Optional[str] = None
     # Auth headers for the MCP server, e.g. {"Authorization": "Bearer ${TOKEN}"}.
     mcp_auth_headers: Optional[dict[str, str]] = None
-    # When `droid-brain run` should auto-run this connector: "manual" (default),
+    # When `open-index run` should auto-run this connector: "manual" (default),
     # "hourly"/"daily"/"weekly", or an interval like "6h"/"30m"/"1d"/"1w".
     schedule: str = "manual"
 

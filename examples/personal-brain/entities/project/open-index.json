@@ -1,7 +1,7 @@
 {
   "doc_type": "project",
-  "id": "project:droid-brain",
-  "name": "droid-brain",
+  "id": "project:open-index",
+  "name": "open-index",
   "description": "An open-source context-graph tool — the side project.",
   "status": "active",
   "related_to": [

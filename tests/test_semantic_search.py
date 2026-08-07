@@ -10,12 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from droid_brain.brain import Brain
-from droid_brain.config import load_brain_config
-from droid_brain.embeddings import FakeEmbedProvider
-from droid_brain.models import Entity
-from droid_brain.schema import DocType, FieldSpec
-from droid_brain.storage import get_backend
+from open_index.brain import Brain
+from open_index.config import load_brain_config
+from open_index.embeddings import FakeEmbedProvider
+from open_index.models import Entity
+from open_index.schema import DocType, FieldSpec
+from open_index.storage import get_backend
 
 SUPPORT = Path(__file__).resolve().parent.parent / "examples" / "support-brain"
 
@@ -71,7 +71,7 @@ def test_degrades_gracefully_without_provider(tmp_path, caplog):
     brain.backend._embedding_provider_initialized = True
     brain.backend._warned_no_provider = False
 
-    with caplog.at_level("WARNING", logger="droid_brain.storage.sqlite"):
+    with caplog.at_level("WARNING", logger="open_index.storage.sqlite"):
         res = brain.search("card authentication broken", doc_types=["issue"], limit=10)
 
     assert res.results is not None
@@ -107,7 +107,7 @@ def test_storage_policy_preserved_after_index_and_reembed(tmp_path):
 
 def test_sqlite_backfill_on_open(tmp_path, monkeypatch):
     """Opening a brain with a provider backfills embeddings when the table is empty."""
-    import droid_brain.embeddings as _emb
+    import open_index.embeddings as _emb
 
     dst = tmp_path / "support"
     shutil.copytree(SUPPORT, dst)
@@ -142,16 +142,16 @@ def test_fake_embedder_is_deterministic():
     # Synonymous phrases should be closer than unrelated ones.
     gold = p.encode(["Shoppers see their payment authorization rejected at the bank"])[0]
     unrelated = p.encode(["the quick brown fox jumps over the lazy dog"])[0]
-    from droid_brain.embeddings import cosine_similarity
+    from open_index.embeddings import cosine_similarity
 
     assert cosine_similarity(v1, gold) > cosine_similarity(v1, unrelated)
 
 
 def test_backfill_only_semantic_doc_types(tmp_path, monkeypatch):
     """The backfill guard counts only semantic doc_types, not all entities."""
-    import droid_brain.embeddings as _emb
+    import open_index.embeddings as _emb
 
-    from droid_brain.storage.base import semantic_doc_types
+    from open_index.storage.base import semantic_doc_types
 
     dst = tmp_path / "support"
     shutil.copytree(SUPPORT, dst)
@@ -191,7 +191,7 @@ def test_backfill_only_semantic_doc_types(tmp_path, monkeypatch):
 
 def test_dimension_mismatch_warns_and_skips(tmp_path, monkeypatch, caplog):
     """SQLite warns once when stored embedding dimensions don't match the provider."""
-    import droid_brain.embeddings as _emb
+    import open_index.embeddings as _emb
     import struct
 
     dst = tmp_path / "support"
@@ -208,10 +208,10 @@ def test_dimension_mismatch_warns_and_skips(tmp_path, monkeypatch, caplog):
     brain.backend._conn.commit()
 
     brain.backend._embedding_provider = FakeEmbedProvider(dim=32)
-    with caplog.at_level("WARNING", logger="droid_brain.storage.sqlite"):
+    with caplog.at_level("WARNING", logger="open_index.storage.sqlite"):
         brain.search("payment", doc_types=["issue"], limit=10)
 
-    assert any("droid-brain index --reembed" in m.lower() for m in caplog.messages)
+    assert any("open-index index --reembed" in m.lower() for m in caplog.messages)
 
 
 def test_keyword_mode_never_constructs_provider(tmp_path):

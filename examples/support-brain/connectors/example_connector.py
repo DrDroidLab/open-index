@@ -5,7 +5,7 @@ server's tools — distilled to the smallest useful shape. Point `mcp_url` at an
 MCP server that exposes a tool returning issue-like records, set the tool name
 and field mapping, and run:
 
-    droid-brain ingest example-issues --brain examples/support-brain
+    open-index ingest example-issues --brain examples/support-brain
 
 Because most people won't have a live MCP server handy, `extract_issues_demo`
 also shows the pattern working against in-memory sample data (no network), so
@@ -14,7 +14,7 @@ also shows the pattern working against in-memory sample data (no network), so
 
 from __future__ import annotations
 
-from droid_brain.connectors import Connector, EntitySpec
+from open_index.connectors import Connector, EntitySpec
 
 
 class ExampleIssuesConnector(Connector):
@@ -23,7 +23,7 @@ class ExampleIssuesConnector(Connector):
     # Point this at a real MCP server to use extract_issues (below).
     mcp_url = None  # e.g. "https://my-mcp-server.example.com/mcp"
     mcp_auth_headers = None  # e.g. {"Authorization": "Bearer ${MY_TOKEN}"}
-    schedule = "daily"  # `droid-brain run` triggers it when due; "manual" to disable
+    schedule = "daily"  # `open-index run` triggers it when due; "manual" to disable
 
     #: Which MCP tool returns issues, and how its fields map onto our schema.
     tool_name = "list_issues"

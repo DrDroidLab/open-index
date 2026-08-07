@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "droid-brain"
+name = "open-index"
 version = "0.1.0"
 description = "Build and query a continuously-improving, domain-agnostic context graph about your company."
 readme = "README.md"
@@ -28,7 +28,7 @@ mcp = [
 opensearch = [
     "opensearch-py>=2.4",
 ]
-# Deployable HTTP MCP endpoint (droid-brain serve).
+# Deployable HTTP MCP endpoint (open-index serve).
 serve = [
     "mcp>=1.2",
     "uvicorn>=0.30",
@@ -55,10 +55,10 @@ all = [
 ]
 
 [project.scripts]
-droid-brain = "droid_brain.cli:app"
+open-index = "open_index.cli:app"
 
 [tool.setuptools.packages.find]
-include = ["droid_brain*"]
+include = ["open_index*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

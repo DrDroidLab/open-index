@@ -6,11 +6,11 @@ server (PagerDuty, Grafana, Opsgenie…) and map firings to `alert` entities lin
 to the service they fire on. The offline demo below lets `run`/`ingest` work with
 no server so you can see it end-to-end.
 
-    droid-brain ingest infra-alerts --brain examples/infra-brain
-    droid-brain run --brain examples/infra-brain      # runs it when the schedule is due
+    open-index ingest infra-alerts --brain examples/infra-brain
+    open-index run --brain examples/infra-brain      # runs it when the schedule is due
 """
 
-from droid_brain.connectors import Connector, EntitySpec
+from open_index.connectors import Connector, EntitySpec
 
 
 class InfraAlertsConnector(Connector):

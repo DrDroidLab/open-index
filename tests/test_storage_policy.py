@@ -1,8 +1,8 @@
 """The file|index storage policy: where a doc_type's entities live."""
 
-from droid_brain.brain import Brain
-from droid_brain.models import Entity
-from droid_brain.schema import DocType, FieldSpec
+from open_index.brain import Brain
+from open_index.models import Entity
+from open_index.schema import DocType, FieldSpec
 
 
 def _add_index_doc_type(brain):

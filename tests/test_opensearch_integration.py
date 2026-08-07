@@ -12,11 +12,11 @@ import shutil
 
 import pytest
 
-from droid_brain.brain import Brain
-from droid_brain.config import load_brain_config
-from droid_brain.embeddings import FakeEmbedProvider
-from droid_brain.models import Entity
-from droid_brain.storage import get_backend
+from open_index.brain import Brain
+from open_index.config import load_brain_config
+from open_index.embeddings import FakeEmbedProvider
+from open_index.models import Entity
+from open_index.storage import get_backend
 
 OS_URL = os.environ.get("OPENSEARCH_URL")
 pytestmark = pytest.mark.skipif(not OS_URL, reason="set OPENSEARCH_URL to run")
@@ -31,7 +31,7 @@ def os_brain(tmp_path):
     cfg = load_brain_config(dst)
     cfg.search.backend = "opensearch"
     cfg.search.hosts = [OS_URL]
-    cfg.search.index = f"droid_brain_test_{os.getpid()}"
+    cfg.search.index = f"open_index_test_{os.getpid()}"
 
     backend = get_backend(cfg)
     brain = Brain(cfg, backend=backend)
@@ -61,7 +61,7 @@ def test_unreachable_cluster_gives_clean_error(os_brain):
     # actionable message, not a raw ConnectionError traceback.
     import pytest as _pytest
 
-    from droid_brain.storage.opensearch_backend import OpenSearchBackend
+    from open_index.storage.opensearch_backend import OpenSearchBackend
 
     cfg = os_brain.config
     cfg.search.hosts = ["http://localhost:9999"]
@@ -89,7 +89,7 @@ def test_fuzzy_match(os_brain):
 
 
 def test_storage_policy_preserved_on_reindex(os_brain):
-    from droid_brain.connectors.runner import ingest
+    from open_index.connectors.runner import ingest
 
     ingest(os_brain, "infra-alerts")           # index-backed alerts
     assert os_brain.get_entity("alert:checkout-5xx") is not None
@@ -106,7 +106,7 @@ def os_brain_semantic(tmp_path):
     cfg = load_brain_config(dst)
     cfg.search.backend = "opensearch"
     cfg.search.hosts = [OS_URL]
-    cfg.search.index = f"droid_brain_sem_test_{os.getpid()}"
+    cfg.search.index = f"open_index_sem_test_{os.getpid()}"
     backend = get_backend(cfg)
     backend._embedding_provider = FakeEmbedProvider(dim=32)
     brain = Brain(cfg, backend=backend)
@@ -145,7 +145,7 @@ def test_semantic_knn_migration_on_existing_index(tmp_path):
     cfg = load_brain_config(dst)
     cfg.search.backend = "opensearch"
     cfg.search.hosts = [OS_URL]
-    cfg.search.index = f"droid_brain_migrate_test_{os.getpid()}"
+    cfg.search.index = f"open_index_migrate_test_{os.getpid()}"
 
     backend = get_backend(cfg)
     backend._embedding_provider = None
@@ -172,7 +172,7 @@ def test_degrades_without_provider_os(os_brain_semantic, caplog):
     backend._embedding_provider = None
     backend._embedding_provider_initialized = True
     backend._warned_no_provider = False
-    with caplog.at_level("WARNING", logger="droid_brain.storage.opensearch"):
+    with caplog.at_level("WARNING", logger="open_index.storage.opensearch"):
         res = os_brain_semantic.search("card authentication broken", doc_types=["issue"])
     assert res.results is not None
     assert res.total >= 0

@@ -4,7 +4,7 @@ total). Ephemeral pods are deliberately NOT served: they churn and aren't
 knowledge worth keeping (see entity-management.md). No SDK, no external deps.
 
     python examples/cloud-brain/tools_server.py 9920      # then, in another shell:
-    CLOUD_MCP_URL=http://127.0.0.1:9920 droid-brain ingest k8s --brain examples/cloud-brain
+    CLOUD_MCP_URL=http://127.0.0.1:9920 open-index ingest k8s --brain examples/cloud-brain
 """
 import json
 import sys

@@ -1,4 +1,4 @@
-from droid_brain.connectors.runner import _resolve_env, run_due
+from open_index.connectors.runner import _resolve_env, run_due
 
 
 def test_resolve_env_string(monkeypatch):

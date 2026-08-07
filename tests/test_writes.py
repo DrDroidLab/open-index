@@ -1,7 +1,7 @@
 import json
 
-from droid_brain.models import Entity
-from droid_brain.schema import DocType, DocTypeDisplay, FieldSpec
+from open_index.models import Entity
+from open_index.schema import DocType, DocTypeDisplay, FieldSpec
 
 
 def test_put_entity_persists_file_and_indexes(brain):
@@ -50,7 +50,7 @@ def test_create_doc_type_writes_yaml_and_registers(brain):
     assert brain.get_entity("incident:i1") is not None
 
     # reloading the brain from disk sees the persisted doc_type
-    from droid_brain.brain import Brain
+    from open_index.brain import Brain
     reopened = Brain.open(brain.config.root)
     assert "incident" in reopened.config.doc_types
 
@@ -65,7 +65,7 @@ def test_create_doc_type_duplicate_rejected(brain):
 
 
 def test_init_scaffolds_agent_skill(tmp_path):
-    from droid_brain.scaffold import init_brain
+    from open_index.scaffold import init_brain
 
     init_brain(tmp_path / "b", "b")
     skill = tmp_path / "b" / ".claude" / "skills" / "edit-brain" / "SKILL.md"

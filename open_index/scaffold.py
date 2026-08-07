@@ -1,4 +1,4 @@
-"""Templates for `droid-brain init` / `add-doc-type` — the minimal-friction path.
+"""Templates for `open-index init` / `add-doc-type` — the minimal-friction path.
 
 `init` drops a runnable brain (config + one example doc_type + one entity) so a
 new user goes from zero to a queryable map with a single command.
@@ -10,7 +10,7 @@ from pathlib import Path
 
 BRAIN_YAML = """\
 name: {name}
-description: A context graph built with droid-brain.
+description: A context graph built with open-index.
 
 storage:
   backend: sqlite
@@ -58,7 +58,7 @@ EXAMPLE_ENTITY = """\
   "doc_type": "note",
   "id": "note:welcome",
   "name": "Welcome",
-  "description": "Your first entity. Add more under entities/ and run `droid-brain index`.",
+  "description": "Your first entity. Add more under entities/ and run `open-index index`.",
   "related_to": []
 }
 """
@@ -79,8 +79,8 @@ def color_for_index(i: int) -> str:
 MCP_JSON = """\
 {
   "mcpServers": {
-    "droid-brain": {
-      "command": "droid-brain",
+    "open-index": {
+      "command": "open-index",
       "args": ["mcp", "--brain", "."]
     }
   }
@@ -89,12 +89,12 @@ MCP_JSON = """\
 
 # CLAUDE.md — teaches the agent the model + workflows so you can just talk to it.
 CLAUDE_MD = """\
-# {name} — a droid-brain context graph
+# {name} — a brain built with Open Index
 
-This repository is a **droid-brain**: a domain-agnostic context graph about our
+This repository is a **brain**: a domain-agnostic context graph about our
 organisation. You (the agent) can both **read** it (for context during work) and
 **write** to it (to record new knowledge). It is also wired to you as an MCP
-server named `droid-brain` — prefer those tools; the files here are the source of
+server named `open-index` — prefer those tools; the files here are the source of
 truth behind them.
 
 ## Model
@@ -130,8 +130,8 @@ Each doc_type declares where its entities live:
 - **Add entities:** write `entities/<doc_type>/<slug>.json`, or call `put_entity`.
   Always set meaningful `related_to` edges — the graph is the point.
 - **Pull from a tool:** add a connector in `connectors/<name>.py` (see
-  `connectors/example_connector.py`), then `droid-brain ingest <name>`.
-- **After editing files by hand:** run `droid-brain index` then `droid-brain validate`.
+  `connectors/example_connector.py`), then `open-index ingest <name>`.
+- **After editing files by hand:** run `open-index index` then `open-index validate`.
 
 ## Keeping the brain improving
 Record durable learnings as entities (e.g. a `memory` or `runbook` doc_type) via
@@ -144,7 +144,7 @@ reflection hook in `hooks/` to do this automatically after sessions.
 # define; the point is to show where the write-back flywheel plugs in.
 REFLECT_HOOK = """\
 #!/usr/bin/env bash
-# Example droid-brain reflection hook (Pattern A: agent writes back).
+# Example open-index reflection hook (Pattern A: agent writes back).
 #
 # Enable by adding to .claude/settings.json:
 #   {{ "hooks": {{ "Stop": [ {{ "hooks": [ {{ "type": "command",
@@ -154,19 +154,19 @@ REFLECT_HOOK = """\
 # e.g. invoke an agent that summarizes the session and calls the brain's MCP
 # `put_entity` tool to store a `memory`/`runbook` entity. Keep it cheap; run it
 # every few sessions, not every turn.
-echo "[droid-brain] reflection hook fired — wire up put_entity to capture learnings." >&2
+echo "[open-index] reflection hook fired — wire up put_entity to capture learnings." >&2
 """
 
 EXAMPLE_SCHEDULED_CONNECTOR = '''\
 """Example scheduled connector.
 
 Point `mcp_url` at a real MCP server, set `schedule`, then let it run via:
-    droid-brain ingest example-connector      # run now
-    droid-brain run                            # run if its schedule is due
-Wire `droid-brain run` into system cron / CI / `droid-brain run --loop`.
+    open-index ingest example-connector      # run now
+    open-index run                            # run if its schedule is due
+Wire `open-index run` into system cron / CI / `open-index run --loop`.
 """
 
-from droid_brain.connectors import Connector, EntitySpec
+from open_index.connectors import Connector, EntitySpec
 
 
 class ExampleConnector(Connector):
@@ -193,20 +193,20 @@ SKILL_MD = """\
 ---
 name: edit-brain
 description: >-
-  How to add or edit knowledge in this droid-brain — define doc_types, add or
+  How to add or edit knowledge in this brain — define doc_types, add or
   update entities, and correlate them with relationships. Use whenever the user
   asks to add/update knowledge, define a concept, record a learning, or link two
   things in the brain.
 ---
 
-# Editing this droid-brain
+# Editing this brain
 
-This repo is a droid-brain (a context graph). You can edit it two equivalent ways
+This repo is a **brain** (a context graph built with Open Index). You can edit it two equivalent ways
 — both land in the same validated store, so pick whichever fits:
 
-- **Over MCP** (server `droid-brain`): `create_doc_type`, `put_entity`. Preferred
+- **Over MCP** (server `open-index`): `create_doc_type`, `put_entity`. Preferred
   when the server is connected.
-- **By editing files** then running `droid-brain index` and `droid-brain validate`.
+- **By editing files** then running `open-index index` and `open-index validate`.
 
 ## Always start here
 Call `navigation_guidelines()` (MCP) or read `doc_types/*.yaml`. It tells you which
@@ -237,7 +237,7 @@ relationships:            # declare the edges this type uses, so they're discove
 ```
 
 ## After editing files
-Run `droid-brain index` (loads file-backed entities) then `droid-brain validate`.
+Run `open-index index` (loads file-backed entities) then `open-index validate`.
 Fix any reported errors (bad ids, wrong relationship target types) before finishing.
 """
 
@@ -245,7 +245,7 @@ GITIGNORE = """\
 brain.db
 brain.db-journal
 brain.db-wal
-.droid_brain_state.json
+.open_index_state.json
 """
 
 

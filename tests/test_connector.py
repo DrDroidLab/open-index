@@ -1,5 +1,5 @@
-from droid_brain.connectors.base import Connector, EntitySpec
-from droid_brain.connectors.runner import discover_connectors, run_connector
+from open_index.connectors.base import Connector, EntitySpec
+from open_index.connectors.runner import discover_connectors, run_connector
 
 
 def test_extractor_discovery():

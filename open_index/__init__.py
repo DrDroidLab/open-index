@@ -1,13 +1,13 @@
-"""Droid Brain — a domain-agnostic context graph for your company.
+"""Open Index — a domain-agnostic context graph for your company.
 
 Public surface:
     Brain            — the top-level handle; open a brain directory and query it.
     Entity, Relationship, DocType, FieldSpec — the data model.
 """
 
-from droid_brain.models import Entity, Relationship
-from droid_brain.schema import DocType, FieldSpec
-from droid_brain.brain import Brain
+from open_index.models import Entity, Relationship
+from open_index.schema import DocType, FieldSpec
+from open_index.brain import Brain
 
 __version__ = "0.1.0"
 

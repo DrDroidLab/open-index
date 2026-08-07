@@ -1,4 +1,4 @@
-from droid_brain.graph import build_graph
+from open_index.graph import build_graph
 
 
 def test_depth_one_reaches_direct_neighbors(brain):
