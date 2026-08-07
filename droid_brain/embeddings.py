@@ -241,6 +241,19 @@ class FakeEmbedProvider:
         return vectors
 
 
+def embedding_provider_available() -> bool:
+    """Cheap check for whether any embedding provider could be constructed.
+
+    Does not load any model. Used by the UI to warn before the user picks
+    Semantic mode in an environment without embeddings.
+    """
+    if os.environ.get("DROID_BRAIN_EMBEDDING_BASE_URL"):
+        return bool(os.environ.get("DROID_BRAIN_EMBEDDING_MODEL"))
+    import importlib.util
+
+    return importlib.util.find_spec("fastembed") is not None
+
+
 def get_embedding_provider(config) -> Optional[EmbeddingProvider]:
     """Return the configured embedding provider, or None if not available."""
     base_url = os.environ.get("DROID_BRAIN_EMBEDDING_BASE_URL")

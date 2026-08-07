@@ -212,3 +212,51 @@ def test_dimension_mismatch_warns_and_skips(tmp_path, monkeypatch, caplog):
         brain.search("payment", doc_types=["issue"], limit=10)
 
     assert any("droid-brain index --reembed" in m.lower() for m in caplog.messages)
+
+
+def test_keyword_mode_never_constructs_provider(tmp_path):
+    """semantic_weight=0.0 (Keyword mode) must not even lazily build the provider
+    — the zero-config promise: pure-keyword users never pay for the model.
+    (index() DOES embed when a provider exists — that's by design — so reset
+    the lazy-init flags after indexing and prove search stays keyword-only.)"""
+    dst = tmp_path / "support"
+    shutil.copytree(SUPPORT, dst)
+    cfg = load_brain_config(dst)
+    backend = get_backend(cfg)
+    brain = Brain(cfg, backend=backend)
+    brain.index()
+    backend._embedding_provider = None
+    backend._embedding_provider_initialized = False
+    res = brain.search("payment", doc_types=["issue"], semantic_weight=0.0)
+    assert res.total >= 1
+    assert backend._embedding_provider_initialized is False  # still untouched
+    # ...while a hybrid search on the same semantic brain does construct it
+    brain.search("payment", doc_types=["issue"])
+    assert backend._embedding_provider_initialized is True
+
+
+def test_semantic_only_mode_ordering(tmp_path):
+    """semantic_weight=1.0 ranks purely by embedding similarity."""
+    brain = _open_support_with_embeddings(tmp_path)
+    brain.put_entity(
+        Entity.from_dict(
+            {
+                "doc_type": "issue",
+                "id": "issue:gold-card-decline",
+                "name": "Payment Rejection Spike",
+                "description": "Shoppers see their payment authorization rejected at the bank step during purchase confirmation.",
+                "severity": "high",
+                "status": "open",
+            }
+        )
+    )
+    res = brain.search("credit card refused issuer", doc_types=["issue"], limit=10,
+                       semantic_weight=1.0)
+    assert res.results[0]["id"] == "issue:gold-card-decline"
+
+
+def test_weight_override_does_not_mutate_config(tmp_path):
+    """Per-call override is scoped to the call; the brain default is unchanged."""
+    brain = _open_support_with_embeddings(tmp_path)
+    brain.search("payment", doc_types=["issue"], semantic_weight=1.0)
+    assert brain.config.search.semantic_weight == 0.3

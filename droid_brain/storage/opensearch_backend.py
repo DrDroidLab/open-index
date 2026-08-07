@@ -481,11 +481,14 @@ class OpenSearchBackend:
     def search(
         self, query: Optional[str] = None, doc_types: Optional[list[str]] = None,
         limit: int = 20, counts_only: bool = False,
+        semantic_weight: Optional[float] = None,
     ) -> SearchResults:
         if counts_only or not query:
             return self._run_keyword_search(query, doc_types, limit, counts_only)
 
-        semantic_scope = semantic_fields_in_scope(self._doc_types, doc_types)
+        w = semantic_weight if semantic_weight is not None else (
+            self._config.search.semantic_weight if self._config else 0.3)
+        semantic_scope = w > 0 and semantic_fields_in_scope(self._doc_types, doc_types)
         provider = self._get_embedding_provider() if semantic_scope else None
         if provider is None:
             if semantic_scope:
@@ -516,13 +519,12 @@ class OpenSearchBackend:
 
         kw_max = max(kw_scores.values()) if kw_scores else 0.0
         sem_max = max(sem_scores.values()) if sem_scores else 0.0
-        semantic_weight = self._config.search.semantic_weight
 
         merged = []
         for eid, src in candidates.items():
             kw_norm = kw_scores.get(eid, 0.0) / kw_max if kw_max else 0.0
             sem_norm = sem_scores.get(eid, 0.0) / sem_max if sem_max else 0.0
-            score = (1 - semantic_weight) * kw_norm + semantic_weight * sem_norm
+            score = (1 - w) * kw_norm + w * sem_norm
             merged.append((score, src))
         merged.sort(key=lambda s: (-s[0], s[1].get("name", "")))
         picked = merged[:limit]

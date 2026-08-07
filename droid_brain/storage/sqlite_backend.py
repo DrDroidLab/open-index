@@ -411,7 +411,10 @@ class SQLiteBackend:
         doc_types: Optional[list[str]] = None,
         limit: int = 20,
         counts_only: bool = False,
+        semantic_weight: Optional[float] = None,
     ) -> SearchResults:
+        w = semantic_weight if semantic_weight is not None else (
+            self._config.search.semantic_weight if self._config else 0.3)
         params: list[Any] = []
         where: list[str] = []
 
@@ -442,7 +445,7 @@ class SQLiteBackend:
         if counts_only:
             return SearchResults(total=total, results=[], doc_type_counts=doc_type_counts)
 
-        semantic_scope = query and semantic_fields_in_scope(self._doc_types, doc_types)
+        semantic_scope = query and w > 0 and semantic_fields_in_scope(self._doc_types, doc_types)
         provider = self._get_embedding_provider() if semantic_scope else None
         if semantic_scope and provider is not None:
             # Brute-force semantic scan over entities in scope. This is the SQLite
@@ -500,14 +503,13 @@ class SQLiteBackend:
                 if sem > 0:
                     candidates.setdefault(r["id"], (kw, sem, r, data))
 
-            semantic_weight = self._config.search.semantic_weight
             final = []
             for kw, sem, r, data in candidates.values():
                 kw_norm = kw / kw_max if kw_max else 0.0
                 # (cos+1)/2 is already bounded to [0, 1]; keep it absolute so a
                 # weak best-match doesn't inflate the semantic arm.
                 sem_norm = sem if sem_max else 0.0
-                score = (1 - semantic_weight) * kw_norm + semantic_weight * sem_norm
+                score = (1 - w) * kw_norm + w * sem_norm
                 final.append((score, r, data))
             # Highest combined score first; stable by name for ties.
             final.sort(key=lambda s: (-s[0], s[1]["name"]))

@@ -113,7 +113,11 @@ class SearchBackend(Protocol):
         doc_types: Optional[list[str]] = None,
         limit: int = 20,
         counts_only: bool = False,
+        semantic_weight: Optional[float] = None,
     ) -> SearchResults:
+        """Search entities. `semantic_weight` overrides the config's
+        search.semantic_weight for this call: 0.0 = keyword-only,
+        1.0 = semantic-only, None = the brain's configured default."""
         ...
 
     def counts(self) -> dict[str, int]:

@@ -56,7 +56,9 @@ def render_graph(brain: Brain, graph: ContextGraph) -> None:
         width="100%",
         height=650,
         directed=True,
-        physics=True,
+        # Physics keeps large graphs drifting (and the canvas can stay blank
+        # while hundreds of nodes settle) — freeze the layout past ~150 nodes.
+        physics=len(graph.nodes) <= 150,
         hierarchical=False,
         collapsible=False,
     )
@@ -239,14 +241,26 @@ def render_search(brain: Brain) -> None:
         "Search", label_visibility="collapsed",
         placeholder="Search the brain…  e.g. payment, checkout, redis",
     )
+    mode = st.radio(
+        "Search mode", ["Hybrid", "Keyword", "Semantic"], horizontal=True,
+        help=("Hybrid (default): keyword matches dominate, semantic similarity "
+              "rescues differently-worded queries. Keyword: exact/fuzzy text "
+              "matching only. Semantic: embedding similarity only."),
+    )
+    weight_override = {"Hybrid": None, "Keyword": 0.0, "Semantic": 1.0}[mode]
+    if mode == "Semantic":
+        from droid_brain.embeddings import embedding_provider_available
+        if not embedding_provider_available():
+            st.warning("No embedding provider available — results are keyword-only. "
+                       "Install `droid-brain[semantic]` to enable semantic search.")
     e = st.session_state.get(f"{ns}_e")
     dt = st.session_state.get(f"{ns}_dt")
     if e:
         _explorer_entity(brain, ns, e, dt)
         return
     if query:
-        results = brain.search(query=query, limit=50)
-        st.caption(f"{results.total} result(s) · click one to open")
+        results = brain.search(query=query, limit=50, semantic_weight=weight_override)
+        st.caption(f"{results.total} result(s) · {mode.lower()} mode · click one to open")
         if not results.results:
             st.info("No matches.")
             return
@@ -288,7 +302,10 @@ def render_map(brain: Brain) -> None:
         chosen_labels = st.multiselect(
             f"{anchor_type} entities to map",
             list(cat_options),
-            default=list(cat_options),  # start with all; trim to what matters
+            # Start with a few anchors: pre-selecting every entity makes a
+            # slow, unreadable hairball on large brains (and the graph canvas
+            # can fail to paint while hundreds of nodes settle).
+            default=list(cat_options)[:5],
             help="Each selected entity is an anchor. Click any node to expand it.",
         )
     selected_ids = [cat_options[l] for l in chosen_labels]
