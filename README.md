@@ -1,5 +1,6 @@
 ### Droid Brain
 
+[![Join our Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/AQ3tusPtZn)
 
 The Droid Brain helps you build and maintain accurate organisational information in form of structured data to assist agents to operate in a complex environment effectively.
 
@@ -263,3 +264,41 @@ entities in scope. This is fine up to roughly **10,000 entities**; for larger br
 the OpenSearch backend or a future `sqlite-vec` integration.
 
 _Not yet implemented (declarable seams exist): type-level & temporal boosters._
+
+# Contributing
+
+Contributions are welcome — new doc_type examples, connectors, backends, docs fixes,
+or bug reports all help.
+
+**Join the community on [Discord](https://discord.gg/AQ3tusPtZn)** to ask questions,
+share the brains you're modelling, or discuss an idea before you build it. It's the
+fastest way to get an answer and the best place to sanity-check a bigger change.
+
+### Getting set up
+
+```bash
+git clone https://github.com/DrDroidLab/agent-brain
+cd agent-brain
+pip install -e '.[all]'          # core + UI (Streamlit) + MCP server
+pytest                            # run the test suite
+```
+
+### Making a change
+
+1. **Open an issue first** for anything non-trivial (new backend, schema change,
+   CLI surface) so we can agree on the shape — or bring it to Discord.
+2. Branch off `main` (`feat/…`, `fix/…`, `docs/…`).
+3. Add tests under `tests/` for behaviour changes, and run `pytest`.
+4. If you touched a brain in `examples/`, run `droid-brain validate --brain examples/<name>`
+   so schemas and entities stay consistent.
+5. Update the README / `entity-management.md` when you change user-facing behaviour.
+6. Open a PR describing *what* changed and *why*, and link the issue.
+
+### Good first contributions
+
+- A new example brain under [`examples/`](./examples) for a domain we don't cover yet.
+- A connector in `connectors/` that pulls entities from an MCP server you use.
+- Doc_type schemas for a common vertical (support, infra, sales, lending, personal).
+- Sharper docs — if something tripped you up while onboarding, that's a bug.
+
+Questions, ideas, or just want to show what you built? → **https://discord.gg/AQ3tusPtZn**
