@@ -2,7 +2,7 @@
 
 [![Join our Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/AQ3tusPtZn)
 
-**Open Index** is a tool for turning your organisation's knowledge into accurate, structured data that agents can actually operate on — and for keeping that data correct as things change.
+**Open Index** is a tool for building domain specific accurate, structured data that agents can actually operate on — and for keeping that data correct as things change.
 
 You use Open Index to build a **brain**: a searchable, continuously-improving context graph of your domain. A brain is **domain-agnostic** — model a support org (`product → "has common issue" → issue`), a sales pipeline (`customer → order`), your infrastructure (`service → runbook`), or anything else. You define the concepts; Open Index stores them, searches them, and draws the map.
 
