@@ -13,10 +13,63 @@ spoke nodes before pulling full entities on expand.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Iterable, Optional, Protocol, runtime_checkable
 
 from droid_brain.models import Entity
 from droid_brain.schema import DocType
+
+
+NO_EMBEDDING_PROVIDER_WARNING = (
+    "Semantic fields are declared but no embedding provider is available. "
+    "Install 'droid-brain[semantic]' or set DROID_BRAIN_EMBEDDING_* env vars. "
+    "Falling back to keyword-only search."
+)
+
+
+def semantic_doc_types(doc_types: dict[str, DocType]) -> set[str]:
+    """Return the doc_type names that have at least one `search: semantic` field."""
+    return {
+        dt.doc_type
+        for dt in doc_types.values()
+        if any(f.search == "semantic" for f in dt.fields)
+    }
+
+
+def semantic_fields_in_scope(
+    doc_types: dict[str, DocType], scope: Optional[list[str]] = None
+) -> bool:
+    """Whether any doc_type in the requested scope has a `search: semantic` field."""
+    types = (
+        [doc_types[t] for t in scope if t in doc_types]
+        if scope
+        else list(doc_types.values())
+    )
+    return any(f.search == "semantic" for dt in types for f in dt.fields)
+
+
+def semantic_text_for(entity: Entity, doc_type: Optional[DocType]) -> str:
+    """Text to embed: name + concatenated `search: semantic` field values."""
+    if doc_type is None:
+        return entity.name
+    semantic_fields = [f for f in doc_type.fields if f.search == "semantic"]
+    if not semantic_fields:
+        return ""
+    parts = [entity.name]
+    for f in semantic_fields:
+        value = entity.fields.get(f.name)
+        if value not in (None, ""):
+            parts.append(str(value))
+    return " ".join(parts)
+
+
+def iter_semantic_entities(
+    doc_types: dict[str, DocType], entities: Iterable[Entity]
+) -> Iterable[Entity]:
+    """Yield entities whose doc_type has a semantic field."""
+    semantic_types = semantic_doc_types(doc_types)
+    for entity in entities:
+        if entity.doc_type in semantic_types:
+            yield entity
 
 
 @dataclass
@@ -60,7 +113,11 @@ class SearchBackend(Protocol):
         doc_types: Optional[list[str]] = None,
         limit: int = 20,
         counts_only: bool = False,
+        semantic_weight: Optional[float] = None,
     ) -> SearchResults:
+        """Search entities. `semantic_weight` overrides the config's
+        search.semantic_weight for this call: 0.0 = keyword-only,
+        1.0 = semantic-only, None = the brain's configured default."""
         ...
 
     def counts(self) -> dict[str, int]:
@@ -76,4 +133,11 @@ class SearchBackend(Protocol):
 
     def clear(self) -> None:
         """Remove all entities (used by a full reindex)."""
+        ...
+
+    def reembed(self) -> None:
+        """Recompute embeddings for every stored entity.
+
+        Used after enabling semantic search on an existing brain or switching
+        embedding models."""
         ...

@@ -109,12 +109,20 @@ def add_entity(
 
 
 @app.command()
-def index(brain: str = BrainOpt):
+def index(
+    brain: str = BrainOpt,
+    reembed: bool = typer.Option(False, "--reembed", help="Recompute embeddings after indexing."),
+):
     """(Re)load all entities/**/*.json into the search index."""
     b = _open_brain(brain)
     count = b.index()
-    typer.secho(f"✓ indexed {count} entities across {len(b.config.doc_types)} doc_types",
-                fg=typer.colors.GREEN)
+    if reembed:
+        b.reembed()
+    typer.secho(
+        f"✓ indexed {count} entities across {len(b.config.doc_types)} doc_types"
+        + (" and recomputed embeddings" if reembed else ""),
+        fg=typer.colors.GREEN,
+    )
 
 
 @app.command()

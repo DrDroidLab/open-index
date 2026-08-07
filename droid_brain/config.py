@@ -52,6 +52,14 @@ class SearchConfig(BaseModel):
     password: Optional[str] = None
     use_ssl: bool = False
     verify_certs: bool = False
+    # -- Semantic search options --
+    # Weight of the semantic/vector score in the final hybrid ranking. 0 = keyword-only,
+    # 1 = semantic-only. Default is an even 0.5 blend.
+    # Keyword matches are the primary signal; semantic similarity breaks the
+    # "right words weren't used" cases. Default weights keyword 70/30.
+    semantic_weight: float = Field(default=0.3, ge=0.0, le=1.0)
+    # Override the default fastembed model. Leave unset for BAAI/bge-small-en-v1.5.
+    embedding_model: Optional[str] = None
 
 
 class BrainConfig(BaseModel):

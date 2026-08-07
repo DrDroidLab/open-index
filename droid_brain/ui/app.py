@@ -22,6 +22,21 @@ def _open_brain(brain_dir: str) -> Brain:
     return Brain.open(brain_dir)
 
 
+@st.cache_resource(show_spinner=False)
+def _engine_backend(brain_dir: str, engine: str):
+    """Construct a search backend by engine name for the Search-tab toggle,
+    so both engines can be compared over the same brain."""
+    from droid_brain.config import load_brain_config
+    from droid_brain.storage import SQLiteBackend
+
+    cfg = load_brain_config(brain_dir)
+    if engine == "sqlite":
+        return SQLiteBackend(cfg.db_path(), cfg)
+    from droid_brain.storage.opensearch_backend import OpenSearchBackend
+
+    return OpenSearchBackend(cfg)
+
+
 def _color(brain: Brain, doc_type: str) -> str:
     dt = brain.config.doc_type(doc_type)
     return dt.display.color if dt else "#6b7280"
@@ -56,7 +71,9 @@ def render_graph(brain: Brain, graph: ContextGraph) -> None:
         width="100%",
         height=650,
         directed=True,
-        physics=True,
+        # Physics keeps large graphs drifting (and the canvas can stay blank
+        # while hundreds of nodes settle) — freeze the layout past ~150 nodes.
+        physics=len(graph.nodes) <= 150,
         hierarchical=False,
         collapsible=False,
     )
@@ -239,14 +256,52 @@ def render_search(brain: Brain) -> None:
         "Search", label_visibility="collapsed",
         placeholder="Search the brain…  e.g. payment, checkout, redis",
     )
+    mode = st.radio(
+        "Search mode", ["Hybrid", "Keyword", "Semantic"], horizontal=True,
+        help=("Hybrid (default): keyword matches dominate, semantic similarity "
+              "rescues differently-worded queries. Keyword: exact/fuzzy text "
+              "matching only. Semantic: embedding similarity only."),
+    )
+    weight_override = {"Hybrid": None, "Keyword": 0.0, "Semantic": 1.0}[mode]
+    if mode == "Semantic":
+        from droid_brain.embeddings import embedding_provider_available
+        if not embedding_provider_available():
+            st.warning("No embedding provider available — results are keyword-only. "
+                       "Install `droid-brain[semantic]` to enable semantic search.")
+    configured = brain.config.search.backend
+    engine = st.radio(
+        "Engine", ["opensearch", "sqlite"],
+        index=0 if configured == "opensearch" else 1,
+        format_func=lambda e: f"{e}  · configured" if e == configured else e,
+        horizontal=True,
+        help=("Which engine runs this query over the same entities: OpenSearch "
+              "(Lucene scoring with fuzzy typo tolerance) or SQLite (built-in "
+              "FTS ranking, exact terms only). Useful for comparing answers."),
+    )
     e = st.session_state.get(f"{ns}_e")
     dt = st.session_state.get(f"{ns}_dt")
     if e:
         _explorer_entity(brain, ns, e, dt)
         return
     if query:
-        results = brain.search(query=query, limit=50)
-        st.caption(f"{results.total} result(s) · click one to open")
+        if engine == configured:
+            backend = brain.backend
+        else:
+            if engine == "sqlite" and not brain.config.db_path().exists():
+                st.warning("This brain has no local SQLite store to search — "
+                           "index it with the sqlite backend first.")
+                return
+            try:
+                backend = _engine_backend(str(brain.config.root), engine)
+            except (Exception, SystemExit) as exc:
+                st.error(f"Could not start the {engine} engine: {exc}")
+                return
+        try:
+            results = backend.search(query=query, limit=50, semantic_weight=weight_override)
+        except Exception as exc:
+            st.error(f"{engine} search failed: {exc}")
+            return
+        st.caption(f"{results.total} result(s) · {mode.lower()} mode · {engine} · click one to open")
         if not results.results:
             st.info("No matches.")
             return
@@ -288,7 +343,10 @@ def render_map(brain: Brain) -> None:
         chosen_labels = st.multiselect(
             f"{anchor_type} entities to map",
             list(cat_options),
-            default=list(cat_options),  # start with all; trim to what matters
+            # Start with a few anchors: pre-selecting every entity makes a
+            # slow, unreadable hairball on large brains (and the graph canvas
+            # can fail to paint while hundreds of nodes settle).
+            default=list(cat_options)[:5],
             help="Each selected entity is an anchor. Click any node to expand it.",
         )
     selected_ids = [cat_options[l] for l in chosen_labels]

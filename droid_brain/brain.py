@@ -160,14 +160,20 @@ class Brain:
         doc_types: Optional[list[str]] = None,
         limit: int = 20,
         counts_only: bool = False,
+        semantic_weight: Optional[float] = None,
     ) -> SearchResults:
-        return self.backend.search(query, doc_types, limit, counts_only)
+        return self.backend.search(query, doc_types, limit, counts_only,
+                                   semantic_weight=semantic_weight)
 
     def get_entity(self, entity_id: str) -> Optional[Entity]:
         return self.backend.get_entity(entity_id)
 
     def counts(self) -> dict[str, int]:
         return self.backend.counts()
+
+    def reembed(self) -> None:
+        """Recompute embeddings for every stored entity."""
+        self.backend.reembed()
 
     def observed_relationships(self, doc_type: str) -> dict[str, int]:
         """Distinct outgoing edge meanings actually used by a doc_type's entities,
