@@ -22,6 +22,21 @@ def _open_brain(brain_dir: str) -> Brain:
     return Brain.open(brain_dir)
 
 
+@st.cache_resource(show_spinner=False)
+def _engine_backend(brain_dir: str, engine: str):
+    """Construct a search backend by engine name for the Search-tab toggle,
+    so both engines can be compared over the same brain."""
+    from droid_brain.config import load_brain_config
+    from droid_brain.storage import SQLiteBackend
+
+    cfg = load_brain_config(brain_dir)
+    if engine == "sqlite":
+        return SQLiteBackend(cfg.db_path(), cfg)
+    from droid_brain.storage.opensearch_backend import OpenSearchBackend
+
+    return OpenSearchBackend(cfg)
+
+
 def _color(brain: Brain, doc_type: str) -> str:
     dt = brain.config.doc_type(doc_type)
     return dt.display.color if dt else "#6b7280"
@@ -253,14 +268,40 @@ def render_search(brain: Brain) -> None:
         if not embedding_provider_available():
             st.warning("No embedding provider available — results are keyword-only. "
                        "Install `droid-brain[semantic]` to enable semantic search.")
+    configured = brain.config.search.backend
+    engine = st.radio(
+        "Engine", ["opensearch", "sqlite"],
+        index=0 if configured == "opensearch" else 1,
+        format_func=lambda e: f"{e}  · configured" if e == configured else e,
+        horizontal=True,
+        help=("Which engine runs this query over the same entities: OpenSearch "
+              "(Lucene scoring with fuzzy typo tolerance) or SQLite (built-in "
+              "FTS ranking, exact terms only). Useful for comparing answers."),
+    )
     e = st.session_state.get(f"{ns}_e")
     dt = st.session_state.get(f"{ns}_dt")
     if e:
         _explorer_entity(brain, ns, e, dt)
         return
     if query:
-        results = brain.search(query=query, limit=50, semantic_weight=weight_override)
-        st.caption(f"{results.total} result(s) · {mode.lower()} mode · click one to open")
+        if engine == configured:
+            backend = brain.backend
+        else:
+            if engine == "sqlite" and not brain.config.db_path().exists():
+                st.warning("This brain has no local SQLite store to search — "
+                           "index it with the sqlite backend first.")
+                return
+            try:
+                backend = _engine_backend(str(brain.config.root), engine)
+            except (Exception, SystemExit) as exc:
+                st.error(f"Could not start the {engine} engine: {exc}")
+                return
+        try:
+            results = backend.search(query=query, limit=50, semantic_weight=weight_override)
+        except Exception as exc:
+            st.error(f"{engine} search failed: {exc}")
+            return
+        st.caption(f"{results.total} result(s) · {mode.lower()} mode · {engine} · click one to open")
         if not results.results:
             st.info("No matches.")
             return

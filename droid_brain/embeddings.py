@@ -248,45 +248,63 @@ def embedding_provider_available() -> bool:
     Semantic mode in an environment without embeddings.
     """
     if os.environ.get("DROID_BRAIN_EMBEDDING_BASE_URL"):
-        return bool(os.environ.get("DROID_BRAIN_EMBEDDING_MODEL"))
+        return all(
+            os.environ.get(v)
+            for v in (
+                "DROID_BRAIN_EMBEDDING_API_KEY",
+                "DROID_BRAIN_EMBEDDING_MODEL",
+                "DROID_BRAIN_EMBEDDING_DIM",
+            )
+        )
     import importlib.util
 
     return importlib.util.find_spec("fastembed") is not None
 
 
+_provider_cache: dict[tuple, Optional[EmbeddingProvider]] = {}
+
+
 def get_embedding_provider(config) -> Optional[EmbeddingProvider]:
-    """Return the configured embedding provider, or None if not available."""
+    """Return the configured embedding provider, or None if not available.
+
+    Providers are cached process-wide (keyed on their configuration) so that
+    multiple backends — e.g. both engines behind the UI's engine toggle —
+    share a single loaded model.
+    """
     base_url = os.environ.get("DROID_BRAIN_EMBEDDING_BASE_URL")
     api_key = os.environ.get("DROID_BRAIN_EMBEDDING_API_KEY")
     model = os.environ.get("DROID_BRAIN_EMBEDDING_MODEL")
     dim = os.environ.get("DROID_BRAIN_EMBEDDING_DIM")
+    local_model = (config.search.embedding_model if config else None) or "BAAI/bge-small-en-v1.5"
+    key = (base_url, api_key, model, dim, None if base_url else local_model)
+    if key in _provider_cache:
+        return _provider_cache[key]
 
+    provider: Optional[EmbeddingProvider] = None
     if base_url:
         if not (api_key and model and dim):
             _warn_once(
                 "DROID_BRAIN_EMBEDDING_BASE_URL is set but one of API_KEY/MODEL/DIM is missing; "
                 "semantic search is disabled."
             )
-            return None
+        else:
+            try:
+                provider = OpenAICompatibleProvider(base_url, api_key, model, int(dim))
+            except Exception as exc:  # pragma: no cover
+                _warn_once(f"Could not create OpenAI-compatible embedding provider: {exc}")
+    else:
         try:
-            return OpenAICompatibleProvider(base_url, api_key, model, int(dim))
-        except Exception as exc:  # pragma: no cover
-            _warn_once(f"Could not create OpenAI-compatible embedding provider: {exc}")
-            return None
+            from fastembed import TextEmbedding  # noqa: F401
+        except ImportError:
+            _warn_once(
+                "fastembed is not installed; semantic search is disabled. "
+                "Install 'droid-brain[semantic]' to enable it."
+            )
+        else:
+            try:
+                provider = FastEmbedProvider(local_model)
+            except Exception as exc:  # pragma: no cover
+                _warn_once(f"Could not create FastEmbedProvider: {exc}")
 
-    try:
-        from fastembed import TextEmbedding
-    except ImportError:
-        _warn_once(
-            "fastembed is not installed; semantic search is disabled. "
-            "Install 'droid-brain[semantic]' to enable it."
-        )
-        return None
-
-    try:
-        model_name = config.search.embedding_model if config else None
-        model_name = model_name or "BAAI/bge-small-en-v1.5"
-        return FastEmbedProvider(model_name)
-    except Exception as exc:  # pragma: no cover
-        _warn_once(f"Could not create FastEmbedProvider: {exc}")
-        return None
+    _provider_cache[key] = provider
+    return provider
