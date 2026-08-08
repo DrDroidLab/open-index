@@ -8,6 +8,7 @@ depth, and see the context graph, with click-to-re-anchor for exploration.
 from __future__ import annotations
 
 import os
+from time import perf_counter
 
 import streamlit as st
 
@@ -92,8 +93,8 @@ def main() -> None:
         st.caption(brain.config.description)
 
     st.markdown(ROW_CSS, unsafe_allow_html=True)  # buttons styled as list rows
-    tab_structure, tab_search, tab_map, tab_jobs, tab_edit = st.tabs(
-        ["Structure", "Search", "Map", "Jobs", "Edit"]
+    tab_structure, tab_search, tab_map, tab_analytics, tab_jobs, tab_edit = st.tabs(
+        ["Structure", "Search", "Map", "Analytics", "Jobs", "Edit"]
     )
 
     # ---- Structure — clickable doc_type folders → entity hub ------------- #
@@ -107,6 +108,10 @@ def main() -> None:
     # ---- Map -------------------------------------------------------------- #
     with tab_map:
         render_map(brain)
+
+    # ---- Analytics — local CLI/MCP context usage ------------------------- #
+    with tab_analytics:
+        render_analytics(brain)
 
     # ---- Jobs — connectors + scheduled ingestion jobs ------------------- #
     with tab_jobs:
@@ -207,7 +212,7 @@ def _explorer_folder(brain: Brain, ns: str, doc_type: str) -> None:
 def _explorer_entity(brain: Brain, ns: str, entity_id: str, doc_type) -> None:
     """Entity hub view — fields + related nodes grouped by meaning, each a
     clickable row that jumps to its own hub."""
-    entity = brain.get_entity(entity_id)
+    entity = brain.get_entity(entity_id, source="ui")
     col = st.columns([1, 5])
     if col[0].button("← back", key=f"{ns}_hback_{entity_id}"):
         _nav(ns, dt=doc_type)
@@ -297,7 +302,16 @@ def render_search(brain: Brain) -> None:
                 st.error(f"Could not start the {engine} engine: {exc}")
                 return
         try:
+            started = perf_counter()
             results = backend.search(query=query, limit=50, semantic_weight=weight_override)
+            # The engine comparison intentionally bypasses Brain.search; record
+            # it here so the dashboard still reflects all UI context fetches.
+            brain.record_fetch(
+                source="ui", operation="search",
+                started=started,
+                query=query, result_count=results.total,
+                result_doc_types=results.doc_type_counts,
+            )
         except Exception as exc:
             st.error(f"{engine} search failed: {exc}")
             return
@@ -377,6 +391,68 @@ def render_map(brain: Brain) -> None:
         st.rerun()
 
 
+def render_analytics(brain: Brain) -> None:
+    """Show which local context was fetched and how often across CLI/MCP/UI."""
+    st.markdown("**Context fetch analytics**")
+    st.caption(
+        "Stored only in `~/.local/state/open-index/`, outside the brain checkout. "
+        "Search text and entity IDs stay local and never leave the machine."
+    )
+    summary = brain.analytics_summary()
+    if not summary.get("available", True):
+        st.warning("Analytics are unavailable because the local state directory is not writable.")
+        return
+    metrics = st.columns(4)
+    metrics[0].metric("total fetches", summary["total_fetches"])
+    metrics[1].metric("failed", summary["failed_fetches"])
+    metrics[2].metric("zero-result searches", summary["zero_result_searches"])
+    metrics[3].metric("average latency", f"{summary['average_duration_ms']:.1f} ms")
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("**By client**")
+        st.bar_chart(
+            [{"client": key, "fetches": value}
+             for key, value in summary["by_source"].items()],
+            x="client", y="fetches",
+        )
+    with right:
+        st.markdown("**By operation**")
+        st.bar_chart(
+            [{"operation": key, "fetches": value}
+             for key, value in summary["by_operation"].items()],
+            x="operation", y="fetches",
+        )
+
+    st.markdown("**Most frequently fetched context**")
+    if summary["by_context"]:
+        st.dataframe(
+            [{"context": context, "fetches": count}
+             for context, count in summary["by_context"].items()],
+            hide_index=True, use_container_width=True,
+        )
+    else:
+        st.info("No context fetches recorded yet. Use the CLI or MCP server to query this index.")
+
+    with st.expander("Recent fetches", expanded=True):
+        events = brain.analytics_events(limit=100)
+        if events:
+            st.dataframe(
+                [{
+                    "time": event["fetched_at"],
+                    "client": event["source"],
+                    "operation": event["operation"],
+                    "context": event["query"] or event["entity_id"] or "navigation guide",
+                    "results": event["result_count"],
+                    "latency_ms": event["duration_ms"],
+                    "ok": bool(event["success"]),
+                } for event in events],
+                hide_index=True, use_container_width=True,
+            )
+        else:
+            st.caption("No events yet.")
+
+
 def render_edit_guide(brain: Brain) -> None:
     """Read-only guidance: how to edit the brain via an agent or the CLI.
 
@@ -392,7 +468,7 @@ def render_edit_guide(brain: Brain) -> None:
         "traceable — and this UI stays read-only on purpose."
     )
 
-    st.subheader("Let an agent edit it (recommended)")
+    st.subheader("Connect your domain agent (recommended)")
     skill_path = Path(brain_dir) / ".claude" / "skills" / "edit-brain" / "SKILL.md"
     skill_note = (
         "It follows the bundled **`edit-brain` skill** "
@@ -402,9 +478,11 @@ def render_edit_guide(brain: Brain) -> None:
              "skill** the agent follows"
     )
     st.markdown(
-        "Connect the brain to Claude Code / any MCP client, then just ask it to add "
-        f"or update knowledge. {skill_note}, and it reads `navigation_guidelines` "
-        "first, so it reuses your existing doc_types and relationship vocabulary."
+        "Connect Open Index as the MCP context layer for your legal, marketing, "
+        "support, or other domain-specialized agent. Read+write is the default, "
+        "so it can retrieve context and maintain durable knowledge. The MCP host "
+        "receives dynamic navigation in the agent prompt; use `--read-only` to "
+        f"opt out of writes. {skill_note}."
     )
     st.code(
         '// .mcp.json (open-index init writes this for you)\n'
@@ -415,8 +493,8 @@ def render_edit_guide(brain: Brain) -> None:
         '}',
         language="json",
     )
-    st.caption("Then, in the agent: “read navigation_guidelines, then add a service "
-               "entity for checkout and link it to the postgres datastore.”")
+    st.caption("Claude Code can use the generated adapter, but any MCP-capable "
+               "agent runtime can connect to the same context layer.")
 
     # Copy-pastable skill — drop it into any other Claude Code terminal.
     st.markdown("**Copy the `edit-brain` skill** into another agent "

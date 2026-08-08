@@ -7,6 +7,8 @@ search backend. `index()` (re)loads entities from disk into the backend.
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
+from time import perf_counter
 from typing import Any, Optional
 
 from open_index.config import BrainConfig, iter_entity_files, load_brain_config
@@ -14,6 +16,7 @@ from open_index.models import Entity
 from open_index.schema import DocType
 from open_index.storage import get_backend
 from open_index.storage.base import SearchBackend, SearchResults
+from open_index.analytics import AnalyticsStore, NullAnalyticsStore
 
 
 class Brain:
@@ -25,6 +28,11 @@ class Brain:
         self.index_errors: list[str] = []
         self.backend: SearchBackend = backend or get_backend(config)
         self.backend.ensure_schema(config.doc_types)
+        try:
+            self.analytics = AnalyticsStore(config.root)
+        except (OSError, sqlite3.Error):
+            # Analytics are observational; a read-only runtime must still query.
+            self.analytics = NullAnalyticsStore()
 
     @classmethod
     def open(cls, brain_dir: str | Path) -> "Brain":
@@ -180,6 +188,7 @@ class Brain:
         semantic_weight: Optional[float] = None,
         min_confidence: float = 0.0,
         as_of: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> SearchResults:
         """Search, optionally filtered by trust and by validity window.
 
@@ -193,9 +202,24 @@ class Brain:
         backends would buy speed the current scale does not need at the cost of
         the two implementations drifting apart.
         """
-        results = self.backend.search(query, doc_types, limit, counts_only,
-                                      semantic_weight=semantic_weight)
+        started = perf_counter()
+        try:
+            results = self.backend.search(query, doc_types, limit, counts_only,
+                                          semantic_weight=semantic_weight)
+        except Exception as exc:
+            if source:
+                self._record_fetch(
+                    source=source, operation="search", started=started, query=query,
+                    doc_types=doc_types, success=False, error=type(exc).__name__,
+                )
+            raise
         if counts_only or (min_confidence <= 0 and as_of is None):
+            if source:
+                self._record_fetch(
+                    source=source, operation="search", started=started, query=query,
+                    doc_types=doc_types, result_count=results.total,
+                    result_doc_types=results.doc_type_counts,
+                )
             return results
 
         kept = []
@@ -219,10 +243,51 @@ class Brain:
         results.results = kept
         results.total = len(kept)
         results.doc_type_counts = counts
+        if source:
+            self._record_fetch(
+                source=source, operation="search", started=started, query=query,
+                doc_types=doc_types, result_count=results.total,
+                result_doc_types=results.doc_type_counts,
+            )
         return results
 
-    def get_entity(self, entity_id: str) -> Optional[Entity]:
-        return self.backend.get_entity(entity_id)
+    def get_entity(
+        self, entity_id: str, source: Optional[str] = None
+    ) -> Optional[Entity]:
+        started = perf_counter()
+        try:
+            entity = self.backend.get_entity(entity_id)
+        except Exception as exc:
+            if source:
+                self._record_fetch(
+                    source=source, operation="get_entity", started=started,
+                    entity_id=entity_id, success=False, error=type(exc).__name__,
+                )
+            raise
+        if source:
+            self._record_fetch(
+                source=source, operation="get_entity", started=started,
+                entity_id=entity_id, result_count=int(entity is not None),
+                result_doc_types=({entity.doc_type: 1} if entity else {}),
+            )
+        return entity
+
+    def record_fetch(self, *, started: float, **event: Any) -> None:
+        """Keep analytics best-effort so context access remains the priority."""
+        try:
+            self.analytics.record(duration_ms=(perf_counter() - started) * 1000, **event)
+        except Exception:
+            pass
+
+    # Internal alias keeps query code compact while the public method also lets
+    # alternate UI backends use the same best-effort analytics path.
+    _record_fetch = record_fetch
+
+    def analytics_summary(self) -> dict[str, Any]:
+        return self.analytics.summary()
+
+    def analytics_events(self, limit: int = 100) -> list[dict[str, Any]]:
+        return self.analytics.recent(limit)
 
     def counts(self) -> dict[str, int]:
         return self.backend.counts()
@@ -276,21 +341,28 @@ class Brain:
                 meanings[m] = meanings.get(m, 0) + 1
         return meanings
 
-    def navigation_guidelines(self, examples_per_type: int = 3) -> str:
+    def navigation_guidelines(
+        self, examples_per_type: int = 3, source: Optional[str] = None,
+        include_writes: bool = True,
+    ) -> str:
         """A markdown guide telling an agent how to navigate *this* brain.
 
         Mirrors the reference `build_navigation_guidelines`: enumerate every
         doc_type with its count, fields (marking searchable ones + boost),
         example entities, and a concrete search call — plus how to write back.
         This is the read tool an agent calls first to orient itself."""
+        started = perf_counter()
         counts = self.counts()
         total = sum(counts.values())
         lines: list[str] = []
-        lines.append(f"# {self.config.name} — Context Brain Navigation Guide")
+        lines.append(f"# {self.config.name} — Domain Context Instructions")
         if self.config.description:
             lines.append(f"\n{self.config.description}")
         lines.append(
-            f"\nThis brain holds **{total} entities** across "
+            "\nOpen Index is the context layer for this domain-specialized agent. "
+            "Use this brain to ground domain work in structured context, traverse "
+            "related knowledge, and keep durable domain knowledge current.\n\n"
+            f"This brain holds **{total} entities** across "
             f"**{len(self.config.doc_types)} doc_types**. Each entity may link to "
             "others via `related_to` edges (`target` + `relationship_edge_meaning`)."
         )
@@ -301,12 +373,24 @@ class Brain:
             "- `get_entity(entity_id)` — one entity plus its incoming/outgoing relationships.\n"
             "- Start with a query; filter by `doc_types` to narrow."
         )
-        lines.append("\n## How to write")
+        lines.append("\n## Retrieval workflow")
         lines.append(
-            "- `put_entity(...)` — add or update an entity (validated, persisted to disk).\n"
-            "- `create_doc_type(...)` — define a new concept when none fits.\n"
-            "- Prefer reusing an existing doc_type over inventing one."
+            "1. Start with `search_brain(query=\"...\")` using the user's domain terms.\n"
+            "2. Narrow with `doc_types=[...]` when the concept is known.\n"
+            "3. Call `get_entity(entity_id)` for promising results to fetch full fields and edges.\n"
+            "4. Follow relationship targets when the answer depends on connected entities; "
+            "the edge meaning explains why the traversal is relevant.\n"
+            "5. If results are empty, broaden the terms before assuming the index has no context."
         )
+        if include_writes:
+            lines.append("\n## How to write")
+            lines.append(
+                "Read and write access is the default. Write back durable, validated "
+                "domain knowledge when work reveals something worth retaining.\n"
+                "- `put_entity(...)` — add or update an entity (validated, persisted to disk).\n"
+                "- `create_doc_type(...)` — define a new concept when none fits.\n"
+                "- Prefer reusing an existing doc_type over inventing one."
+            )
 
         lines.append("\n## Doc types")
         for name, dt in self.config.doc_types.items():
@@ -338,7 +422,13 @@ class Brain:
                 lines.append("- **Examples:** " + ", ".join(f"`{e.id}`" for e in examples))
             lines.append(f'- **Query:** `search_brain(query="...", doc_types=["{name}"])`')
 
-        return "\n".join(lines)
+        guide = "\n".join(lines)
+        if source:
+            self._record_fetch(
+                source=source, operation="navigation_guidelines", started=started,
+                result_count=total, result_doc_types=counts,
+            )
+        return guide
 
     def structure(self, examples_per_type: int = 3) -> dict[str, Any]:
         """A textual/structured description of the brain: doc_types, their

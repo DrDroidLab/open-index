@@ -34,9 +34,15 @@ def srv(brain):
     return _Server(brain)
 
 
-def test_exposes_all_five_tools(srv):
+def test_default_server_exposes_read_and_write_tools(srv):
     assert {"navigation_guidelines", "search_brain", "get_entity",
-            "put_entity", "create_doc_type"} <= srv.tools()
+            "put_entity", "create_doc_type"} == srv.tools()
+
+
+def test_default_prompt_positions_brain_as_read_write_domain_context(srv):
+    instructions = getattr(srv.server, "instructions", "") or ""
+    assert "context layer for this domain-specialized agent" in instructions
+    assert "Read and write access is the default" in instructions
 
 
 def test_read_only_mode_hides_write_tools(brain):
@@ -48,13 +54,15 @@ def test_read_only_mode_hides_write_tools(brain):
     names = {t.name for t in asyncio.new_event_loop().run_until_complete(server.list_tools())}
     assert {"navigation_guidelines", "search_brain", "get_entity"} <= names
     assert "put_entity" not in names and "create_doc_type" not in names
+    instructions = getattr(server, "instructions", "") or ""
+    assert "put_entity" not in instructions
 
 
 # ---- read tools ---------------------------------------------------------- #
 
 def test_navigation_guidelines_tool(srv):
     md = srv.call("navigation_guidelines")
-    assert "Navigation Guide" in md
+    assert "Domain Context Instructions" in md
     assert "## Doc types" in md
     assert "put_entity" in md  # write guidance surfaced too
 
