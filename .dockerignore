@@ -1,0 +1,16 @@
+.git
+.gitignore
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/*.egg-info
+.venv
+venv
+# Local brain state — never bake a database into the image.
+**/brain.db
+**/brain.db-journal
+**/brain.db-wal
+**/.open_index_state.json
+docs
+examples
+tests

@@ -30,6 +30,9 @@ open-index index --brain my-brain
 open-index ui    --brain my-brain
 ```
 
+Prefer containers, or need a brain several agents share? →
+**[`docs/deployment.md`](./docs/deployment.md)** (`docker compose --profile sqlite up`).
+
 ### Commands
 
 | Command | What it does |
@@ -45,6 +48,7 @@ open-index ui    --brain my-brain
 | `open-index ui` | Launch the Streamlit explorer (Structure / Search / **Map** / Contribute). |
 | `open-index mcp` | Run the MCP server (stdio) so a local agent can **read and write** the brain. |
 | `open-index serve [--port --token]` | Serve the MCP server over **HTTP** for remote/cloud agents (bearer-token auth). |
+| `open-index mcp-config [--url --token]` | Print the MCP connection block to paste into your agent. |
 
 ### Built for Claude Code (and any agent)
 
@@ -191,44 +195,83 @@ stay the source of truth and every write is validated.
 
 ## Using the brain from a cloud agent (production)
 
-Two shapes, depending on whether one agent or many share the brain:
+📖 **[Full deployment guide → `docs/deployment.md`](./docs/deployment.md)** — local,
+remote (with and without Docker), TLS/proxying, and exactly what to paste into
+Claude Code, Claude Desktop, or Cursor.
 
-**Embedded (one agent, you own the runtime).** Bake the package + brain dir into the
-agent's image and let it spawn the MCP server over stdio — no network, works today:
+### Getting the connection details
 
-```jsonc
-{ "mcpServers": { "brain": { "command": "open-index", "args": ["mcp", "--brain", "/app/brain"] } } }
-```
-
-**Remote (many agents, shared brain).** Run the brain as a networked MCP server and
-register its URL in each agent:
+Never hand-assemble the config. Ask for it:
 
 ```bash
-pip install 'open-index[serve,opensearch]'
-OPEN_INDEX_TOKEN=… open-index serve --brain /srv/acme-brain --port 8080
-# agent registers a remote MCP server:  http://<host>:8080/mcp
-#                                        Authorization: Bearer <OPEN_INDEX_TOKEN>
+open-index mcp-config --brain ./my-brain                        # local (stdio)
+open-index mcp-config --url brain.acme.internal:8080 --token $OPEN_INDEX_TOKEN
+open-index mcp-config --url https://brain.acme.com --token $TOKEN --cli   # `claude mcp add …`
+open-index mcp-config --brain ./my-brain > .mcp.json            # pipes where it belongs
 ```
 
-`open-index serve` exposes the same read+write tools over **streamable HTTP** with
-**bearer-token auth**. For a shared, multi-writer brain, switch the backend to
-**OpenSearch** (SQLite is single-writer) — flip `search.backend` in `brain.yaml`:
+`open-index serve` prints the same details on startup — including the addresses a
+*remote* client can actually reach. (The bind address it listens on, `0.0.0.0`, is
+not one of them.) Behind a proxy or tunnel, pass `--public-url` so what's printed
+is what agents should use.
+
+### With Docker (recommended for a shared brain)
+
+```bash
+cp .env.example .env          # set OPEN_INDEX_TOKEN + BRAIN_DIR
+
+docker compose --profile sqlite     up --build    # single writer, no extra services
+docker compose --profile opensearch up --build    # many writers, incl. the cluster
+```
+
+Both serve `http://localhost:8080/mcp`. Your `brain.yaml` is identical either way —
+the profile sets `OPEN_INDEX_SEARCH_BACKEND`, which overrides the file. Add
+`--profile ui` for the explorer on `:8501`. The brain directory is mounted, not
+baked into the image, so doc_types and entities stay in git.
+
+### Without Docker
+
+```bash
+pip install 'open-index[serve]'                  # add ,opensearch for that backend
+open-index index --brain /srv/acme-brain         # load file-backed entities first
+OPEN_INDEX_TOKEN=… open-index serve --brain /srv/acme-brain --port 8080
+```
+
+`serve` exposes the same read+write tools over **streamable HTTP** with
+**bearer-token auth**. Without a token the endpoint is unauthenticated — anyone who
+can reach the port can write to your brain. Use `--read-only` for a queryable
+endpoint that agents can't mutate.
+
+### Choosing a backend
+
+**SQLite is single-writer.** That, not entity count, is the line: the moment a
+second agent needs to write, move to OpenSearch. It also gives native per-field
+boosting, **fuzzy** (typo-tolerant) search, and k-NN semantic search that scales
+past SQLite's ~10k-entity brute-force ceiling.
+
+Select it per-environment without touching `brain.yaml`:
+
+```bash
+export OPEN_INDEX_SEARCH_BACKEND=opensearch
+export OPEN_INDEX_OPENSEARCH_HOSTS=https://opensearch.internal:9200
+```
+
+…or commit it, with secrets as `${ENV}` refs resolved at connect time:
 
 ```yaml
 search:
   backend: opensearch
   hosts: ["https://opensearch:9200"]
   index: open_index_acme          # optional; defaults to open_index_<name>
-  username: "${OPENSEARCH_USER}"    # ${ENV} resolved at connect time
+  username: "${OPENSEARCH_USER}"
   password: "${OPENSEARCH_PASSWORD}"
   use_ssl: true
   verify_certs: true
 ```
 
-OpenSearch also gives native per-field boosting and **fuzzy** (typo-tolerant) search.
-The doc_type/file-entity part comes from git; index-backed data lives in the cluster,
-so give it a persistent home. Rule of thumb: **local/dev → SQLite; exposed as an
-MCP/API endpoint → OpenSearch + `serve`.**
+The doc_type/file-entity part comes from git; index-backed data lives only in the
+cluster (or `brain.db`), so give it a persistent home and a backup. Rule of thumb:
+**local/dev → SQLite; shared endpoint → OpenSearch + `serve`.**
 
 # Controlling search
 

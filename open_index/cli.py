@@ -34,7 +34,9 @@ def _open_brain(brain_dir: str):
 
     try:
         return Brain.open(brain_dir)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, ValueError) as exc:
+        # ValueError covers a bad brain.yaml / env override (e.g. an unknown
+        # search backend) — a user error, not something to show a traceback for.
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
@@ -283,6 +285,53 @@ def mcp(
     serve(str(Path(brain).resolve()), read_only=read_only)
 
 
+@app.command("mcp-config")
+def mcp_config(
+    brain: str = BrainOpt,
+    url: Optional[str] = typer.Option(
+        None, "--url",
+        help="Remote brain URL (host:port or full https://…/mcp). Omit for a local stdio brain.",
+    ),
+    token: Optional[str] = typer.Option(
+        None, "--token", envvar="OPEN_INDEX_TOKEN",
+        help="Bearer token for a remote brain (or set OPEN_INDEX_TOKEN).",
+    ),
+    name: str = typer.Option("open-index", "--name", help="MCP server name in your agent."),
+    cli: bool = typer.Option(False, "--cli", help="Print the `claude mcp add` one-liner instead of JSON."),
+):
+    """Print the MCP connection block to paste into your agent.
+
+    Local brain (agent spawns the server itself):
+
+        open-index mcp-config --brain ./my-brain
+
+    Remote brain (an `open-index serve` reachable over the network):
+
+        open-index mcp-config --url brain.internal:8080 --token $OPEN_INDEX_TOKEN
+
+    Writes to stdout, so it pipes straight into a config file:
+
+        open-index mcp-config > .mcp.json
+    """
+    from open_index.mcp_config import (
+        as_claude_cli, as_json, local_stdio_config, remote_http_config,
+    )
+
+    if url:
+        config = remote_http_config(url, token=token, server_name=name)
+    else:
+        root = Path(brain).expanduser().resolve()
+        if not (root / "brain.yaml").exists():
+            typer.secho(
+                f"no brain.yaml in {root} — pass --brain <dir>, or --url for a remote brain",
+                fg=typer.colors.RED, err=True,
+            )
+            raise typer.Exit(1)
+        config = local_stdio_config(root, server_name=name)
+
+    typer.echo(as_claude_cli(config, server_name=name) if cli else as_json(config))
+
+
 @app.command()
 def serve(
     brain: str = BrainOpt,
@@ -292,20 +341,60 @@ def serve(
         None, envvar="OPEN_INDEX_TOKEN",
         help="Bearer token required on requests (or set OPEN_INDEX_TOKEN).",
     ),
+    public_url: Optional[str] = typer.Option(
+        None, "--public-url", envvar="OPEN_INDEX_PUBLIC_URL",
+        help="Externally reachable URL, when behind a proxy/tunnel/load balancer. "
+             "Only used to print correct connection details.",
+    ),
     read_only: bool = typer.Option(False, "--read-only", help="Expose only read tools."),
 ):
     """Serve the MCP server over HTTP so remote/cloud agents connect by URL.
 
-    Register http://<host>:<port>/mcp as a remote MCP server in your agent.
-    Pair with the OpenSearch backend for a shared, multi-writer brain.
+    Prints the exact URL + config to register in your agent. Pair with the
+    OpenSearch backend for a shared, multi-writer brain.
     """
+    from open_index.mcp_config import advertised_urls, mask_token
     from open_index.mcp_server import serve_http
 
+    root = Path(brain).resolve()
+    b = _open_brain(str(root))
     mode = "read-only" if read_only else "read+write"
-    typer.secho(f"serving brain '{Path(brain).name}' MCP ({mode}) at http://{host}:{port}/mcp",
-                fg=typer.colors.GREEN)
-    serve_http(str(Path(brain).resolve()), host=host, port=port, token=token, read_only=read_only)
+
+    typer.secho(
+        f"open-index · brain '{b.config.name}' · {mode} · "
+        f"search backend: {b.config.search.backend}",
+        fg=typer.colors.GREEN, bold=True,
+    )
+    typer.echo(f"  listening on {host}:{port}")
+
+    urls = advertised_urls(host, port, public_url=public_url)
+    typer.echo("")
+    for label, endpoint in urls:
+        typer.secho(f"  {label:<22} {endpoint}" if label else f"  {endpoint}",
+                    fg=typer.colors.CYAN)
+
+    typer.echo("")
+    if token:
+        typer.echo(f"  auth: Authorization: Bearer {mask_token(token)}")
+    else:
+        typer.secho(
+            "  auth: NONE — anyone who can reach this port can "
+            + ("read" if read_only else "read AND WRITE")
+            + " the brain.\n        Set --token / OPEN_INDEX_TOKEN before exposing it.",
+            fg=typer.colors.YELLOW,
+        )
+
+    # The whole point: hand the user something they can paste, not a bind address.
+    connect_url = urls[-1][1]
+    hint = f"  agent config:  open-index mcp-config --url {connect_url}"
+    if token:
+        hint += " --token $OPEN_INDEX_TOKEN"
+    typer.echo(hint)
+    typer.echo("")
+
+    serve_http(str(root), host=host, port=port, token=token, read_only=read_only,
+               warn_unauthenticated=False)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - module entry point
     app()

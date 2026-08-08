@@ -23,7 +23,7 @@ from typing import Any, Optional
 
 from open_index.brain import Brain
 from open_index.models import Entity, Relationship
-from open_index.schema import DocType, DocTypeDisplay, FieldSpec
+from open_index.schema import DocType, DocTypeDisplay, FieldSpec, RelationshipSpec
 
 
 def _load_server_class():
@@ -64,10 +64,15 @@ def build_server(brain: Brain, read_only: bool = False):
 
     @server.tool()
     def navigation_guidelines() -> str:
-        """Orient yourself in this brain. Returns a markdown guide: every
-        doc_type, its counts, searchable fields, example entities, and how to
-        search and write. CALL THIS FIRST before searching or writing."""
-        return brain.navigation_guidelines()
+        """Orient yourself in this brain. CALL THIS FIRST, before any search or
+        write — it is the complete guide to this brain and you do not need any
+        other documentation.
+
+        Returns markdown covering: the doc_type/entity/relationship model, the
+        entity id convention, every doc_type with its full field schema and
+        relationship vocabulary, example entities, and worked `put_entity` /
+        `create_doc_type` calls with the full schema vocabulary."""
+        return brain.navigation_guidelines(read_only=read_only)
 
     @server.tool()
     def search_brain(
@@ -121,36 +126,74 @@ def build_server(brain: Brain, read_only: bool = False):
         fields: Optional[dict[str, Any]] = None,
         related_to: Optional[list[dict[str, str]]] = None,
     ) -> str:
-        """Add or update an entity in the brain (validated + persisted to disk).
+        """Add or update an entity (an upsert — the same id replaces it).
 
-        `id` must look like "<doc_type>:<slug>" (e.g. "issue:payment-declined").
-        `fields` are the schema fields for the doc_type. `related_to` is a list of
-        {"target": "<entity_id>", "relationship_edge_meaning": "<free text>"}
-        edges, e.g. {"target": "product:checkout", "relationship_edge_meaning":
-        "has common issue"}. Use this to record new knowledge or corrections."""
-        if brain.config.doc_type(doc_type) is None:
-            return json.dumps(
-                {"error": f"unknown doc_type '{doc_type}'. Create it first with "
-                          "create_doc_type, or use an existing one: "
-                          f"{list(brain.config.doc_types)}"}
-            )
-        entity = Entity(
-            id=id,
-            doc_type=doc_type,
-            name=name,
-            fields=fields or {},
-            related_to=[
-                Relationship(
-                    target=r["target"],
-                    relationship_edge_meaning=r.get("relationship_edge_meaning", ""),
-                )
-                for r in (related_to or [])
-            ],
-        )
+        Args:
+            doc_type: An EXISTING doc_type. Call navigation_guidelines() to see
+                them; create_doc_type() first if none fits.
+            id: Must be "<doc_type>:<slug>", e.g. "issue:payment-declined". The
+                prefix has to match `doc_type`. Chars: a-z A-Z 0-9 . _ -
+            name: Human-readable label.
+            fields: The doc_type's schema fields, e.g.
+                {"severity": "high", "status": "open"}. Do NOT put id/doc_type/
+                name/related_to in here — they are separate arguments.
+            related_to: Edges to other entities, each
+                {"target": "<entity_id>", "relationship_edge_meaning": "<text>"}.
+                Prefer a meaning the doc_type already declares or uses. Targets
+                may not exist yet. Always set these — the edges are the point.
+
+        Whether a JSON file is written follows the doc_type's `storage` policy
+        ("file" writes one, "index" keeps it in the DB); you don't choose."""
+        dt = brain.config.doc_type(doc_type)
+        if dt is None:
+            known = list(brain.config.doc_types)
+            return json.dumps({
+                "error": f"unknown doc_type '{doc_type}'",
+                "known_doc_types": known,
+                "hint": (
+                    "Use one of known_doc_types, or define this concept first with "
+                    "create_doc_type(...)."
+                    if known else
+                    "This brain has no doc_types yet. Define one with create_doc_type(...) "
+                    "before adding entities."
+                ),
+            })
+
+        expected_prefix = f"{doc_type}:"
+        if not id.startswith(expected_prefix):
+            return json.dumps({
+                "error": f"id '{id}' does not match doc_type '{doc_type}'",
+                "hint": f"ids are '<doc_type>:<slug>' — use '{expected_prefix}<slug>'.",
+            })
+
         try:
+            entity = Entity(
+                id=id,
+                doc_type=doc_type,
+                name=name,
+                fields=fields or {},
+                related_to=[
+                    Relationship(
+                        target=r["target"],
+                        relationship_edge_meaning=r.get("relationship_edge_meaning", ""),
+                    )
+                    for r in (related_to or [])
+                ],
+            )
             path = brain.put_entity(entity)
-        except ValueError as exc:
-            return json.dumps({"error": str(exc)})
+        except KeyError:
+            return json.dumps({
+                "error": "each related_to entry needs a 'target'",
+                "hint": '[{"target": "product:checkout", '
+                        '"relationship_edge_meaning": "affects"}]',
+            })
+        except ValueError as exc:  # includes pydantic validation errors
+            return json.dumps({
+                "error": str(exc),
+                "known_fields": [f.name for f in dt.fields],
+                "hint": "See navigation_guidelines() for this doc_type's schema.",
+            })
+
         # path is None for index-backed types (DB is the source of truth).
         return json.dumps({"ok": True, "id": entity.id, "path": str(path) if path else None})
 
@@ -159,17 +202,51 @@ def build_server(brain: Brain, read_only: bool = False):
         doc_type: str,
         description: str = "",
         fields: Optional[list[dict[str, Any]]] = None,
+        relationships: Optional[list[dict[str, str]]] = None,
         color: str = "#6b7280",
         label_field: str = "name",
         storage: str = "index",
     ) -> str:
-        """Define a new doc_type (concept) in the brain, persisted to
-        doc_types/<name>.yaml. `fields` is a list of field specs, each like
-        {"name": "severity", "type": "string", "processing": "keyword",
-        "search": "syntactic", "boost": 2}. `storage` is "index" (DB is the
-        source of truth — default, for generated/high-volume data) or "file"
-        (JSON entities tracked in git — for curated data). Only create a new
-        doc_type when no existing one fits — check navigation_guidelines first."""
+        """Define a new concept, persisted to doc_types/<name>.yaml.
+
+        Only when no existing doc_type fits — call navigation_guidelines() first;
+        reusing a type beats adding a near-duplicate.
+
+        Args:
+            doc_type: Singular, lowercase concept name, e.g. "runbook".
+            description: What one of these is — shown to future agents.
+            fields: Field specs. Only "name" is required in each. Keys:
+                name       — field name
+                type       — string | text | number | boolean | timestamp
+                processing — keyword | text | timestamp  (keyword = exact/filter)
+                search     — syntactic | semantic | none
+                             (syntactic = keyword match, semantic = vector search)
+                boost      — number > 0, default 1. Search weight: a hit in a
+                             boost-6 field outranks a boost-1 hit 6-to-1.
+                required   — true to reject entities missing it
+                Convention: a high-boost `name` field, plus a `description` field
+                with search "semantic" so entities are findable by meaning.
+            relationships: The edge vocabulary for this type, each
+                {"name": "<meaning>", "target_doc_type": "<other_type>"}.
+                Makes correlations discoverable and lightly validated.
+            storage: "index" (default) — the DB owns these entities, no files
+                written; right for generated/high-volume/temporal data.
+                "file" — JSON under entities/<doc_type>/ is the git-tracked
+                source of truth; right for curated data.
+            color: Hex color for this type's nodes on the map.
+            label_field: Which field labels a node. Defaults to "name".
+
+        Example:
+            create_doc_type(
+                doc_type="runbook",
+                description="A procedure for handling a known failure.",
+                storage="file",
+                fields=[
+                    {"name": "name", "type": "string", "search": "syntactic", "boost": 6},
+                    {"name": "steps", "type": "text", "search": "semantic"},
+                ],
+                relationships=[{"name": "resolves", "target_doc_type": "alert"}],
+            )"""
         try:
             dt = DocType(
                 doc_type=doc_type,
@@ -177,11 +254,27 @@ def build_server(brain: Brain, read_only: bool = False):
                 storage=storage,
                 display=DocTypeDisplay(label_field=label_field, color=color),
                 fields=[FieldSpec.model_validate(f) for f in (fields or [])],
+                relationships=[
+                    RelationshipSpec.model_validate(r) for r in (relationships or [])
+                ],
             )
             path = brain.create_doc_type(dt)
         except ValueError as exc:
-            return json.dumps({"error": str(exc)})
-        return json.dumps({"ok": True, "doc_type": doc_type, "path": str(path)})
+            return json.dumps({
+                "error": str(exc),
+                "hint": (
+                    "Check the field spec vocabulary in navigation_guidelines(). "
+                    "storage must be 'index' or 'file'; search must be "
+                    "'syntactic', 'semantic', or 'none'."
+                ),
+            })
+        return json.dumps({
+            "ok": True,
+            "doc_type": doc_type,
+            "path": str(path),
+            "next": f'Add entities with put_entity(doc_type="{doc_type}", '
+                    f'id="{doc_type}:<slug>", ...).',
+        })
 
     return server
 
@@ -216,6 +309,7 @@ def _bearer_auth_middleware(app, token: str):
 def serve_http(
     brain_dir: str, host: str = "0.0.0.0", port: int = 8080,
     token: Optional[str] = None, read_only: bool = False,
+    warn_unauthenticated: bool = True,
 ) -> None:
     """Run the MCP server over streamable HTTP so remote/cloud agents can connect
     by URL. Register `http://<host>:<port>/mcp` as a remote MCP server in the
@@ -235,10 +329,12 @@ def serve_http(
     app = server.streamable_http_app()
     if token:
         app = _bearer_auth_middleware(app, token)
-    else:
+    elif warn_unauthenticated:
+        # The CLI prints its own (richer) warning in the startup banner and passes
+        # warn_unauthenticated=False; this covers programmatic callers.
         import sys
         print(
-            "WARNING: serving with no --token; the writable endpoint is unauthenticated. "
+            "WARNING: serving with no token; the endpoint is unauthenticated. "
             "Set OPEN_INDEX_TOKEN or --token for anything networked.",
             file=sys.stderr,
         )

@@ -105,10 +105,13 @@ truth behind them.
   Ids look like `<doc_type>:<slug>` (e.g. `product:checkout`).
 
 ## MCP tools
-- `navigation_guidelines()` — READ FIRST. What doc_types exist, fields, examples.
+- `navigation_guidelines()` — **READ FIRST.** The complete guide to this brain:
+  doc_types, their full field schemas, relationship vocabulary, and worked write
+  examples. You should not need any other documentation to author this brain.
 - `search_brain(query, doc_types, limit)` / `get_entity(id)` — query.
 - `put_entity(doc_type, id, name, fields, related_to)` — add/update an entity.
-- `create_doc_type(doc_type, description, fields, color)` — define a new concept.
+- `create_doc_type(doc_type, description, fields, relationships, storage, color,
+  label_field)` — define a new concept.
 
 ## Editing this brain
 When asked to add/update knowledge, follow the **edit-brain** skill
@@ -209,9 +212,10 @@ This repo is a **brain** (a context graph built with Open Index). You can edit i
 - **By editing files** then running `open-index index` and `open-index validate`.
 
 ## Always start here
-Call `navigation_guidelines()` (MCP) or read `doc_types/*.yaml`. It tells you which
-doc_types exist, their fields, and the **relationship vocabulary already in use**.
-Reuse existing doc_types and relationship meanings instead of inventing near-duplicates.
+Call `navigation_guidelines()` (MCP) or read `doc_types/*.yaml`. It is self-contained:
+which doc_types exist, their full field schemas, the **relationship vocabulary already
+in use**, and the exact call shapes for writing. Reuse existing doc_types and
+relationship meanings instead of inventing near-duplicates.
 
 ## Add / update an entity
 - Id must be `<doc_type>:<slug>` (e.g. `service:checkout`). `put_entity` is an upsert.
