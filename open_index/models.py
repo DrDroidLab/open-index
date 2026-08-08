@@ -41,8 +41,9 @@ class Provenance(BaseModel):
     should filter on `confidence` and record what they filtered on.
     """
 
-    # Who or what asserted it: "connector:kubernetes", "agent:inv_agent_v1_2",
-    # "human:anurag", "hand-typed-rca/88bfc527".
+    # Who or what asserted it. Free-form, but a `kind:id` convention keeps it
+    # sortable and greppable: "connector:<name>", "agent:<name>", "human:<user>",
+    # "import:<batch-id>".
     asserted_by: Optional[str] = None
     # When the assertion was made (ISO-8601). Distinct from validity — see module docstring.
     asserted_at: Optional[str] = None

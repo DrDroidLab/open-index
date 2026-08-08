@@ -1,10 +1,9 @@
 """Provenance and validity — who asserted a claim, and when it is true.
 
-The motivating failure: an extraction run produced 38 runtime attributions of which
-a hand-checked sample was 6% correct, and the store held all 38 as fact. Nothing
-distinguished the 2 good ones from the 36 bad ones. These tests pin the behaviour
-that makes that distinguishable — and, more importantly, that makes UNATTRIBUTED
-claims fail a trust filter rather than pass it.
+The failure mode these guard against: a bulk import writes many low-quality
+attributions, the store holds them all as fact, and nothing distinguishes the few
+good ones from the many bad ones. Provenance makes that separable — and, more
+importantly, makes an UNATTRIBUTED claim fail a trust filter rather than pass it.
 """
 import json
 
@@ -94,15 +93,15 @@ def test_validity_comparison_does_no_date_arithmetic():
 def test_provenance_and_validity_round_trip_through_json():
     e = Entity.from_dict({
         "doc_type": "issue", "id": "issue:r", "name": "r", "severity": "low",
-        "provenance": {"asserted_by": "hand-typed-rca/88bfc527",
+        "provenance": {"asserted_by": "import:batch-7",
                        "asserted_at": "2026-08-07T00:00:00Z",
-                       "confidence": 0.9, "evidence": "deployment 2026-07-09-19-22-03"},
-        "valid_from": "2026-07-09T19:22:03Z",
+                       "confidence": 0.9, "evidence": "source-record-4821"},
+        "valid_from": "2026-01-15T09:30:00Z",
     })
     again = Entity.from_dict(json.loads(json.dumps(e.to_json())))
-    assert again.provenance.asserted_by == "hand-typed-rca/88bfc527"
+    assert again.provenance.asserted_by == "import:batch-7"
     assert again.provenance.confidence == 0.9
-    assert again.valid_from == "2026-07-09T19:22:03Z"
+    assert again.valid_from == "2026-01-15T09:30:00Z"
     assert again.valid_to is None
 
 
