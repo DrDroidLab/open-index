@@ -241,6 +241,69 @@ def build_server(brain: Brain, read_only: bool = False):
         return json.dumps({"ok": True, "id": entity.id, "path": str(path) if path else None})
 
     @server.tool()
+    def put_entities(
+        entities: list[dict[str, Any]],
+        provenance: Optional[dict[str, Any]] = None,
+    ) -> str:
+        """Add or update MANY entities in one call. Use this instead of calling
+        put_entity repeatedly — importing a list, backfilling from a document,
+        or recording a batch of findings.
+
+        Args:
+            entities: A list of entity objects, each shaped like a put_entity
+                call: {"doc_type": "...", "id": "<doc_type>:<slug>",
+                "name": "...", "fields": {...}, "related_to": [...]}. Fields may
+                also be written flat alongside the reserved keys. Each may carry
+                its own "provenance", "valid_from" and "valid_to".
+            provenance: Attribution applied to every entity that does not carry
+                its own — attribute the batch once rather than per row. Same
+                shape as put_entity's: {"asserted_by": ..., "asserted_at": ...,
+                "confidence": 0.0-1.0, "evidence": ...}.
+
+        A row that fails validation does not abort the rest. The reply reports
+        `written`, `failed`, and per-entity `errors`, so check it rather than
+        assuming everything landed."""
+        if not entities:
+            return json.dumps({"ok": True, "written": 0, "failed": 0, "errors": []})
+
+        try:
+            shared = Provenance(**provenance) if provenance else None
+        except (TypeError, ValueError) as exc:
+            return json.dumps({"error": f"invalid provenance: {exc}"})
+
+        # Non-dict elements are rejected by the tool's input schema before this
+        # runs (entities is list[dict[str, Any]]), so every raw here is a dict.
+        parsed: list[Entity] = []
+        errors: list[str] = []
+        for i, raw in enumerate(entities):
+            doc_type = raw.get("doc_type")
+            if doc_type is None:
+                errors.append(f"[{i}]: missing 'doc_type'")
+                continue
+            if brain.config.doc_type(doc_type) is None:
+                errors.append(
+                    f"[{i}] {raw.get('id', '?')}: unknown doc_type '{doc_type}' "
+                    f"(known: {list(brain.config.doc_types)})"
+                )
+                continue
+            try:
+                # from_dict so callers may write schema fields flat, matching the
+                # entity JSON files on disk.
+                parsed.append(Entity.from_dict(raw))
+            except (TypeError, ValueError, KeyError) as exc:
+                errors.append(f"[{i}] {raw.get('id', '?')}: {exc}")
+
+        result = brain.put_entities(parsed, provenance=shared)
+        errors.extend(result.errors)
+        return json.dumps({
+            "ok": not errors,
+            "written": result.written,
+            "failed": len(errors),
+            "errors": errors[:50],
+            "paths": [str(p) for p in result.paths],
+        }, indent=2)
+
+    @server.tool()
     def create_doc_type(
         doc_type: str,
         description: str = "",

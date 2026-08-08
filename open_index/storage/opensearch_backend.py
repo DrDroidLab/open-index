@@ -338,6 +338,38 @@ class OpenSearchBackend:
             index=self.index, id=entity.id, body=self._doc_with_embedding(entity), refresh=True
         )
 
+    def upsert_many(self, items: list[tuple[Entity, Optional[DocType]]]) -> None:
+        """One _bulk request with a single refresh at the end.
+
+        The per-entity path refreshes the index on every write, which on a few
+        hundred rows costs far more than the indexing itself."""
+        if not items:
+            return
+
+        for _entity, doc_type in items:
+            if doc_type is not None:
+                self._doc_types[doc_type.doc_type] = doc_type
+
+        payload: list[dict] = []
+        for entity, _doc_type in items:
+            payload.append({"index": {"_index": self.index, "_id": entity.id}})
+            payload.append(self._doc_with_embedding(entity))
+
+        response = self._client.bulk(body=payload, refresh=True)
+        if response.get("errors"):
+            # Surface the first real failure rather than reporting success for a
+            # partially-applied batch.
+            failed = [
+                item[op].get("error")
+                for item in response.get("items", [])
+                for op in item
+                if item[op].get("error")
+            ]
+            raise RuntimeError(
+                f"{len(failed)} of {len(items)} documents failed to index; "
+                f"first error: {failed[0]}"
+            )
+
     def get_entity(self, entity_id: str) -> Optional[Entity]:
         from opensearchpy.exceptions import NotFoundError
 

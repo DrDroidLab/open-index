@@ -110,6 +110,102 @@ def add_entity(
     typer.secho(f"✓ stored {added} entity(ies)", fg=typer.colors.GREEN)
 
 
+@app.command("import")
+def import_entities(
+    file: str = typer.Argument(..., help="A .json (array), .jsonl, or .csv file."),
+    brain: str = BrainOpt,
+    doc_type: Optional[str] = typer.Option(
+        None, "--doc-type", "-t",
+        help="doc_type for rows that don't name one (required for CSV).",
+    ),
+    id_field: str = typer.Option(
+        "id", "--id-field",
+        help="Which column/key holds the id or slug. Slugs are prefixed with the doc_type.",
+    ),
+    asserted_by: Optional[str] = typer.Option(
+        None, "--asserted-by",
+        help="Attribution for the whole batch, e.g. 'import:crm-2026-08'.",
+    ),
+    confidence: Optional[float] = typer.Option(
+        None, "--confidence", min=0.0, max=1.0,
+        help="Confidence for the whole batch (0.0-1.0).",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Validate and report without writing."
+    ),
+):
+    """Bulk-import entities from a JSON array, JSONL, or CSV file.
+
+    Rows that fail validation are reported and skipped; the rest still land.
+
+        open-index import people.csv --doc-type person --asserted-by import:hr
+    """
+    from open_index.bulk import load_entity_records
+
+    b = _open_brain(brain)
+    path = Path(file)
+    if not path.exists():
+        typer.secho(f"no such file: {path}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    try:
+        records, parse_errors = load_entity_records(
+            path, doc_type=doc_type, id_field=id_field
+        )
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    from open_index.models import Entity, Provenance
+
+    entities = []
+    for i, rec in enumerate(records):
+        try:
+            entities.append(Entity.from_dict(rec))
+        except (TypeError, ValueError, KeyError) as exc:
+            parse_errors.append(f"row {i + 1}: {exc}")
+
+    provenance = None
+    if asserted_by or confidence is not None:
+        from datetime import datetime, timezone
+
+        provenance = Provenance(
+            asserted_by=asserted_by,
+            asserted_at=datetime.now(timezone.utc).isoformat(),
+            confidence=confidence,
+        )
+
+    if dry_run:
+        problems = list(parse_errors)
+        valid = 0
+        for entity in entities:
+            errors = b.validate_entity(entity)
+            problems.extend(f"{entity.id}: {e}" for e in errors)
+            valid += not errors
+        for problem in problems:
+            typer.secho(f"  ✗ {problem}", fg=typer.colors.RED, err=True)
+        typer.secho(
+            f"dry run: {valid} entity(ies) would be written, "
+            f"{len(problems)} problem(s) — nothing written",
+            fg=typer.colors.YELLOW if problems else typer.colors.GREEN,
+        )
+        raise typer.Exit(1 if problems else 0)
+
+    result = b.put_entities(entities, provenance=provenance)
+    for err in parse_errors + result.errors:
+        typer.secho(f"  ✗ {err}", fg=typer.colors.RED, err=True)
+
+    failed = len(parse_errors) + result.failed
+    typer.secho(
+        f"✓ imported {result.written} entities"
+        + (f" ({failed} skipped)" if failed else "")
+        + (f", {len(result.paths)} file(s) written" if result.paths else ""),
+        fg=typer.colors.YELLOW if failed else typer.colors.GREEN,
+    )
+    if failed:
+        raise typer.Exit(1)
+
+
 @app.command()
 def index(
     brain: str = BrainOpt,

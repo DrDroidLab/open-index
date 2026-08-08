@@ -9,11 +9,38 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
+from dataclasses import dataclass, field
+
 from open_index.config import BrainConfig, iter_entity_files, load_brain_config
-from open_index.models import Entity
+from open_index.models import Entity, Provenance
 from open_index.schema import DocType
 from open_index.storage import get_backend
 from open_index.storage.base import SearchBackend, SearchResults
+
+
+@dataclass
+class BulkResult:
+    """Outcome of a batch write: what landed, and what didn't and why.
+
+    Partial success is the normal case for an import, so this reports both
+    rather than raising — one malformed row should not discard the other 499.
+    """
+
+    written: int = 0
+    errors: list[str] = field(default_factory=list)
+    paths: list[Path] = field(default_factory=list)
+
+    @property
+    def failed(self) -> int:
+        return len(self.errors)
+
+    def summary(self) -> str:
+        text = f"{self.written} written"
+        if self.errors:
+            text += f", {self.failed} failed"
+        if self.paths:
+            text += f", {len(self.paths)} file(s) persisted"
+        return text
 
 
 class Brain:
@@ -123,6 +150,58 @@ class Brain:
             path.write_text(json.dumps(entity.to_json(), indent=2, ensure_ascii=False) + "\n")
             return path
         return None
+
+    def put_entities(
+        self,
+        entities: list[Entity],
+        validate: bool = True,
+        provenance: Optional["Provenance"] = None,
+    ) -> "BulkResult":
+        """Write many entities in one batch.
+
+        Differs from calling `put_entity` in a loop in two ways that matter at
+        volume: the backend writes once (one transaction / one bulk request /
+        one embedding call), and a bad row does not abort the run. Invalid
+        entities are collected in `BulkResult.errors` and everything else still
+        lands — a 500-row import should not be undone by one typo.
+
+        `provenance` is applied to entities that don't carry their own, so a
+        caller importing a batch attributes it once instead of per row. An
+        entity's own provenance always wins.
+        """
+        result = BulkResult()
+        writable: list[tuple[Entity, Optional[DocType]]] = []
+
+        for entity in entities:
+            if provenance is not None and entity.provenance is None:
+                entity = entity.model_copy(update={"provenance": provenance})
+            if validate:
+                errors = self.validate_entity(entity)
+                if errors:
+                    result.errors.append(f"{entity.id}: {'; '.join(errors)}")
+                    continue
+            writable.append((entity, self.config.doc_type(entity.doc_type)))
+
+        if not writable:
+            return result
+
+        self.backend.upsert_many(writable)
+        result.written = len(writable)
+
+        # File-backed types keep JSON on disk as the source of truth; index-backed
+        # ones live only in the DB. Same policy as put_entity, applied per row.
+        for entity, dt in writable:
+            if dt is not None and dt.storage == "file" and self.config.root is not None:
+                result.paths.append(self._write_entity_file(entity))
+        return result
+
+    def _write_entity_file(self, entity: Entity) -> Path:
+        import json
+
+        path = self.entity_path(entity)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(entity.to_json(), indent=2, ensure_ascii=False) + "\n")
+        return path
 
     def _file_backed_types(self) -> set[str]:
         return {n for n, dt in self.config.doc_types.items() if dt.storage == "file"}

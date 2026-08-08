@@ -73,6 +73,27 @@ def test_a_backend_typo_in_brain_yaml_is_caught_too(brain_dir):
         load_brain_config(brain_dir)
 
 
+def test_legacy_storage_backend_still_loads_but_warns(brain_dir, caplog):
+    """It never did anything; failing on it would break existing brains, and
+    ignoring it silently is what made two 'backend' keys so confusing."""
+    path = brain_dir / "brain.yaml"
+    path.write_text(path.read_text().replace(
+        "storage:\n  path:", "storage:\n  backend: opensearch\n  path:"))
+
+    with caplog.at_level("WARNING", logger="open_index.config"):
+        config = load_brain_config(brain_dir)
+
+    assert config.search.backend == "sqlite", "storage.backend must not select the engine"
+    assert "storage.backend" in caplog.text
+    assert "search.backend" in caplog.text
+
+
+def test_no_warning_when_storage_backend_is_absent(brain_dir, caplog):
+    with caplog.at_level("WARNING", logger="open_index.config"):
+        load_brain_config(brain_dir)
+    assert "storage.backend" not in caplog.text
+
+
 def test_missing_brain_yaml_names_the_fix(tmp_path):
     with pytest.raises(FileNotFoundError, match="open-index init"):
         load_brain_config(tmp_path)

@@ -13,11 +13,14 @@ name: {name}
 description: A context graph built with open-index.
 
 storage:
-  backend: sqlite
-  path: ./brain.db
+  path: ./brain.db     # where the SQLite file lives (ignored by OpenSearch)
 
 search:
-  backend: sqlite   # pluggable: sqlite | opensearch
+  # The engine that stores AND searches this brain — one decision, made here.
+  #   sqlite     — no external services, single-writer. Right to start with.
+  #   opensearch — many concurrent writers, native fuzzy + k-NN search.
+  # Override per environment with OPEN_INDEX_SEARCH_BACKEND.
+  backend: sqlite
 """
 
 EXAMPLE_DOC_TYPE = """\

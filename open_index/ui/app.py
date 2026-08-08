@@ -1,8 +1,17 @@
-"""Streamlit explorer for a brain: Structure | Search | Map.
+"""Streamlit explorer for a brain.
 
 Launched via `open-index ui`; the brain directory arrives in OPEN_INDEX_DIR.
-The Map tab is the point of the whole thing — pick an anchor entity, choose a
-depth, and see the context graph, with click-to-re-anchor for exploration.
+
+The UI is for **inspecting** a brain, not editing one — writes go through the
+agent (MCP) or the CLI so every change is validated and lands in the source of
+truth. Accordingly there are three tabs, and the two questions a newcomer
+actually has are answered without clicking anything:
+
+    "what's in here?"   the sidebar always lists every doc_type with its count
+    "show me the map"   the map auto-anchors on the most-connected entities
+
+Both used to require finding the right tab and then making a selection before
+anything appeared, which read as an empty or broken screen.
 """
 
 from __future__ import annotations
@@ -13,6 +22,7 @@ import streamlit as st
 
 from open_index.brain import Brain
 from open_index.graph import ContextGraph, build_graph
+from open_index.ui import view
 
 st.set_page_config(page_title="Open Index", page_icon="🧠", layout="wide")
 
@@ -22,28 +32,258 @@ def _open_brain(brain_dir: str) -> Brain:
     return Brain.open(brain_dir)
 
 
-@st.cache_resource(show_spinner=False)
-def _engine_backend(brain_dir: str, engine: str):
-    """Construct a search backend by engine name for the Search-tab toggle,
-    so both engines can be compared over the same brain."""
-    from open_index.config import load_brain_config
-    from open_index.storage import SQLiteBackend
+# Buttons styled as full-width list rows, so results and neighbours read as a
+# list rather than a wall of chrome.
+ROW_CSS = """
+<style>
+div[data-testid='stButton'] > button{
+  width:100%; text-align:left; justify-content:flex-start;
+  border:1px solid #ececec; border-radius:6px; background:#fff;
+  padding:7px 12px; font-weight:400; font-size:0.92rem; margin-bottom:-1px;
+}
+div[data-testid='stButton'] > button:hover{background:#f5f6f8;border-color:#dcdcdc;color:inherit}
+div[data-testid='stButton'] > button:focus{box-shadow:none;color:inherit}
+</style>
+"""
 
-    cfg = load_brain_config(brain_dir)
-    if engine == "sqlite":
-        return SQLiteBackend(cfg.db_path(), cfg)
-    from open_index.storage.opensearch_backend import OpenSearchBackend
 
-    return OpenSearchBackend(cfg)
+def _dot(color: str) -> str:
+    """An inline colored dot matching a doc_type's map color."""
+    return (f"<span style='display:inline-block;width:9px;height:9px;"
+            f"border-radius:50%;background:{color};margin-right:6px'></span>")
 
 
-def _color(brain: Brain, doc_type: str) -> str:
-    dt = brain.config.doc_type(doc_type)
-    return dt.display.color if dt else "#6b7280"
+def _esc(text) -> str:
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+# --------------------------------------------------------------------------- #
+# Sidebar — the brain at a glance. Always visible, on every tab.
+# --------------------------------------------------------------------------- #
+
+def render_sidebar(brain: Brain) -> dict:
+    """Identity, structure and settings. Returns the chosen search options."""
+    summary = view.summarize(brain)
+
+    with st.sidebar:
+        st.markdown(f"### 🧠 {_esc(summary.name)}")
+        if summary.description:
+            st.caption(summary.description)
+        st.caption(f"**{summary.total_entities:,}** entities · "
+                   f"**{len(summary.doc_types)}** doc_types")
+
+        st.divider()
+        st.markdown("**Doc types**")
+        if not summary.has_schema:
+            st.caption("None yet — define one with `open-index add-doc-type`, "
+                       "or ask your agent.")
+        for row in summary.doc_types:
+            st.markdown(
+                f"{_dot(row.color)} `{_esc(row.name)}` &nbsp; "
+                f"<span style='opacity:.6'>{row.count:,} · {row.storage}</span>",
+                unsafe_allow_html=True,
+            )
+
+        st.divider()
+        with st.expander("Search settings"):
+            mode = st.radio(
+                "Mode", list(view.SEARCH_MODES), horizontal=True,
+                help=("Hybrid: keyword matches dominate, semantic similarity "
+                      "rescues differently-worded queries. Keyword: text only. "
+                      "Semantic: embedding similarity only."),
+            )
+            if mode == "Semantic":
+                from open_index.embeddings import embedding_provider_available
+
+                if not embedding_provider_available():
+                    st.warning("No embedding provider — results stay keyword-only. "
+                               "Install `open-index[semantic]`.")
+
+        with st.expander("Connect an agent"):
+            st.caption("Editing happens through your agent or the CLI, never here — "
+                       "so every write is validated.")
+            st.code(f"open-index mcp-config --brain {os.environ.get('OPEN_INDEX_DIR', '.')}",
+                    language="bash")
+            st.caption("Paste the output into `.mcp.json`, then ask the agent to "
+                       "read `navigation_guidelines` and add what you need.")
+
+    return {"semantic_weight": view.semantic_weight_for(mode)}
+
+
+# --------------------------------------------------------------------------- #
+# Explore — search and browse in one place (they were duplicate screens).
+# --------------------------------------------------------------------------- #
+
+def _goto(entity_id) -> None:
+    st.session_state["open_entity"] = entity_id
+    st.rerun()
+
+
+def render_explore(brain: Brain, options: dict) -> None:
+    summary = view.summarize(brain)
+
+    if summary.is_empty:
+        st.info("This brain has no entities yet.")
+        st.caption("Add some with `open-index import <file>`, a connector, or by "
+                   "asking your agent — then run `open-index index`.")
+        return
+
+    query = st.text_input(
+        "Search", label_visibility="collapsed",
+        placeholder="Search the brain…  e.g. payment, checkout, redis",
+    )
+    type_filter = st.multiselect(
+        "Limit to doc_types", [r.name for r in summary.doc_types],
+        label_visibility="collapsed", placeholder="All doc types",
+    )
+
+    if st.session_state.get("open_entity"):
+        render_entity(brain, st.session_state["open_entity"])
+        return
+
+    if query:
+        _render_results(brain, query, type_filter or None, options)
+    else:
+        _render_browse(brain, summary, type_filter or None)
+
+
+def _render_results(brain: Brain, query: str, doc_types, options: dict) -> None:
+    try:
+        results = brain.search(query=query, doc_types=doc_types, limit=50,
+                               semantic_weight=options["semantic_weight"])
+    except Exception as exc:  # a backend that's down shouldn't blank the page
+        st.error(f"Search failed: {exc}")
+        return
+
+    st.caption(f"{results.total} result(s) — click one to open")
+    if not results.results:
+        st.info("No matches. Try fewer words, or switch to Semantic mode in the sidebar.")
+        return
+    for r in results.results:
+        color = view.color_for(brain, r["doc_type"])
+        if st.button(f"{r['name']}  ·  {r['doc_type']}  ·  {r['id']}",
+                     key=f"res_{r['id']}"):
+            _goto(r["id"])
+
+
+def _render_browse(brain: Brain, summary: view.BrainSummary, doc_types) -> None:
+    """No query: list entities by type so the brain is never a blank page."""
+    shown = [r for r in summary.doc_types
+             if r.count and (not doc_types or r.name in doc_types)]
+    if not shown:
+        st.info("No entities in the selected doc_types.")
+        return
+
+    for row in shown:
+        with st.expander(f"{row.name} · {row.count:,}",
+                         expanded=len(shown) == 1):
+            if row.description:
+                st.caption(row.description)
+            for entity in brain.backend.all_entities([row.name])[:200]:
+                description = entity.fields.get("description", "")
+                label = entity.name + (f"  ·  {description[:70]}" if description else "")
+                if st.button(label, key=f"br_{entity.id}"):
+                    _goto(entity.id)
+            if row.count > 200:
+                st.caption(f"showing the first 200 of {row.count:,} — search to narrow.")
+
+
+def render_entity(brain: Brain, entity_id: str) -> None:
+    """One entity: its fields, its attribution, and both directions of its edges."""
+    if st.button("← back", key="entity_back"):
+        _goto(None)
+
+    entity = brain.get_entity(entity_id)
+    if entity is None:
+        st.warning(f"No entity `{entity_id}`.")
+        return
+
+    st.markdown(
+        f"{_dot(view.color_for(brain, entity.doc_type))} **{_esc(entity.name)}** "
+        f"&nbsp;<span style='opacity:.6'>`{_esc(entity.id)}`</span>",
+        unsafe_allow_html=True,
+    )
+
+    rows = view.field_rows(entity)
+    if rows:
+        st.table(rows)
+
+    provenance = view.provenance_row(entity)
+    if provenance:
+        with st.expander("Provenance"):
+            st.table([provenance])
+    if entity.valid_from or entity.valid_to:
+        st.caption(f"valid: {entity.valid_from or '—'} → {entity.valid_to or 'now'}")
+
+    links = view.neighbours(brain, entity_id)
+    st.markdown(f"**Relationships** ({len(links)})")
+    if not links:
+        st.caption("None yet. Edges are what make this a graph — ask your agent to "
+                   "link this entity to related ones.")
+        return
+    for i, link in enumerate(links):
+        suffix = "" if link.exists else "  ·  (missing)"
+        if st.button(f"{link.label}  ·  {link.other_id}{suffix}",
+                     key=f"nb_{i}_{link.other_id}"):
+            _goto(link.other_id)
+
+
+# --------------------------------------------------------------------------- #
+# Map — draws immediately, no selection required.
+# --------------------------------------------------------------------------- #
+
+def render_map(brain: Brain) -> None:
+    summary = view.summarize(brain)
+    populated = [r.name for r in summary.doc_types if r.count]
+    if not populated:
+        st.info("No entities to map yet. Add some and run `open-index index`.")
+        return
+
+    chosen_types = st.multiselect(
+        "Doc types to include", populated, default=populated,
+        help="Narrow the map to the concepts you care about.",
+    )
+    scope = chosen_types or populated
+
+    # Auto-anchor rather than waiting for a selection. The old UI drew nothing
+    # until you picked entities, which looked like a broken canvas.
+    auto = view.default_anchors(brain, scope)
+    catalog = {f"{e.name}  ({e.id})": e.id
+               for e in brain.backend.all_entities(scope)}
+    auto_labels = [label for label, eid in catalog.items() if eid in auto]
+
+    picked = st.multiselect(
+        "Anchors", list(catalog), default=auto_labels,
+        help="Starting points. Click any node in the map to expand it.",
+    )
+    anchors = [catalog[label] for label in picked]
+
+    expanded = st.session_state.get("expanded", set())
+    if expanded:
+        cols = st.columns([4, 1])
+        cols[0].caption(f"expanded: {', '.join(sorted(expanded))}")
+        if cols[1].button("↺ reset"):
+            st.session_state["expanded"] = set()
+            st.rerun()
+
+    anchors = list(dict.fromkeys(anchors + list(expanded)))
+    if not anchors:
+        st.info("Select at least one anchor above.")
+        return
+
+    graph = build_graph(brain, anchors, depth=1)
+    st.caption(f"{len(graph.nodes)} nodes · {len(graph.edges)} edges — "
+               "click a node to expand its relationships")
+    render_graph(brain, graph)
+
+    # streamlit-agraph doesn't paint on its first render inside a tab (the canvas
+    # mounts with zero size). One forced rerun remounts it with the tab active.
+    if not st.session_state.get("_map_primed"):
+        st.session_state["_map_primed"] = True
+        st.rerun()
 
 
 def render_graph(brain: Brain, graph: ContextGraph) -> None:
-    """Draw the context graph with streamlit-agraph, falling back to a table."""
     try:
         from streamlit_agraph import Config, Edge, Node, agraph
     except ImportError:
@@ -53,454 +293,41 @@ def render_graph(brain: Brain, graph: ContextGraph) -> None:
         return
 
     nodes = [
-        Node(
-            id=n.id,
-            label=n.label,
-            color=n.color,
-            size=22 if n.is_anchor else 16,
-            shape="dot",
-            title=f"{n.doc_type} · {n.id}",
-        )
+        Node(id=n.id, label=n.label, color=n.color,
+             size=22 if n.is_anchor else 16, shape="dot",
+             title=f"{n.doc_type} · {n.id}")
         for n in graph.nodes
     ]
-    edges = [
-        Edge(source=e.source, target=e.target, label=e.meaning)
-        for e in graph.edges
-    ]
+    edges = [Edge(source=e.source, target=e.target, label=e.meaning)
+             for e in graph.edges]
     config = Config(
-        width="100%",
-        height=650,
-        directed=True,
+        width="100%", height=650, directed=True,
         # Physics keeps large graphs drifting (and the canvas can stay blank
         # while hundreds of nodes settle) — freeze the layout past ~150 nodes.
         physics=len(graph.nodes) <= 150,
-        hierarchical=False,
-        collapsible=False,
+        hierarchical=False, collapsible=False,
     )
     clicked = agraph(nodes=nodes, edges=edges, config=config)
-    # Clicking a node expands it: add it to the anchor set and redraw.
     if clicked and clicked not in st.session_state.get("expanded", set()):
         st.session_state.setdefault("expanded", set()).add(clicked)
         st.rerun()
 
 
-def main() -> None:
-    brain = _open_brain(os.environ.get("OPEN_INDEX_DIR", "."))
+# --------------------------------------------------------------------------- #
+# Jobs — connectors and their schedules.
+# --------------------------------------------------------------------------- #
 
-    st.title(f"🧠 {brain.config.name}")
-    if brain.config.description:
-        st.caption(brain.config.description)
+def render_jobs(brain: Brain) -> None:
+    from open_index.connectors.runner import discover_connectors
+    from open_index.scheduling import RunState
 
-    st.markdown(ROW_CSS, unsafe_allow_html=True)  # buttons styled as list rows
-    tab_structure, tab_search, tab_map, tab_jobs, tab_edit = st.tabs(
-        ["Structure", "Search", "Map", "Jobs", "Edit"]
-    )
-
-    # ---- Structure — clickable doc_type folders → entity hub ------------- #
-    with tab_structure:
-        render_structure(brain)
-
-    # ---- Search — search box + clickable results ------------------------ #
-    with tab_search:
-        render_search(brain)
-
-    # ---- Map -------------------------------------------------------------- #
-    with tab_map:
-        render_map(brain)
-
-    # ---- Jobs — connectors + scheduled ingestion jobs ------------------- #
-    with tab_jobs:
-        render_connectors(brain)
-
-    # ---- Edit (guidance only — editing happens via agent/CLI) ------------- #
-    with tab_edit:
-        render_edit_guide(brain)
-
-
-def _esc(s: str) -> str:
-    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
-
-
-# Colored-square emojis, so button-row labels carry the per-doc_type color.
-_SQUARES = {
-    "\U0001F7E5": (208, 48, 47), "\U0001F7E7": (230, 126, 34), "\U0001F7E8": (241, 196, 15),
-    "\U0001F7E9": (46, 204, 113), "\U0001F7E6": (52, 152, 219), "\U0001F7EA": (155, 89, 182),
-    "\U0001F7EB": (120, 80, 40), "⬛": (30, 30, 30), "⬜": (235, 235, 235),
-}
-
-
-def _square(hex_color: str) -> str:
-    """Nearest colored-square emoji to a hex color."""
-    try:
-        r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
-    except (ValueError, IndexError):
-        return "⬜"
-    return min(_SQUARES.items(),
-              key=lambda kv: sum((c - v) ** 2 for c, v in zip((r, g, b), kv[1])))[0]
-
-
-def _dt_square(brain: "Brain", doc_type: str) -> str:
-    return _square(_color(brain, doc_type))
-
-
-# Style Streamlit buttons as clean full-width list rows (whole row clickable,
-# no selection checkbox, no page reload). Injected once per run.
-ROW_CSS = (
-    "<style>"
-    "div[data-testid='stButton'] > button{width:100%;text-align:left;"
-    "justify-content:flex-start;border:1px solid #ececec;border-radius:6px;"
-    "background:#fff;padding:7px 12px;font-weight:400;font-size:0.92rem;margin-bottom:-1px}"
-    "div[data-testid='stButton'] > button:hover{background:#f5f6f8;border-color:#dcdcdc;color:inherit}"
-    "div[data-testid='stButton'] > button:focus{box-shadow:none;color:inherit}"
-    "</style>"
-)
-
-
-# --- clickable explorer shared by Structure + Search (separate namespaces) --- #
-
-def _nav(ns: str, dt=None, e=None):
-    st.session_state[f"{ns}_dt"] = dt
-    st.session_state[f"{ns}_e"] = e
-    st.rerun()
-
-
-def _explorer_folders(brain: Brain, ns: str) -> None:
-    counts = brain.counts()
-    for name in sorted(brain.config.doc_types, key=lambda n: -counts.get(n, 0)):
-        if st.button(f"{_dt_square(brain, name)} {name} · {counts.get(name, 0):,} entities",
-                     key=f"{ns}_fold_{name}"):
-            _nav(ns, dt=name)
-
-
-def _explorer_folder(brain: Brain, ns: str, doc_type: str) -> None:
-    dt = brain.config.doc_type(doc_type)
-    count = brain.counts().get(doc_type, 0)
-    col = st.columns([1, 5])
-    if col[0].button("← back", key=f"{ns}_back_{doc_type}"):
-        _nav(ns)
-    st.markdown(f"**{_dt_square(brain, doc_type)} {_esc(doc_type)}**  ·  {count} entities  ·  storage `{dt.storage}`")
-    if dt.description:
-        st.caption(dt.description)
-    with st.expander("schema & relationships", expanded=True):
-        if dt.fields:
-            st.table([{"field": f.name, "type": f.type, "search": f.search, "boost": f.boost}
-                      for f in dt.fields])
-        if dt.relationships:
-            st.caption("declared: " + ", ".join(
-                f"“{r.name}”" + (f" → {r.target_doc_type}" if r.target_doc_type else "")
-                for r in dt.relationships))
-        observed = brain.observed_relationships(doc_type)
-        if observed:
-            st.caption("in use: " + ", ".join(
-                f"“{m}” ×{n}" for m, n in sorted(observed.items(), key=lambda x: -x[1])))
-    entities = brain.backend.all_entities([doc_type])
-    if not entities:
-        st.info("Empty — no entities of this type yet.")
-        return
-    for en in entities:
-        desc = en.fields.get("description", "")
-        label = f"\U0001F4C4 {en.name}" + (f" · {desc[:60]}" if desc else "")
-        if st.button(label, key=f"{ns}_ent_{en.id}"):
-            _nav(ns, dt=doc_type, e=en.id)
-
-
-def _explorer_entity(brain: Brain, ns: str, entity_id: str, doc_type) -> None:
-    """Entity hub view — fields + related nodes grouped by meaning, each a
-    clickable row that jumps to its own hub."""
-    entity = brain.get_entity(entity_id)
-    col = st.columns([1, 5])
-    if col[0].button("← back", key=f"{ns}_hback_{entity_id}"):
-        _nav(ns, dt=doc_type)
-    if entity is None:
-        st.warning(f"no entity `{entity_id}`")
-        return
-    st.markdown(f"**{_dt_square(brain, entity.doc_type)} {_esc(entity.name)}**  ·  `{entity.id}`")
-    if entity.fields:
-        st.table([{"field": k, "value": str(v)} for k, v in entity.fields.items()])
-    outgoing = [("→", m, t) for _s, t, m in brain.backend.relationships_from(entity_id)]
-    incoming = [("←", m, s) for s, _t, m in brain.backend.relationships_to(entity_id)]
-    rels = outgoing + incoming
-    if not rels:
-        st.caption("no relationships yet")
-        return
-    st.markdown("**Relationships**")
-    for i, (arrow, meaning, other_id) in enumerate(rels):
-        other = brain.get_entity(other_id)
-        nm = other.name if other else other_id.split(":", 1)[-1]
-        sq = _dt_square(brain, other.doc_type) if other else "⬜"
-        label = f"{arrow}  {meaning or '(related)'}: {sq} {nm} · {other_id}"
-        if st.button(label, key=f"{ns}_rel_{i}_{other_id}"):
-            _nav(ns, dt=(other.doc_type if other else None), e=other_id)
-
-
-def render_structure(brain: Brain) -> None:
-    """Doc_type structure + counts; whole rows clickable to drill in."""
-    ns = "struct"
-    st.markdown(f"**\U0001F9E0 {_esc(brain.config.name)}**")
-    total = sum(brain.counts().values())
-    st.caption(f"{total:,} entities · {len(brain.config.doc_types)} doc_types · click a row")
-    e = st.session_state.get(f"{ns}_e")
-    dt = st.session_state.get(f"{ns}_dt")
-    if e:
-        _explorer_entity(brain, ns, e, dt)
-    elif dt:
-        _explorer_folder(brain, ns, dt)
-    else:
-        _explorer_folders(brain, ns)
-
-
-def render_search(brain: Brain) -> None:
-    """Search box on top; idle browses folders, typing shows clickable results."""
-    ns = "search"
-    query = st.text_input(
-        "Search", label_visibility="collapsed",
-        placeholder="Search the brain…  e.g. payment, checkout, redis",
-    )
-    mode = st.radio(
-        "Search mode", ["Hybrid", "Keyword", "Semantic"], horizontal=True,
-        help=("Hybrid (default): keyword matches dominate, semantic similarity "
-              "rescues differently-worded queries. Keyword: exact/fuzzy text "
-              "matching only. Semantic: embedding similarity only."),
-    )
-    weight_override = {"Hybrid": None, "Keyword": 0.0, "Semantic": 1.0}[mode]
-    if mode == "Semantic":
-        from open_index.embeddings import embedding_provider_available
-        if not embedding_provider_available():
-            st.warning("No embedding provider available — results are keyword-only. "
-                       "Install `open-index[semantic]` to enable semantic search.")
-    configured = brain.config.search.backend
-    engine = st.radio(
-        "Engine", ["opensearch", "sqlite"],
-        index=0 if configured == "opensearch" else 1,
-        format_func=lambda e: f"{e}  · configured" if e == configured else e,
-        horizontal=True,
-        help=("Which engine runs this query over the same entities: OpenSearch "
-              "(Lucene scoring with fuzzy typo tolerance) or SQLite (built-in "
-              "FTS ranking, exact terms only). Useful for comparing answers."),
-    )
-    e = st.session_state.get(f"{ns}_e")
-    dt = st.session_state.get(f"{ns}_dt")
-    if e:
-        _explorer_entity(brain, ns, e, dt)
-        return
-    if query:
-        if engine == configured:
-            backend = brain.backend
-        else:
-            if engine == "sqlite" and not brain.config.db_path().exists():
-                st.warning("This brain has no local SQLite store to search — "
-                           "index it with the sqlite backend first.")
-                return
-            try:
-                backend = _engine_backend(str(brain.config.root), engine)
-            except (Exception, SystemExit) as exc:
-                st.error(f"Could not start the {engine} engine: {exc}")
-                return
-        try:
-            results = backend.search(query=query, limit=50, semantic_weight=weight_override)
-        except Exception as exc:
-            st.error(f"{engine} search failed: {exc}")
-            return
-        st.caption(f"{results.total} result(s) · {mode.lower()} mode · {engine} · click one to open")
-        if not results.results:
-            st.info("No matches.")
-            return
-        for r in results.results:
-            label = f"{_dt_square(brain, r['doc_type'])} {r['name']} · {r['id']} · {r['doc_type']}"
-            if st.button(label, key=f"{ns}_res_{r['id']}"):
-                _nav(ns, dt=r["doc_type"], e=r["id"])
-        return
-    if dt:
-        _explorer_folder(brain, ns, dt)
-    else:
-        st.caption("browse by type, or search above")
-        _explorer_folders(brain, ns)
-
-
-def render_map(brain: Brain) -> None:
-    counts = brain.counts()
-    doc_types = [dt for dt in brain.config.doc_types if counts.get(dt)]
-    if not doc_types:
-        st.info("No entities yet. Add some and run `open-index index`.")
-        return
-
-    # 1) Anchor on a doc_type. Changing it resets the selection.
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        anchor_type = st.selectbox(
-            "Anchor doc_type",
-            doc_types,
-            format_func=lambda d: f"{d}  ({counts.get(d, 0)})",
-        )
-    if st.session_state.get("anchor_type") != anchor_type:
-        st.session_state.anchor_type = anchor_type
-        st.session_state.expanded = set()
-
-    # 2) Pick the entities of that type you care about (catalog).
-    catalog = brain.backend.all_entities([anchor_type])
-    cat_options = {f"{e.name}  ({e.id})": e.id for e in catalog}
-    with col2:
-        chosen_labels = st.multiselect(
-            f"{anchor_type} entities to map",
-            list(cat_options),
-            # Start with a few anchors: pre-selecting every entity makes a
-            # slow, unreadable hairball on large brains (and the graph canvas
-            # can fail to paint while hundreds of nodes settle).
-            default=list(cat_options)[:5],
-            help="Each selected entity is an anchor. Click any node to expand it.",
-        )
-    selected_ids = [cat_options[l] for l in chosen_labels]
-
-    expanded = st.session_state.get("expanded", set())
-    anchors = list(dict.fromkeys(selected_ids + list(expanded)))
-
-    if expanded:
-        st.caption(f"expanded: {', '.join(sorted(expanded))}")
-        if st.button("↺ reset expansions"):
-            st.session_state.expanded = set()
-            st.rerun()
-
-    if not anchors:
-        st.info(f"Select one or more {anchor_type} entities above to draw the map.")
-        return
-
-    graph = build_graph(brain, anchors, depth=1)
-    st.caption(f"{len(graph.nodes)} nodes · {len(graph.edges)} edges  ·  "
-               "click a node to expand its relationships")
-    render_graph(brain, graph)
-
-    # streamlit-agraph doesn't paint on its very first render inside a tab (the
-    # canvas mounts with zero size). Force one rerun so it remounts with the tab
-    # active — the same thing a manual widget toggle does.
-    if not st.session_state.get("_map_primed"):
-        st.session_state["_map_primed"] = True
-        st.rerun()
-
-
-def render_edit_guide(brain: Brain) -> None:
-    """Read-only guidance: how to edit the brain via an agent or the CLI.
-
-    Editing deliberately does NOT happen in this UI — the brain's source of truth
-    is files + the validated write path. This tab tells you how to connect."""
-    from pathlib import Path
-
-    brain_dir = os.environ.get("OPEN_INDEX_DIR", ".")
-    st.info(
-        "**Recommended: humans don't edit the brain directly.** Let it be written "
-        "either by an **agent** (via MCP or the CLI) or by your code via the **API** "
-        "(programmatically). That keeps every write validated, consistent, and "
-        "traceable — and this UI stays read-only on purpose."
-    )
-
-    st.subheader("Let an agent edit it (recommended)")
-    skill_path = Path(brain_dir) / ".claude" / "skills" / "edit-brain" / "SKILL.md"
-    skill_note = (
-        "It follows the bundled **`edit-brain` skill** "
-        "(`.claude/skills/edit-brain/SKILL.md`)"
-        if skill_path.exists()
-        else "Run `open-index init` on a new brain to also scaffold an **`edit-brain` "
-             "skill** the agent follows"
-    )
-    st.markdown(
-        "Connect the brain to Claude Code / any MCP client, then just ask it to add "
-        f"or update knowledge. {skill_note}, and it reads `navigation_guidelines` "
-        "first, so it reuses your existing doc_types and relationship vocabulary."
-    )
-    st.code(
-        '// .mcp.json (open-index init writes this for you)\n'
-        '{\n'
-        '  "mcpServers": {\n'
-        '    "open-index": { "command": "open-index", "args": ["mcp", "--brain", "."] }\n'
-        '  }\n'
-        '}',
-        language="json",
-    )
-    st.caption("Then, in the agent: “read navigation_guidelines, then add a service "
-               "entity for checkout and link it to the postgres datastore.”")
-
-    # Copy-pastable skill — drop it into any other Claude Code terminal.
-    st.markdown("**Copy the `edit-brain` skill** into another agent "
-                "(paste as `.claude/skills/edit-brain/SKILL.md`, or just paste the "
-                "text into the chat):")
-    if skill_path.exists():
-        skill_text = skill_path.read_text()
-    else:
-        from open_index.scaffold import SKILL_MD
-        skill_text = SKILL_MD
-    st.code(skill_text, language="markdown")  # st.code shows a copy button
-
-    st.subheader("Or edit from the CLI / files")
-    st.code(
-        f"# define a concept\n"
-        f"open-index add-doc-type service --brain {brain_dir}\n"
-        f"#   → edit doc_types/service.yaml (fields, boosts, relationships)\n\n"
-        f"# add an entity (file-backed types): write entities/<type>/<slug>.json, then\n"
-        f"open-index index --brain {brain_dir}\n"
-        f"open-index validate --brain {brain_dir}\n\n"
-        f"# pull entities from a tool on a schedule\n"
-        f"open-index ingest <connector> --brain {brain_dir}",
-        language="bash",
-    )
-
-    st.subheader("Or update programmatically (API / webhook / triggers)")
-    st.markdown(
-        "For deterministic, no-agent updates from your own code — a webhook, a "
-        "post-deploy step, a cron job — write directly. Two ways:"
-    )
-    st.markdown("**In-process (co-located with the brain files):**")
-    st.code(
-        "from open_index import Brain, Entity\n\n"
-        f'brain = Brain.open("{brain_dir}")\n'
-        'e = brain.get_entity("service:api") or Entity(id="service:api", '
-        'doc_type="service", name="API")\n'
-        'e.fields["status"] = "degraded"      # update knowledge\n'
-        "brain.put_entity(e)                   # validated upsert (honors storage policy)",
-        language="python",
-    )
-    st.markdown("**Over HTTP (remote brain running `open-index serve`):** call the "
-                "`put_entity` MCP tool as plain JSON-RPC — no LLM involved.")
-    st.code(
-        "curl -X POST https://brain.example.com/mcp \\\n"
-        '  -H "Authorization: Bearer $OPEN_INDEX_TOKEN" \\\n'
-        '  -H "Content-Type: application/json" \\\n'
-        '  -H "Accept: application/json, text/event-stream" \\\n'
-        "  -d '{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"tools/call\",\n"
-        "       \"params\":{\"name\":\"put_entity\",\"arguments\":{\n"
-        "         \"doc_type\":\"service\",\"id\":\"service:api\",\"name\":\"API\",\n"
-        "         \"fields\":{\"status\":\"degraded\"}}}}'",
-        language="bash",
-    )
-    st.caption("Serve it with:  open-index serve --brain <dir> --token $OPEN_INDEX_TOKEN")
-
-    with st.expander("What can I change, and where does it live?"):
-        st.markdown(
-            "- **doc_types** (concepts/schemas) → `doc_types/*.yaml` — always in git.\n"
-            "- **entities** (instances) → `storage: file` types live in "
-            "`entities/**/*.json` (git); `storage: index` types live only in the "
-            "search DB (written by agents/connectors).\n"
-            "- **relationships** → the `related_to` field on each entity; declare the "
-            "vocabulary under `relationships:` in the doc_type.\n"
-            "- **connectors** (ingestion scripts) → `connectors/*.py` (see the Jobs tab)."
-        )
-
-
-def render_connectors(brain: Brain) -> None:
-    """Jobs tab — connectors (entity-fetching jobs) and their schedules / last
-    runs: the cron/ingestion side of the brain."""
-    st.markdown("**Connectors & scheduled jobs**")
     st.caption("Ingestion scripts in `connectors/*.py` that pull entities from an "
-               "MCP server into the brain.")
-    try:
-        from open_index.connectors.runner import discover_connectors
-        from open_index.scheduling import RunState
-    except Exception:
-        st.caption("connectors unavailable")
-        return
-
+               "MCP server on a schedule.")
     found = discover_connectors(brain)
     if not found:
-        st.caption("No connectors. Add `connectors/*.py` to pull entities from an "
-                   "MCP server on a schedule.")
+        st.info("No connectors yet.")
+        st.caption("Add `connectors/*.py` to pull entities from an MCP server — "
+                   "see docs/deployment.md.")
         return
 
     import inspect
@@ -508,25 +335,35 @@ def render_connectors(brain: Brain) -> None:
     state = RunState(brain.config.root) if brain.config.root else None
     for name, cls in sorted(found.items()):
         meta = (state._data.get(name, {}) if state else {})
-        last_run = (meta.get("last_run") or "never")[:19]
         with st.container(border=True):
-            st.markdown(f"**⚙️ {name}**  ·  schedule `{cls.schedule}`  ·  "
-                        f"target `{getattr(cls, 'target_doc_type', '—')}`")
-            c = st.columns(3)
-            c[0].metric("source", "live MCP" if cls.mcp_url else "offline/demo")
-            c[1].metric("last run", last_run)
-            c[2].metric("entities", meta.get("last_count", "—"))
-            st.caption(f"endpoint: `{cls.mcp_url or 'offline/demo'}`  ·  "
+            st.markdown(f"**⚙️ {name}** · schedule `{cls.schedule}`")
+            cols = st.columns(3)
+            cols[0].metric("source", "live MCP" if cls.mcp_url else "offline/demo")
+            cols[1].metric("last run", (meta.get("last_run") or "never")[:19])
+            cols[2].metric("entities", meta.get("last_count", "—"))
+            st.caption(f"endpoint: `{cls.mcp_url or 'offline/demo'}` · "
                        f"last status: {meta.get('last_status', '—')}")
-            # The actual job script — visible, inspectable.
-            with st.expander("view connector script"):
+            with st.expander("view script"):
                 try:
-                    src = inspect.getsource(cls)
+                    st.code(inspect.getsource(cls), language="python")
                 except (OSError, TypeError):
-                    src = "(source unavailable)"
-                st.code(src, language="python")
-            st.caption(f"Run now: `open-index ingest {name}` · or `open-index run` "
-                       "for all due jobs (wire into cron / CI).")
+                    st.caption("(source unavailable)")
+            st.caption(f"Run now: `open-index ingest {name}` · "
+                       "`open-index run` for everything due.")
+
+
+def main() -> None:
+    brain = _open_brain(os.environ.get("OPEN_INDEX_DIR", "."))
+    st.markdown(ROW_CSS, unsafe_allow_html=True)
+
+    options = render_sidebar(brain)
+    tab_explore, tab_map, tab_jobs = st.tabs(["Explore", "Map", "Jobs"])
+    with tab_explore:
+        render_explore(brain, options)
+    with tab_map:
+        render_map(brain)
+    with tab_jobs:
+        render_jobs(brain)
 
 
 main()

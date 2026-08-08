@@ -93,6 +93,18 @@ class SearchBackend(Protocol):
         """Insert or replace one entity and its relationships."""
         ...
 
+    def upsert_many(self, items: list[tuple[Entity, Optional[DocType]]]) -> None:
+        """Insert or replace many entities in one pass.
+
+        Exists because the per-entity path pays a fixed cost each time — a commit
+        on SQLite, an index refresh on OpenSearch, and one embedding call per
+        entity — which makes a 500-row import hundreds of times slower than it
+        needs to be. Implementations should batch all three.
+
+        Not atomic: a backend may apply some rows and fail on others. Callers
+        that need to report per-entity outcomes should validate first."""
+        ...
+
     def get_entity(self, entity_id: str) -> Optional[Entity]:
         ...
 

@@ -6,7 +6,6 @@ description: >-
   with a company.
 
 storage:
-  backend: sqlite
   path: ./brain.db
 
 search:

@@ -233,6 +233,128 @@ def test_provenance_is_documented_in_the_tool_docstring(brain):
     assert "valid_from" in doc
 
 
+# -- put_entities (bulk) ------------------------------------------------------
+
+
+def test_put_entities_is_registered(brain):
+    from open_index.mcp_server import build_server
+
+    server = build_server(brain)
+    names = {t.name for t in asyncio.new_event_loop().run_until_complete(server.list_tools())}
+    assert "put_entities" in names
+
+
+def test_put_entities_is_hidden_in_read_only_mode(brain):
+    from open_index.mcp_server import build_server
+
+    server = build_server(brain, read_only=True)
+    names = {t.name for t in asyncio.new_event_loop().run_until_complete(server.list_tools())}
+    assert "put_entities" not in names
+
+
+def test_put_entities_writes_a_batch(srv, brain):
+    out = json.loads(srv.call("put_entities", {"entities": [
+        {"doc_type": "issue", "id": "issue:m1", "name": "M1", "severity": "high"},
+        {"doc_type": "issue", "id": "issue:m2", "name": "M2"},
+    ]}))
+    assert out["ok"] is True
+    assert out["written"] == 2
+    # Fields may be written flat, matching the entity files on disk.
+    assert brain.get_entity("issue:m1").fields["severity"] == "high"
+
+
+def test_put_entities_reports_bad_rows_by_index(srv, brain):
+    out = json.loads(srv.call("put_entities", {"entities": [
+        {"doc_type": "issue", "id": "issue:fine", "name": "Fine"},
+        {"doc_type": "ghost", "id": "ghost:x"},
+        {"id": "issue:notype"},
+    ]}))
+    assert out["ok"] is False
+    assert out["written"] == 1
+    assert out["failed"] == 2
+    assert any("[1]" in e and "unknown doc_type" in e for e in out["errors"])
+    assert any("[2]" in e and "missing 'doc_type'" in e for e in out["errors"])
+    assert brain.get_entity("issue:fine") is not None
+
+
+def test_put_entities_reports_unconstructable_rows(srv, brain):
+    """A row with a malformed id must be reported, not raised out of the tool."""
+    out = json.loads(srv.call("put_entities", {"entities": [
+        {"doc_type": "issue", "id": "issue:has space", "name": "Bad"},
+        {"doc_type": "issue", "id": "issue:ok", "name": "OK"},
+    ]}))
+    assert out["written"] == 1
+    assert any("[0]" in e for e in out["errors"])
+    assert brain.get_entity("issue:ok") is not None
+
+
+def test_put_entities_applies_shared_provenance(srv, brain):
+    srv.call("put_entities", {
+        "entities": [{"doc_type": "issue", "id": "issue:sp", "name": "SP"}],
+        "provenance": {"asserted_by": "agent:bulk", "confidence": 0.55},
+    })
+    stored = brain.get_entity("issue:sp")
+    assert stored.provenance.asserted_by == "agent:bulk"
+    assert stored.provenance.confidence == 0.55
+
+
+def test_put_entities_row_provenance_wins(srv, brain):
+    srv.call("put_entities", {
+        "entities": [{"doc_type": "issue", "id": "issue:rp", "name": "RP",
+                      "provenance": {"asserted_by": "human:dipesh"}}],
+        "provenance": {"asserted_by": "agent:bulk"},
+    })
+    assert brain.get_entity("issue:rp").provenance.asserted_by == "human:dipesh"
+
+
+def test_put_entities_rejects_bad_shared_provenance(srv):
+    out = json.loads(srv.call("put_entities", {
+        "entities": [{"doc_type": "issue", "id": "issue:z"}],
+        "provenance": {"confidence": 9},
+    }))
+    assert "invalid provenance" in out["error"]
+
+
+def test_put_entities_empty_list(srv):
+    out = json.loads(srv.call("put_entities", {"entities": []}))
+    assert out["ok"] is True and out["written"] == 0
+
+
+def test_put_entities_carries_edges(srv, brain):
+    srv.call("put_entities", {"entities": [{
+        "doc_type": "issue", "id": "issue:edges", "name": "Edges",
+        "related_to": [{"target": "product:checkout",
+                        "relationship_edge_meaning": "affects"}],
+    }]})
+    assert brain.backend.relationships_from("issue:edges")
+
+
+def test_put_entities_returns_written_file_paths(srv):
+    out = json.loads(srv.call("put_entities", {"entities": [
+        {"doc_type": "issue", "id": "issue:paths", "name": "P"},
+    ]}))
+    assert out["paths"] and out["paths"][0].endswith("issue/paths.json")
+
+
+def test_put_entities_caps_the_error_list(srv):
+    """A pathological batch must not return a megabyte of errors."""
+    out = json.loads(srv.call("put_entities", {
+        "entities": [{"doc_type": "ghost", "id": f"ghost:{i}"} for i in range(80)],
+    }))
+    assert out["failed"] == 80
+    assert len(out["errors"]) == 50
+
+
+def test_put_entities_is_documented_for_batch_use(brain):
+    from open_index.mcp_server import build_server
+
+    server = build_server(brain)
+    tools = asyncio.new_event_loop().run_until_complete(server.list_tools())
+    doc = next(t for t in tools if t.name == "put_entities").description
+    assert "instead of calling" in doc
+    assert "provenance" in doc
+
+
 # -- read-only ----------------------------------------------------------------
 
 

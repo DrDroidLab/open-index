@@ -1,0 +1,233 @@
+# Configuring storage and search
+
+Three decisions, in the order you'll hit them:
+
+1. [Where each doc_type's entities live](#1-where-entities-live-file-vs-index) — `storage: file | index`
+2. [Which engine stores and searches them](#2-which-engine-sqlite-vs-opensearch) — `search.backend`
+3. [How search behaves](#3-tuning-search) — field `search` kind, `boost`, `semantic_weight`
+
+The first is per **doc_type** and is the one people get wrong. The other two are
+per **brain**.
+
+---
+
+## 1. Where entities live: `file` vs `index`
+
+Set on each doc_type, in `doc_types/<name>.yaml`:
+
+```yaml
+doc_type: service
+storage: file        # or: index
+```
+
+| | `storage: file` | `storage: index` (default) |
+|---|---|---|
+| Source of truth | JSON under `entities/<doc_type>/` | The search DB |
+| In git? | Yes — reviewable in PRs | No |
+| Written by `put_entity`? | Writes a JSON file | DB only, no file |
+| `open-index index` | Deletes and reloads these from disk | Leaves them alone |
+| Survives losing `brain.db`? | Yes, reload from git | **No** — re-ingest or restore a backup |
+
+**Pick `file` when** a human or agent authors the entity and you want the change
+reviewable: services, runbooks, products, policies. Curated knowledge belongs in
+git.
+
+**Pick `index` when** the data is generated, high-volume, or temporal: alerts,
+deployments, memories, anything a connector pulls on a schedule. Hundreds of
+rows churning through git helps nobody.
+
+> **The trap:** `open-index index` reconciles file-backed types *from disk*. If a
+> doc_type is `file` and you wrote entities to it only via the DB, the next
+> `index` run deletes them. Conversely, JSON files for an `index` type are
+> ignored. Match how a type is written to how it's declared.
+
+Changing the policy later is fine, but move the data with it — switch to `file`
+and the existing DB rows will be wiped on the next `index` unless you export them
+to JSON first.
+
+---
+
+## 2. Which engine: SQLite vs OpenSearch
+
+One key decides both storage and search:
+
+```yaml
+search:
+  backend: sqlite      # or: opensearch
+```
+
+There is no `storage.backend`. `storage:` only sets the SQLite file path.
+(Older brains that set `storage.backend` still load; it never did anything, and
+now logs a warning.)
+
+| | SQLite (default) | OpenSearch |
+|---|---|---|
+| External services | None — one `brain.db` | A cluster |
+| Concurrent writers | **One** | Many |
+| Semantic search | Brute-force cosine, fine to ~10k entities | Native k-NN |
+| Fuzzy / typo-tolerant | No | Yes |
+| Per-field boosting | Computed in Python | Native |
+| Set up for you | — | In `docker-compose.yml` |
+
+**The line is writers, not size.** SQLite is single-writer: the moment a second
+agent (or a connector running while an agent writes) needs to write, move to
+OpenSearch. Entity count matters only for semantic search, where SQLite scans
+brute-force.
+
+Switch per environment without editing `brain.yaml`:
+
+```bash
+export OPEN_INDEX_SEARCH_BACKEND=opensearch
+export OPEN_INDEX_OPENSEARCH_HOSTS=https://opensearch.internal:9200
+```
+
+Or commit it, keeping secrets as `${ENV}` refs resolved at connect time:
+
+```yaml
+search:
+  backend: opensearch
+  hosts: ["https://opensearch:9200"]
+  index: open_index_acme          # defaults to open_index_<brain name>
+  username: "${OPENSEARCH_USER}"
+  password: "${OPENSEARCH_PASSWORD}"
+  use_ssl: true
+  verify_certs: true
+```
+
+Running it in containers → [`deployment.md`](./deployment.md).
+
+### Environment overrides
+
+| Variable | Overrides |
+|---|---|
+| `OPEN_INDEX_SEARCH_BACKEND` | `search.backend` |
+| `OPEN_INDEX_OPENSEARCH_HOSTS` | `search.hosts` (comma-separated) |
+| `OPEN_INDEX_OPENSEARCH_INDEX` | `search.index` |
+| `OPEN_INDEX_DB_PATH` | `storage.path` |
+
+Empty values don't override, so `docker compose` passing an unset variable
+through as `""` leaves the file's value alone.
+
+---
+
+## 3. Tuning search
+
+### Per field
+
+```yaml
+schema:
+  fields:
+    - { name: name,        type: string, search: syntactic, boost: 6 }
+    - { name: description, type: text,   search: semantic }
+    - { name: internal_id, type: string, search: none }
+```
+
+| Key | Values | Meaning |
+|---|---|---|
+| `type` | `string` `text` `number` `boolean` `timestamp` | Data type. Validated on write. |
+| `processing` | `keyword` `text` `timestamp` | `keyword` = exact/filter, `text` = tokenized |
+| `search` | `syntactic` `semantic` `none` | How (and whether) the field is searched |
+| `boost` | number > 0, default 1 | Ranking weight |
+| `required` | `true` / `false` | Reject entities missing it |
+
+- **`syntactic`** — keyword and prefix matching. Right for names, owners,
+  statuses, anything you'd filter on.
+- **`semantic`** — the field is embedded and matched by meaning, so "checkout is
+  slow" finds an entity that says "latency spike at payment". Right for prose.
+- **`none`** — stored but never searched. Right for opaque ids and blobs that
+  would only add noise.
+
+**`boost` is a genuine multiplier.** A match in a `boost: 6` field outranks one
+in a `boost: 1` field 6-to-1 — not approximately. The usual shape is a high boost
+on `name`, a moderate one on a summary, and 1 everywhere else.
+
+### Per brain
+
+```yaml
+search:
+  semantic_weight: 0.3        # 0 = keyword only · 1 = semantic only
+  embedding_model: BAAI/bge-small-en-v1.5
+```
+
+`semantic_weight` blends the two scores. The default `0.3` keeps keyword matches
+dominant and lets semantic similarity rescue queries that use different words
+than the text. Raise it if your users describe things rather than name them; set
+`0` to turn vectors off at query time.
+
+### Embeddings
+
+Semantic search needs a provider. Without one the backends log a warning once and
+fall back to keyword-only — search still works, just less well.
+
+```bash
+pip install 'open-index[semantic]'      # local ONNX, BAAI/bge-small-en-v1.5 (384-D)
+```
+
+Or point at any OpenAI-compatible API:
+
+```bash
+export OPEN_INDEX_EMBEDDING_BASE_URL=https://api.openai.com/v1
+export OPEN_INDEX_EMBEDDING_API_KEY=...
+export OPEN_INDEX_EMBEDDING_MODEL=text-embedding-3-small
+export OPEN_INDEX_EMBEDDING_DIM=1536
+```
+
+**Re-embed after any change that invalidates existing vectors** — enabling
+semantic search on a populated brain, switching models, or changing dimensions:
+
+```bash
+open-index index --reembed
+```
+
+Changing dimensions on OpenSearch also needs the index recreated, since the
+`knn_vector` mapping is fixed at creation.
+
+---
+
+## Worked examples
+
+**Local, single agent, curated knowledge** — the default. SQLite, `storage: file`
+on everything, semantic on prose fields.
+
+```yaml
+storage: { path: ./brain.db }
+search:  { backend: sqlite, semantic_weight: 0.3 }
+```
+
+**Shared team brain with connectors** — OpenSearch (several writers), curated
+types in git, pulled types DB-only.
+
+```yaml
+search:
+  backend: opensearch
+  hosts: ["https://opensearch.internal:9200"]
+  username: "${OPENSEARCH_USER}"
+  password: "${OPENSEARCH_PASSWORD}"
+```
+```yaml
+# doc_types/runbook.yaml  → curated, reviewed in PRs
+storage: file
+# doc_types/alert.yaml    → pulled every 15m, would drown git
+storage: index
+```
+
+**Exact-match lookup only** — no embedding dependency at all:
+
+```yaml
+search: { backend: sqlite, semantic_weight: 0 }
+```
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| Entities vanish after `open-index index` | They were DB-written to a `storage: file` type. Files are the source of truth there. |
+| JSON files are ignored | The doc_type is `storage: index`; the DB owns it. |
+| "Semantic fields declared but no embedding provider" | Install `open-index[semantic]` or set `OPEN_INDEX_EMBEDDING_*`. |
+| Semantic search returns nothing sensible | Vectors were never built. Run `open-index index --reembed`. |
+| `database is locked` | Two writers on SQLite. Move to OpenSearch. |
+| Semantic search slow past ~10k entities | SQLite scans brute-force. Move to OpenSearch. |
+| Ranking ignores your important field | Check its `search` isn't `none`, and raise its `boost`. |
+| `unknown search backend` | Typo in `search.backend` or `OPEN_INDEX_SEARCH_BACKEND`. Only `sqlite` and `opensearch` exist. |

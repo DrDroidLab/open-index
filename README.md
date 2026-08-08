@@ -40,12 +40,13 @@ Prefer containers, or need a brain several agents share? →
 | `open-index init <name> [dir]` | Scaffold a new brain directory. |
 | `open-index add-doc-type <name>` | Add a doc_type schema stub under `doc_types/`. |
 | `open-index add-entity <file>` | Validate + store an entity JSON file. |
+| `open-index import <file>` | Bulk-import entities from JSON / JSONL / CSV. |
 | `open-index index` | (Re)load `entities/**/*.json` into the search index. |
 | `open-index validate` | Validate `brain.yaml`, schemas, and every entity file (use in CI). |
 | `open-index ingest <connector>` | Run a connector now to pull entities from an MCP server. |
 | `open-index run [--force] [--loop N]` | Run every connector whose `schedule` is due (wire into cron/CI). |
 | `open-index search <query> [-t doc_type]` | Search from the terminal. |
-| `open-index ui` | Launch the Streamlit explorer (Structure / Search / **Map** / Contribute). |
+| `open-index ui` | Launch the Streamlit explorer (Explore / **Map** / Jobs). |
 | `open-index mcp` | Run the MCP server (stdio) so a local agent can **read and write** the brain. |
 | `open-index serve [--port --token]` | Serve the MCP server over **HTTP** for remote/cloud agents (bearer-token auth). |
 | `open-index mcp-config [--url --token]` | Print the MCP connection block to paste into your agent. |
@@ -165,7 +166,19 @@ Then `open-index index` (loads file-backed entities) and `open-index validate`.
 
 1. **Manual / agent** — write JSON, or open Claude Code in the folder and let it call
    `put_entity` / `create_doc_type` over MCP.
-2. **Bulk** — hand a file of records to your agent, or a connector.
+2. **Bulk** — import a file directly, or let an agent write a batch in one call with
+   `put_entities`:
+
+   ```bash
+   open-index import issues.csv --doc-type issue --asserted-by import:jira
+   open-index import export.jsonl --dry-run        # validate first, write nothing
+   ```
+
+   JSON arrays, JSONL, and CSV all work. Bare slugs are qualified (`checkout` →
+   `product:checkout`), CSV scalars are coerced, and a `related_to` column takes
+   `target|meaning` pairs separated by `;`. A bad row is reported and skipped —
+   the rest still land. `--asserted-by` / `--confidence` attribute the whole
+   batch once instead of per row.
 3. **Connectors** — `connectors/*.py` pull from an MCP server on a `schedule`; run with
    `open-index ingest <name>` or `open-index run` (cron/CI-friendly).
 4. **Agent write-back** — a Stop hook that records learnings via `put_entity` (the
@@ -175,8 +188,11 @@ See [Entity Management](./entity-management.md) for guidance on cadence and deca
 
 ### 4. Explore
 
-`open-index ui` → **Structure** (doc_types, fields, relationships), **Search**, and
-**Map** (anchor a doc_type, pick entities, click a node to expand its correlations).
+`open-index ui` opens a read-only explorer. The sidebar always shows every doc_type
+with its count and storage policy, so the structure is visible without navigating
+anywhere. Three tabs: **Explore** (search + browse + drill into an entity's
+relationships), **Map** (auto-anchored on the most-connected entities — click any
+node to expand it), and **Jobs** (connectors and their schedules).
 
 # Enabling your agent to use the brain
 
@@ -185,7 +201,9 @@ See [Entity Management](./entity-management.md) for guidance on cadence and deca
 
 - `navigation_guidelines()` — orient: doc_types, fields, relationships, how to query/write.
 - `search_brain(query, doc_types, limit)` · `get_entity(id)` — read.
-- `put_entity(...)` · `create_doc_type(...)` — write (validated, honors the storage policy).
+- `put_entity(...)` · `put_entities([...])` · `create_doc_type(...)` — write (validated,
+  honors the storage policy). `put_entities` writes a whole batch in one call and
+  takes a shared `provenance` block.
 
 `open-index init` drops a `.mcp.json` so Claude Code auto-connects, a `CLAUDE.md`
 documenting the model, and an **`edit-brain` skill** (`.claude/skills/edit-brain/SKILL.md`)
@@ -274,6 +292,9 @@ cluster (or `brain.db`), so give it a persistent home and a backup. Rule of thum
 **local/dev → SQLite; shared endpoint → OpenSearch + `serve`.**
 
 # Controlling search
+
+📖 **[Full configuration reference → `docs/configuration.md`](./docs/configuration.md)** —
+decision tables for `storage: file | index`, SQLite vs OpenSearch, and every search knob.
 
 **Schema** (per field): data `type` (string/number/boolean/timestamp), `processing`
 (keyword/text/timestamp), and `search` kind (`syntactic` = keyword+prefix,

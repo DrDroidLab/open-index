@@ -1,0 +1,176 @@
+"""The explorer's view-model.
+
+These pin the behaviour that made the old UI read as broken: a map that drew
+nothing until you made a selection, and structure you had to hunt for.
+"""
+
+import pytest
+
+from open_index.brain import Brain
+from open_index.models import Entity, Provenance, Relationship
+from open_index.schema import DocType, DocTypeDisplay, FieldSpec
+from open_index.ui import view
+
+
+@pytest.fixture
+def empty_brain(tmp_path):
+    root = tmp_path / "fresh"
+    root.mkdir()
+    (root / "brain.yaml").write_text("name: fresh\n")
+    return Brain.open(root)
+
+
+# -- summary ------------------------------------------------------------------
+
+
+def test_summary_reports_totals_and_types(brain):
+    summary = view.summarize(brain)
+    assert summary.name == "support-brain"
+    assert summary.total_entities > 0
+    assert {r.name for r in summary.doc_types} == set(brain.config.doc_types)
+
+
+def test_summary_orders_by_count_then_name(brain):
+    counts = [r.count for r in view.summarize(brain).doc_types]
+    assert counts == sorted(counts, reverse=True)
+
+
+def test_summary_carries_display_metadata(brain):
+    row = next(r for r in view.summarize(brain).doc_types if r.name == "issue")
+    assert row.color.startswith("#")
+    assert row.storage in ("file", "index")
+    assert row.description
+
+
+def test_empty_brain_summary_is_flagged(empty_brain):
+    summary = view.summarize(empty_brain)
+    assert summary.is_empty
+    assert not summary.has_schema
+    assert summary.doc_types == []
+
+
+def test_declared_but_unpopulated_types_still_listed(brain):
+    """A doc_type with no entities must stay visible — that it is empty is
+    exactly what the user needs to see."""
+    brain.create_doc_type(DocType(doc_type="ghosttype",
+                                  display=DocTypeDisplay(color="#123456")))
+    row = next(r for r in view.summarize(brain).doc_types if r.name == "ghosttype")
+    assert row.count == 0
+
+
+# -- default anchors (the map-opens-blank fix) --------------------------------
+
+
+def test_default_anchors_prefer_the_most_connected(brain):
+    anchors = view.default_anchors(brain, limit=1)
+    degree = view.edge_counts(brain)
+    assert anchors, "expected an anchor on a populated brain"
+    assert degree[anchors[0]] == max(degree.get(a, 0) for a in degree)
+
+
+def test_default_anchors_are_capped(brain):
+    assert len(view.default_anchors(brain, limit=2)) == 2
+
+
+def test_default_anchors_respect_the_doc_type_scope(brain):
+    anchors = view.default_anchors(brain, doc_types=["product"])
+    assert anchors
+    assert all(a.startswith("product:") for a in anchors)
+
+
+def test_default_anchors_on_an_empty_brain(empty_brain):
+    assert view.default_anchors(empty_brain) == []
+
+
+def test_default_anchors_work_without_any_edges(brain):
+    """An unconnected brain still gets anchors — just not interesting ones."""
+    brain.create_doc_type(DocType(doc_type="lonely", fields=[FieldSpec(name="name")]))
+    brain.put_entity(Entity(id="lonely:a", doc_type="lonely", name="A"))
+    brain.put_entity(Entity(id="lonely:b", doc_type="lonely", name="B"))
+    anchors = view.default_anchors(brain, doc_types=["lonely"])
+    assert set(anchors) == {"lonely:a", "lonely:b"}
+
+
+def test_edge_counts_include_both_directions(brain):
+    """A target that never declares an edge still has degree from its referrers."""
+    degree = view.edge_counts(brain)
+    assert degree.get("issue:payment-declined", 0) > 0
+
+
+# -- neighbours ---------------------------------------------------------------
+
+
+def test_neighbours_include_incoming_and_outgoing(brain):
+    rows = view.neighbours(brain, "issue:payment-declined")
+    assert {r.direction for r in rows} & {"←", "→"}
+    assert all(r.other_id for r in rows)
+
+
+def test_neighbour_labels_are_human_readable(brain):
+    rows = view.neighbours(brain, "product:checkout")
+    assert rows
+    assert any("has common issue" in r.label for r in rows)
+
+
+def test_dangling_edges_are_shown_not_hidden(brain):
+    """A broken reference must stay visible, or it can never be found."""
+    brain.put_entity(Entity(
+        id="issue:dangling", doc_type="issue", name="Dangling",
+        related_to=[Relationship(target="product:does-not-exist",
+                                 relationship_edge_meaning="affects")],
+    ))
+    row = next(r for r in view.neighbours(brain, "issue:dangling")
+               if r.other_id == "product:does-not-exist")
+    assert row.exists is False
+    assert row.other_name == "does-not-exist"
+    assert row.other_doc_type == "product"
+
+
+def test_neighbours_of_an_isolated_entity(brain):
+    brain.put_entity(Entity(id="issue:alone", doc_type="issue", name="Alone"))
+    assert view.neighbours(brain, "issue:alone") == []
+
+
+# -- entity detail ------------------------------------------------------------
+
+
+def test_field_rows_skip_empty_values(brain):
+    entity = Entity(id="issue:x", doc_type="issue", name="X",
+                    fields={"severity": "high", "status": None, "note": ""})
+    assert view.field_rows(entity) == [{"field": "severity", "value": "high"}]
+
+
+def test_provenance_row_formats_confidence(brain):
+    entity = Entity(id="issue:p", doc_type="issue", name="P",
+                    provenance=Provenance(asserted_by="agent:x", confidence=0.5))
+    row = view.provenance_row(entity)
+    assert row["asserted_by"] == "agent:x"
+    assert row["confidence"] == "0.50"
+    assert row["evidence"] == "—"
+
+
+def test_provenance_row_is_none_when_unattributed(brain):
+    assert view.provenance_row(Entity(id="issue:n", doc_type="issue")) is None
+
+
+def test_empty_provenance_block_counts_as_unattributed(brain):
+    """An all-None Provenance is not attribution and must not render as one."""
+    entity = Entity(id="issue:e", doc_type="issue", provenance=Provenance())
+    assert view.provenance_row(entity) is None
+
+
+# -- search modes -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode,expected",
+                         [("Hybrid", None), ("Keyword", 0.0), ("Semantic", 1.0)])
+def test_search_mode_weights(mode, expected):
+    assert view.semantic_weight_for(mode) == expected
+
+
+def test_unknown_search_mode_falls_back_to_configured(brain):
+    assert view.semantic_weight_for("nonsense") is None
+
+
+def test_color_for_unknown_doc_type_is_the_default(brain):
+    assert view.color_for(brain, "nope") == view.DEFAULT_COLOR
