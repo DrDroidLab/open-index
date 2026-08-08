@@ -74,13 +74,15 @@ def test_init_scaffolds_agent_skill(tmp_path):
     assert text.startswith("---")           # frontmatter
     assert "name: edit-brain" in text
     assert "put_entity" in text and "create_doc_type" in text
-    # and the Claude Code MCP wiring is present
+    claude_md = (tmp_path / "b" / "CLAUDE.md").read_text()
+    assert "navigation_guidelines" not in claude_md  # runtime navigation comes from MCP prompt
+    # and the optional Claude Code MCP wiring is present
     assert (tmp_path / "b" / ".mcp.json").exists()
 
 
 def test_navigation_guidelines_markdown(brain):
     md = brain.navigation_guidelines()
-    assert "Navigation Guide" in md
+    assert "Domain Context Instructions" in md
     assert "## Doc types" in md
     assert "### issue" in md
     assert "put_entity" in md          # write guidance present

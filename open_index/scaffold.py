@@ -18,6 +18,7 @@ storage:
 
 search:
   backend: sqlite   # pluggable: sqlite | opensearch
+
 """
 
 EXAMPLE_DOC_TYPE = """\
@@ -74,8 +75,8 @@ def color_for_index(i: int) -> str:
     return _PALETTE[i % len(_PALETTE)]
 
 
-# .mcp.json — auto-connects the brain to Claude Code (and any MCP client) so an
-# agent opened in this folder can read AND write the brain from second one.
+# .mcp.json is one optional client adapter. Open Index itself is the context
+# layer for any domain-specialized agent and defaults to read+write access.
 MCP_JSON = """\
 {
   "mcpServers": {
@@ -87,7 +88,8 @@ MCP_JSON = """\
 }
 """
 
-# CLAUDE.md — teaches the agent the model + workflows so you can just talk to it.
+# Optional Claude Code adapter. Runtime navigation belongs in MCP server
+# instructions; this file only documents durable editing workflows.
 CLAUDE_MD = """\
 # {name} — a brain built with Open Index
 
@@ -105,7 +107,6 @@ truth behind them.
   Ids look like `<doc_type>:<slug>` (e.g. `product:checkout`).
 
 ## MCP tools
-- `navigation_guidelines()` — READ FIRST. What doc_types exist, fields, examples.
 - `search_brain(query, doc_types, limit)` / `get_entity(id)` — query.
 - `put_entity(doc_type, id, name, fields, related_to)` — add/update an entity.
 - `create_doc_type(doc_type, description, fields, color)` — define a new concept.
@@ -209,7 +210,8 @@ This repo is a **brain** (a context graph built with Open Index). You can edit i
 - **By editing files** then running `open-index index` and `open-index validate`.
 
 ## Always start here
-Call `navigation_guidelines()` (MCP) or read `doc_types/*.yaml`. It tells you which
+Use the navigation guide pre-injected by the MCP host, when available. Otherwise
+call `navigation_guidelines()` (MCP) or read `doc_types/*.yaml`. It tells you which
 doc_types exist, their fields, and the **relationship vocabulary already in use**.
 Reuse existing doc_types and relationship meanings instead of inventing near-duplicates.
 
@@ -245,6 +247,7 @@ GITIGNORE = """\
 brain.db
 brain.db-journal
 brain.db-wal
+.open_index_analytics.db
 .open_index_state.json
 """
 
@@ -262,7 +265,7 @@ def init_brain(brain_dir: Path, name: str) -> None:
     (brain_dir / "doc_types" / "note.yaml").write_text(EXAMPLE_DOC_TYPE)
     (brain_dir / "entities" / "note" / "welcome.json").write_text(EXAMPLE_ENTITY)
 
-    # Claude Code / agent integration — the brain is usable by an agent immediately.
+    # Generic MCP wiring plus optional Claude Code workflow conveniences.
     (brain_dir / ".mcp.json").write_text(MCP_JSON)
     (brain_dir / "CLAUDE.md").write_text(CLAUDE_MD.format(name=name))
     (skill_dir / "SKILL.md").write_text(SKILL_MD)
