@@ -140,6 +140,24 @@ def test_index_with_reembed(brain_dir):
     assert "recomputed embeddings" in result.stdout
 
 
+def test_index_reports_skipped_entity_files(brain_dir):
+    """A partial load must not look complete — one bad file, still reported."""
+    (brain_dir / "entities" / "issue" / "broken.json").write_text("{not json")
+    result = run("index", "--brain", brain_dir)
+    assert result.exit_code == 0
+    assert "1 entity file(s) skipped" in result.stdout
+    assert "broken.json" in result.stdout
+
+
+def test_index_truncates_a_long_skip_list(brain_dir):
+    """More than ten failures collapse to a count rather than a wall of text."""
+    for i in range(12):
+        (brain_dir / "entities" / "issue" / f"bad{i}.json").write_text("{nope")
+    result = run("index", "--brain", brain_dir)
+    assert "12 entity file(s) skipped" in result.stdout
+    assert "and 2 more" in result.stdout
+
+
 def test_validate_clean_brain(brain_dir):
     run("index", "--brain", brain_dir)
     result = run("validate", "--brain", brain_dir)

@@ -19,6 +19,10 @@ from open_index.storage.base import SearchBackend, SearchResults
 class Brain:
     def __init__(self, config: BrainConfig, backend: Optional[SearchBackend] = None):
         self.config = config
+        # Populated by index(): per-entity failures that did not abort the run.
+        # Read this after indexing — a silent partial load is the failure mode
+        # this list exists to prevent.
+        self.index_errors: list[str] = []
         self.backend: SearchBackend = backend or get_backend(config)
         self.backend.ensure_schema(config.doc_types)
 
@@ -141,15 +145,28 @@ class Brain:
         self.backend.delete_by_doc_type(list(file_types))
 
         count = 0
+        self.index_errors = []
         for path in iter_entity_files(self.config.root):
-            raw = json.loads(Path(path).read_text())
+            try:
+                raw = json.loads(Path(path).read_text())
+            except (OSError, ValueError) as exc:
+                self.index_errors.append(f"{path}: unreadable ({exc})")
+                continue
             records = raw if isinstance(raw, list) else [raw]
             for rec in records:
-                entity = Entity.from_dict(rec)
-                # Ignore stray files for index-backed types — the DB owns those.
-                if entity.doc_type in file_types or entity.doc_type not in self.config.doc_types:
-                    self.add_entity(entity, validate=True)
-                    count += 1
+                # One malformed file must not abort the whole reload. `index` is the
+                # recover-from-disk path, so a typo in one entity previously took the
+                # entire brain offline with no indication of which file was at fault.
+                try:
+                    entity = Entity.from_dict(rec)
+                    # Ignore stray files for index-backed types — the DB owns those.
+                    if (entity.doc_type in file_types
+                            or entity.doc_type not in self.config.doc_types):
+                        self.add_entity(entity, validate=True)
+                        count += 1
+                except (ValueError, TypeError, KeyError) as exc:
+                    ident = rec.get("id") if isinstance(rec, dict) else "?"
+                    self.index_errors.append(f"{path} [{ident}]: {exc}")
         return count
 
     # -- queries ---------------------------------------------------------------
@@ -161,9 +178,48 @@ class Brain:
         limit: int = 20,
         counts_only: bool = False,
         semantic_weight: Optional[float] = None,
+        min_confidence: float = 0.0,
+        as_of: Optional[str] = None,
     ) -> SearchResults:
-        return self.backend.search(query, doc_types, limit, counts_only,
-                                   semantic_weight=semantic_weight)
+        """Search, optionally filtered by trust and by validity window.
+
+        `min_confidence` drops claims that cannot clear the floor, INCLUDING
+        unattributed ones — see `Entity.trusted`. `as_of` drops claims whose
+        validity window excludes that instant. Both default to off so existing
+        callers are unaffected.
+
+        Filtering happens after retrieval rather than in the backend query: the
+        fields live inside the stored JSON blob, and pushing predicates into two
+        backends would buy speed the current scale does not need at the cost of
+        the two implementations drifting apart.
+        """
+        results = self.backend.search(query, doc_types, limit, counts_only,
+                                      semantic_weight=semantic_weight)
+        if counts_only or (min_confidence <= 0 and as_of is None):
+            return results
+
+        kept = []
+        for row in results.results:
+            raw = row.get("entity")
+            if not isinstance(raw, dict):
+                kept.append(row)          # nothing to judge on; do not silently drop
+                continue
+            ent = Entity.from_dict(raw)
+            if ent.trusted(min_confidence) and ent.holds_at(as_of):
+                kept.append(row)
+
+        # Recompute the aggregates so the map's spoke counts agree with the rows
+        # actually returned. A filtered result set with unfiltered counts is a
+        # display that disagrees with the store for reasons the reader cannot see.
+        counts: dict[str, int] = {}
+        for row in kept:
+            dt = row.get("doc_type")
+            if dt:
+                counts[dt] = counts.get(dt, 0) + 1
+        results.results = kept
+        results.total = len(kept)
+        results.doc_type_counts = counts
+        return results
 
     def get_entity(self, entity_id: str) -> Optional[Entity]:
         return self.backend.get_entity(entity_id)
@@ -174,6 +230,41 @@ class Brain:
     def reembed(self) -> None:
         """Recompute embeddings for every stored entity."""
         self.backend.reembed()
+
+    def provenance_report(self) -> dict[str, Any]:
+        """How much of this brain can be audited?
+
+        Surfaces the share of entities carrying an asserter, a confidence and a
+        validity window, broken down by doc_type. An agent-written store degrades
+        silently without this: nothing distinguishes a measured fact from a guess
+        once both are rows, and a bad attribution is served in the same voice as a
+        good one. This is the number to watch when agents write at volume.
+        """
+        by_type: dict[str, dict[str, int]] = {}
+        for name in self.config.doc_types:
+            ents = self.backend.all_entities([name])
+            if not ents:
+                continue
+            attributed = sum(1 for e in ents
+                             if e.provenance is not None and e.provenance.asserted_by)
+            scored = sum(1 for e in ents
+                         if e.provenance is not None and e.provenance.confidence is not None)
+            dated = sum(1 for e in ents if e.valid_from or e.valid_to)
+            by_type[name] = {
+                "entities": len(ents),
+                "attributed": attributed,
+                "scored": scored,
+                "dated": dated,
+                "unattributed": len(ents) - attributed,
+            }
+        total = sum(v["entities"] for v in by_type.values())
+        attributed = sum(v["attributed"] for v in by_type.values())
+        return {
+            "total_entities": total,
+            "attributed": attributed,
+            "attributed_pct": round(100 * attributed / total, 1) if total else 0.0,
+            "by_doc_type": by_type,
+        }
 
     def observed_relationships(self, doc_type: str) -> dict[str, int]:
         """Distinct outgoing edge meanings actually used by a doc_type's entities,

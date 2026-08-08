@@ -125,6 +125,13 @@ def index(
         + (" and recomputed embeddings" if reembed else ""),
         fg=typer.colors.GREEN,
     )
+    # Surface per-entity failures rather than letting a partial load look complete.
+    if b.index_errors:
+        typer.secho(f"⚠ {len(b.index_errors)} entity file(s) skipped:", fg=typer.colors.YELLOW)
+        for err in b.index_errors[:10]:
+            typer.secho(f"    {err}", fg=typer.colors.YELLOW)
+        if len(b.index_errors) > 10:
+            typer.secho(f"    ... and {len(b.index_errors) - 10} more", fg=typer.colors.YELLOW)
 
 
 @app.command()

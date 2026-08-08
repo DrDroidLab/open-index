@@ -22,8 +22,8 @@ import json
 from typing import Any, Optional
 
 from open_index.brain import Brain
-from open_index.models import Entity, Relationship
 from open_index.schema import DocType, DocTypeDisplay, FieldSpec, RelationshipSpec
+from open_index.models import Entity, Provenance, Relationship
 
 
 def _load_server_class():
@@ -124,7 +124,14 @@ def build_server(brain: Brain, read_only: bool = False):
         id: str,
         name: str = "",
         fields: Optional[dict[str, Any]] = None,
-        related_to: Optional[list[dict[str, str]]] = None,
+        # dict[str, Any], not dict[str, str]: an edge may carry a nested
+        # "provenance" object. The MCP SDK builds this tool's input schema from
+        # these annotations, so a str-valued hint makes the server reject
+        # per-edge provenance before the body ever runs.
+        related_to: Optional[list[dict[str, Any]]] = None,
+        provenance: Optional[dict[str, Any]] = None,
+        valid_from: Optional[str] = None,
+        valid_to: Optional[str] = None,
     ) -> str:
         """Add or update an entity (an upsert — the same id replaces it).
 
@@ -141,6 +148,18 @@ def build_server(brain: Brain, read_only: bool = False):
                 {"target": "<entity_id>", "relationship_edge_meaning": "<text>"}.
                 Prefer a meaning the doc_type already declares or uses. Targets
                 may not exist yet. Always set these — the edges are the point.
+                Each edge may carry its own "provenance" block: a well-attributed
+                entity can still carry a guessed edge.
+            provenance: Where the claim came from and how far to trust it —
+                {"asserted_by": "agent:<name>", "asserted_at": "<ISO-8601>",
+                 "confidence": 0.0-1.0, "evidence": "<what justified it, verbatim>"}.
+                Supply it whenever you INFER something rather than reading it
+                directly, and set `confidence` honestly — readers filter on it,
+                and an unscored claim is treated as untrusted, not certain.
+            valid_from / valid_to: When the claim is true OF THE WORLD, which is
+                not when you asserted it. A memory limit that was 25Gi until a
+                deploy has `valid_to` at the deploy, while the assertion about it
+                is `asserted_at` now. Omit both if the claim has no time bound.
 
         Whether a JSON file is written follows the doc_type's `storage` policy
         ("file" writes one, "index" keeps it in the DB); you don't choose."""
@@ -166,6 +185,24 @@ def build_server(brain: Brain, read_only: bool = False):
                 "hint": f"ids are '<doc_type>:<slug>' — use '{expected_prefix}<slug>'.",
             })
 
+        # Build provenance first, so a malformed attribution block is reported as
+        # such instead of surfacing as a confusing schema-field error below. A
+        # claim that looks attributed but is not is worse than a plainly
+        # unattributed one, so this must fail loudly rather than drop silently.
+        try:
+            entity_provenance = Provenance(**provenance) if provenance else None
+            edge_provenance = [
+                Provenance(**r["provenance"])
+                if isinstance(r.get("provenance"), dict) else None
+                for r in (related_to or [])
+            ]
+        except (TypeError, ValueError) as exc:
+            return json.dumps({
+                "error": f"invalid provenance: {exc}",
+                "hint": '{"asserted_by": "agent:<name>", "asserted_at": "<ISO-8601>", '
+                        '"confidence": 0.0-1.0, "evidence": "<what justified it>"}',
+            })
+
         try:
             entity = Entity(
                 id=id,
@@ -176,9 +213,15 @@ def build_server(brain: Brain, read_only: bool = False):
                     Relationship(
                         target=r["target"],
                         relationship_edge_meaning=r.get("relationship_edge_meaning", ""),
+                        # Per-edge provenance: a well-attributed entity can still
+                        # carry a guessed edge, and the two need separate trust.
+                        provenance=p,
                     )
-                    for r in (related_to or [])
+                    for r, p in zip(related_to or [], edge_provenance)
                 ],
+                provenance=entity_provenance,
+                valid_from=valid_from,
+                valid_to=valid_to,
             )
             path = brain.put_entity(entity)
         except KeyError:

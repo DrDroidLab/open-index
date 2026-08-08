@@ -137,6 +137,102 @@ def test_schema_validation_error_reports_known_fields(srv, brain):
     assert "owner" in out["known_fields"]
 
 
+# -- provenance over the MCP boundary -----------------------------------------
+#
+# The provenance tests elsewhere exercise Entity.from_dict directly. These go
+# through the tool, which is where the input schema is enforced — a nested
+# provenance object is rejected before the body runs if `related_to` is
+# annotated dict[str, str] rather than dict[str, Any].
+
+
+def test_entity_provenance_and_validity_round_trip(srv, brain):
+    out = json.loads(srv.call("put_entity", {
+        "doc_type": "issue", "id": "issue:attributed", "name": "Attributed",
+        "provenance": {"asserted_by": "agent:x", "asserted_at": "2026-01-01T00:00:00Z",
+                       "confidence": 0.9, "evidence": "seen in logs"},
+        "valid_from": "2026-01-01T00:00:00Z",
+        "valid_to": "2026-02-01T00:00:00Z",
+    }))
+    assert out["ok"] is True
+
+    stored = brain.get_entity("issue:attributed")
+    assert stored.provenance.asserted_by == "agent:x"
+    assert stored.provenance.confidence == 0.9
+    assert stored.valid_from == "2026-01-01T00:00:00Z"
+    assert stored.valid_to == "2026-02-01T00:00:00Z"
+
+
+def test_per_edge_provenance_survives_the_tool_schema(srv, brain):
+    """Regression: a nested dict inside related_to must not be schema-rejected."""
+    out = json.loads(srv.call("put_entity", {
+        "doc_type": "issue", "id": "issue:edged", "name": "Edged",
+        "related_to": [{
+            "target": "product:checkout",
+            "relationship_edge_meaning": "affects",
+            "provenance": {"asserted_by": "agent:x", "confidence": 0.4},
+        }],
+    }))
+    assert out["ok"] is True, out
+
+    edge = brain.get_entity("issue:edged").related_to[0]
+    assert edge.provenance is not None, "per-edge provenance was dropped"
+    assert edge.provenance.confidence == 0.4
+
+
+def test_entity_and_edge_provenance_are_independent(srv, brain):
+    """A well-attributed entity can carry a guessed edge."""
+    srv.call("put_entity", {
+        "doc_type": "issue", "id": "issue:mixed", "name": "Mixed",
+        "provenance": {"asserted_by": "human:dipesh", "confidence": 1.0},
+        "related_to": [{"target": "product:checkout",
+                        "relationship_edge_meaning": "affects",
+                        "provenance": {"asserted_by": "agent:x", "confidence": 0.2}}],
+    })
+    stored = brain.get_entity("issue:mixed")
+    assert stored.provenance.confidence == 1.0
+    assert stored.related_to[0].provenance.confidence == 0.2
+
+
+def test_malformed_entity_provenance_is_reported_as_provenance(srv):
+    """Not as a schema-field error — the two have different fixes."""
+    out = json.loads(srv.call("put_entity", {
+        "doc_type": "issue", "id": "issue:badprov",
+        "provenance": {"confidence": 5.0},
+    }))
+    assert "invalid provenance" in out["error"]
+    assert "confidence" in out["hint"]
+    assert "known_fields" not in out
+
+
+def test_malformed_edge_provenance_is_reported(srv):
+    out = json.loads(srv.call("put_entity", {
+        "doc_type": "issue", "id": "issue:badedge",
+        "related_to": [{"target": "product:checkout",
+                        "provenance": {"confidence": -1}}],
+    }))
+    assert "invalid provenance" in out["error"]
+
+
+def test_omitting_provenance_stays_clean(srv, brain):
+    """Unattributed writes must not gain an empty provenance block."""
+    srv.call("put_entity", {"doc_type": "issue", "id": "issue:plain", "name": "Plain"})
+    stored = brain.get_entity("issue:plain")
+    assert stored.provenance is None
+    assert stored.valid_from is None
+
+
+def test_provenance_is_documented_in_the_tool_docstring(brain):
+    """The docstring is the only place an agent learns these arguments exist."""
+    from open_index.mcp_server import build_server
+
+    server = build_server(brain)
+    tools = asyncio.new_event_loop().run_until_complete(server.list_tools())
+    doc = next(t for t in tools if t.name == "put_entity").description
+    assert "asserted_by" in doc
+    assert "confidence" in doc
+    assert "valid_from" in doc
+
+
 # -- read-only ----------------------------------------------------------------
 
 
