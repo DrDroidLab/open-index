@@ -11,7 +11,8 @@ infrastructure. The schema drives three things:
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+import re
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -36,6 +37,32 @@ SearchKind = Literal["syntactic", "semantic", "none"]
 #             git-tracked and PR-reviewable. Right for curated, human/agent-authored
 #             entities you want to version.
 StoragePolicy = Literal["index", "file"]
+
+
+# ISO-8601-ish shape check. Deliberately a SHAPE test and not a parse: timestamps
+# reach this store from many producers, and parsing here would either reject valid
+# offsets or silently normalise them, both of which are worse than a loose check.
+_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$")
+
+
+def _type_error(spec: "FieldSpec", value: Any) -> Optional[str]:
+    """One human-readable error, or None if the value fits the declared type."""
+    t = spec.type
+    if t == "number":
+        # bool is a subclass of int in Python; a True in a number field is a
+        # mistake, not a 1.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return f"field '{spec.name}' expects a number, got {type(value).__name__} {value!r}"
+    elif t == "boolean":
+        if not isinstance(value, bool):
+            return f"field '{spec.name}' expects a boolean, got {type(value).__name__} {value!r}"
+    elif t == "timestamp":
+        if not isinstance(value, str) or not _TIMESTAMP_RE.match(value):
+            return (f"field '{spec.name}' expects an ISO-8601 timestamp, got {value!r}")
+    elif t in ("string", "text"):
+        if not isinstance(value, str):
+            return f"field '{spec.name}' expects a string, got {type(value).__name__} {value!r}"
+    return None
 
 
 class FieldSpec(BaseModel):
@@ -135,9 +162,26 @@ class DocType(BaseModel):
         return cls.model_validate(data)
 
     def validate_entity_fields(self, values: dict) -> list[str]:
-        """Return a list of human-readable validation errors (empty == valid)."""
+        """Return a list of human-readable validation errors (empty == valid).
+
+        Checks presence AND declared type. Type checking matters more than it looks
+        for an agent-written store: a schema that advertises `type: number` and then
+        accepts "about 15k" is a schema in name only, and the bad value surfaces
+        later as a mapping error or a silent mis-sort with no trace back to the
+        write that caused it.
+
+        Undeclared fields are deliberately NOT rejected. Schemas here grow by
+        accretion and a strict-unknown rule would make every schema edit a
+        migration; declared fields are the contract, extras are tolerated.
+        """
         errors: list[str] = []
         for f in self.fields:
-            if f.required and values.get(f.name) in (None, ""):
-                errors.append(f"missing required field '{f.name}'")
+            value = values.get(f.name)
+            if value in (None, ""):
+                if f.required:
+                    errors.append(f"missing required field '{f.name}'")
+                continue
+            err = _type_error(f, value)
+            if err:
+                errors.append(err)
         return errors

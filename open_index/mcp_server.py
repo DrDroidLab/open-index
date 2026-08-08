@@ -22,7 +22,7 @@ import json
 from typing import Any, Optional
 
 from open_index.brain import Brain
-from open_index.models import Entity, Relationship
+from open_index.models import Entity, Provenance, Relationship
 from open_index.schema import DocType, DocTypeDisplay, FieldSpec
 
 
@@ -120,6 +120,9 @@ def build_server(brain: Brain, read_only: bool = False):
         name: str = "",
         fields: Optional[dict[str, Any]] = None,
         related_to: Optional[list[dict[str, str]]] = None,
+        provenance: Optional[dict[str, Any]] = None,
+        valid_from: Optional[str] = None,
+        valid_to: Optional[str] = None,
     ) -> str:
         """Add or update an entity in the brain (validated + persisted to disk).
 
@@ -127,26 +130,51 @@ def build_server(brain: Brain, read_only: bool = False):
         `fields` are the schema fields for the doc_type. `related_to` is a list of
         {"target": "<entity_id>", "relationship_edge_meaning": "<free text>"}
         edges, e.g. {"target": "product:checkout", "relationship_edge_meaning":
-        "has common issue"}. Use this to record new knowledge or corrections."""
+        "has common issue"}. Use this to record new knowledge or corrections.
+
+        `provenance` records where the claim came from and how far to trust it:
+        {"asserted_by": "agent:<name>", "asserted_at": "<ISO-8601>",
+         "confidence": 0.0-1.0, "evidence": "<what justified it, verbatim>"}.
+        Supply it whenever you INFER something rather than reading it directly, and
+        set `confidence` honestly — readers filter on it, and an unscored claim is
+        treated as untrusted rather than certain.
+
+        `valid_from`/`valid_to` bound when the claim is true OF THE WORLD, which is
+        not the same as when you asserted it. A memory limit that was 25Gi until a
+        deploy has `valid_to` at the deploy; the assertion about it is `asserted_at`
+        now. Omit both if the claim carries no time bound."""
         if brain.config.doc_type(doc_type) is None:
             return json.dumps(
                 {"error": f"unknown doc_type '{doc_type}'. Create it first with "
                           "create_doc_type, or use an existing one: "
                           f"{list(brain.config.doc_types)}"}
             )
-        entity = Entity(
-            id=id,
-            doc_type=doc_type,
-            name=name,
-            fields=fields or {},
-            related_to=[
-                Relationship(
-                    target=r["target"],
-                    relationship_edge_meaning=r.get("relationship_edge_meaning", ""),
-                )
-                for r in (related_to or [])
-            ],
-        )
+        try:
+            entity = Entity(
+                id=id,
+                doc_type=doc_type,
+                name=name,
+                fields=fields or {},
+                related_to=[
+                    Relationship(
+                        target=r["target"],
+                        relationship_edge_meaning=r.get("relationship_edge_meaning", ""),
+                        # Per-edge provenance: a well-attributed entity can still carry
+                        # a guessed edge, and the two need separate trust.
+                        provenance=(Provenance(**r["provenance"])
+                                    if isinstance(r.get("provenance"), dict) else None),
+                    )
+                    for r in (related_to or [])
+                ],
+                provenance=Provenance(**provenance) if provenance else None,
+                valid_from=valid_from,
+                valid_to=valid_to,
+            )
+        except (TypeError, ValueError) as exc:
+            # A malformed provenance block must be a visible error, not silently
+            # dropped — a claim that looks attributed but is not is worse than one
+            # that is plainly unattributed.
+            return json.dumps({"error": f"invalid provenance or validity: {exc}"})
         try:
             path = brain.put_entity(entity)
         except ValueError as exc:
