@@ -395,6 +395,20 @@ server {{
 # -- brains -------------------------------------------------------------------
 
 
+def reapply_permissions(name: str, brains_root: Path) -> None:
+    """Give the container ownership and keep group write for the host user.
+
+    Re-applied on every `up`, not just at creation: the container writes with
+    umask 022, so any directory it creates (a new entities/<doc_type>/, the
+    files an agent writes back) loses group write and the operator can no longer
+    drop a CSV in or rsync data across without sudo.
+    """
+    path = brains_root / name
+    run(["sudo", "chown", "-R", f"{CONTAINER_UID}:{os.getgid()}", str(path)], quiet=True)
+    run(["sudo", "chmod", "-R", "g+rwX", str(path)], quiet=True)
+    run(["sudo", "chmod", "g+s", str(path)], quiet=True)
+
+
 def ensure_brain(name: str, brains_root: Path) -> bool:
     """Create and permission a brain directory if it doesn't exist yet."""
     path = brains_root / name
@@ -464,6 +478,7 @@ def cmd_up(config: dict) -> None:
     brains_root.mkdir(parents=True, exist_ok=True)
     for name in names:
         ensure_brain(name, brains_root)
+        reapply_permissions(name, brains_root)
 
     print("  starting ...")
     run(compose_cmd() + ["up", "-d", "--remove-orphans"])
