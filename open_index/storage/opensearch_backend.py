@@ -390,9 +390,27 @@ class OpenSearchBackend:
                 "is the cluster running? (search.backend: opensearch)"
             ) from exc
 
+    def _ensure_index_exists(self) -> None:
+        """Recreate the index with our mapping if it has gone missing.
+
+        `ensure_schema` runs once when the brain is opened. If the index is
+        dropped after that — a cluster rebuild, a manual DELETE, a restored
+        snapshot — OpenSearch would auto-create it on the next write using
+        *dynamic* mapping, silently typing `doc_type` as text and breaking every
+        aggregation, and typing date-shaped strings as dates and breaking fuzzy
+        search. Both fail long after the write that caused them, so it is worth
+        one existence check on the write path.
+        """
+        if self._client.indices.exists(index=self.index):
+            return
+        logger.warning("index %s was missing; recreating it with the schema mapping",
+                       self.index)
+        self._client.indices.create(index=self.index, body=self._mapping())
+
     def upsert_entity(self, entity: Entity, doc_type: Optional[DocType] = None) -> None:
         if doc_type is not None:
             self._doc_types[doc_type.doc_type] = doc_type
+        self._ensure_index_exists()
         self._client.index(
             index=self.index, id=entity.id, body=self._doc_with_embedding(entity), refresh=True
         )
@@ -408,6 +426,7 @@ class OpenSearchBackend:
         for _entity, doc_type in items:
             if doc_type is not None:
                 self._doc_types[doc_type.doc_type] = doc_type
+        self._ensure_index_exists()
 
         payload: list[dict] = []
         for entity, _doc_type in items:
