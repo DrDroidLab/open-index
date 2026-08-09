@@ -259,7 +259,7 @@ def search(
 ):
     """Search the brain from the terminal."""
     b = _open_brain(brain)
-    results = b.search(query=query or None, doc_types=doc_type, limit=limit)
+    results = b.search(query=query or None, doc_types=doc_type, limit=limit, source="cli")
     typer.echo(f"{results.total} match(es)  {dict(results.doc_type_counts)}")
     for r in results.results:
         typer.echo(f"  [{r['doc_type']}] {r['id']}  ({r['score']:.2f})  {r['name']}")
@@ -380,9 +380,12 @@ def ui(
 @app.command()
 def mcp(
     brain: str = BrainOpt,
-    read_only: bool = typer.Option(False, "--read-only", help="Expose only read tools."),
+    read_only: bool = typer.Option(
+        False, "--read-only",
+        help="Opt out of default read+write mode and expose only read tools.",
+    ),
 ):
-    """Run the MCP server over stdio (local agents / Claude Code)."""
+    """Run the MCP context layer over stdio (read+write by default)."""
     from open_index.mcp_server import serve
 
     serve(str(Path(brain).resolve()), read_only=read_only)
@@ -449,7 +452,10 @@ def serve(
         help="Externally reachable URL, when behind a proxy/tunnel/load balancer. "
              "Only used to print correct connection details.",
     ),
-    read_only: bool = typer.Option(False, "--read-only", help="Expose only read tools."),
+    read_only: bool = typer.Option(
+        False, "--read-only",
+        help="Opt out of default read+write mode and expose only read tools.",
+    ),
 ):
     """Serve the MCP server over HTTP so remote/cloud agents connect by URL.
 

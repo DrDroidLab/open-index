@@ -53,8 +53,8 @@ def test_empty_brain_runs_without_exceptions(empty):
     assert not empty.exception, [e.value for e in empty.exception]
 
 
-def test_three_tabs(populated):
-    assert [t.label for t in populated.tabs] == ["Explore", "Map", "Jobs"]
+def test_tabs(populated):
+    assert [t.label for t in populated.tabs] == ["Explore", "Map", "Analytics", "Jobs"]
 
 
 # -- structure is visible without hunting for it ------------------------------
@@ -135,6 +135,43 @@ def test_back_returns_to_the_list(populated):
     next(b for b in populated.button if "product:checkout" in b.label).click().run()
     next(b for b in populated.button if "back" in b.label).click().run()
     assert not populated.exception
+
+
+    # -- analytics ------------------------------------------------------------
+
+
+def test_analytics_tab_renders_on_a_cold_brain(populated):
+    """No usage recorded yet must be an explanation, not a crash or a blank."""
+    text = " ".join(i.value for i in populated.info) + " ".join(
+        c.value for c in populated.caption)
+    assert "Analytics" in [t.label for t in populated.tabs]
+    assert not populated.exception
+    assert "~/.local/state/open-index/" in text or "recorded" in text
+
+
+def test_searching_is_recorded_as_ui_usage(populated):
+    """A UI search must show up in analytics, or the usage picture has a hole."""
+    populated.text_input[0].set_value("payment").run()
+    assert not populated.exception
+
+    from open_index.brain import Brain
+
+    import os
+    summary = Brain.open(os.environ["OPEN_INDEX_DIR"]).analytics_summary()
+    assert summary["total_fetches"] >= 1
+    assert "ui" in summary["by_source"]
+
+
+def test_opening_an_entity_is_recorded_as_ui_usage(populated):
+    populated.text_input[0].set_value("checkout").run()
+    next(b for b in populated.button if "product:checkout" in b.label).click().run()
+
+    import os
+
+    from open_index.brain import Brain
+
+    summary = Brain.open(os.environ["OPEN_INDEX_DIR"]).analytics_summary()
+    assert "get_entity" in summary["by_operation"]
 
 
 def test_empty_brain_explains_the_next_step(empty):

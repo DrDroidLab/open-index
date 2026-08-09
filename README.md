@@ -46,23 +46,37 @@ Prefer containers, or need a brain several agents share? →
 | `open-index ingest <connector>` | Run a connector now to pull entities from an MCP server. |
 | `open-index run [--force] [--loop N]` | Run every connector whose `schedule` is due (wire into cron/CI). |
 | `open-index search <query> [-t doc_type]` | Search from the terminal. |
-| `open-index ui` | Launch the Streamlit explorer (Explore / **Map** / Jobs). |
-| `open-index mcp` | Run the MCP server (stdio) so a local agent can **read and write** the brain. |
-| `open-index serve [--port --token]` | Serve the MCP server over **HTTP** for remote/cloud agents (bearer-token auth). |
+| `open-index ui` | Launch the Streamlit explorer (Explore / **Map** / Analytics / Jobs). |
+| `open-index mcp [--read-only]` | Run the MCP context layer over stdio. **Read+write by default**; `--read-only` opts out of writes. |
+| `open-index serve [--port --token --read-only]` | Serve the same read+write MCP context layer over **HTTP** for remote agents (bearer-token auth). |
 | `open-index mcp-config [--url --token]` | Print the MCP connection block to paste into your agent. |
 
-### Built for Claude Code (and any agent)
+### A context layer for domain-specialized agents
 
-`open-index init` also drops a `.mcp.json` and a `CLAUDE.md` in the brain, so the
-moment you open Claude Code in that folder it can drive the brain over MCP:
+Open Index is designed to sit behind agents specialized for a domain—legal,
+marketing, customer support, sales, infrastructure, or a domain of your own. The
+MCP server gives those agents structured context and a validated way to keep that
+context current:
 
-- **read** — `navigation_guidelines()` (what doc_types exist + how to query), `search_brain()`, `get_entity()`
+- **agent prompt** — dynamic domain navigation is published through MCP server
+  instructions so supporting hosts can inject it before the first turn
+- **read** — `navigation_guidelines()` refreshes those instructions;
+  `search_brain()` and `get_entity()` retrieve domain context
 - **write** — `put_entity()` (add/update an entity), `create_doc_type()` (define a concept)
 
-So you *define* doc_types and *populate* entities by talking to the agent — it
-writes the YAML/JSON files (the git source of truth) for you. Entities also arrive
-via manual JSON, connectors (MCP ingestion on a `schedule`), or an agent
-write-back loop (a Stop hook that records learnings via `put_entity`).
+Read and write is the default MCP mode so a domain agent can both use knowledge
+and maintain it. Add `--read-only` when the agent should consume context without
+mutating it. Claude Code is supported as one optional MCP client; `open-index init`
+scaffolds `.mcp.json`, `CLAUDE.md`, and an editing skill as conveniences for it.
+
+### Portable agent setup skill
+
+[`skills/setup-open-index/SKILL.md`](./skills/setup-open-index/SKILL.md) follows the
+portable Agent Skills `SKILL.md` format used by agent runtimes including OpenClaw,
+Hermes, and Claude Code. Give or install this skill in the selected runtime when
+the agent should set up Open Index itself. It covers installation, domain-brain
+initialization, generic MCP wiring, default read/write verification, the
+`--read-only` opt-out, and production guardrails.
 
 ### A brain on disk
 
@@ -190,26 +204,41 @@ See [Entity Management](./entity-management.md) for guidance on cadence and deca
 
 `open-index ui` opens a read-only explorer. The sidebar always shows every doc_type
 with its count and storage policy, so the structure is visible without navigating
-anywhere. Three tabs: **Explore** (search + browse + drill into an entity's
+anywhere. Four tabs: **Explore** (search + browse + drill into an entity's
 relationships), **Map** (auto-anchored on the most-connected entities — click any
-node to expand it), and **Jobs** (connectors and their schedules).
+node to expand it), **Analytics** (what context CLI/MCP/UI clients fetched, and how
+often — zero-result searches show what to model next), and **Jobs** (connectors and
+their schedules).
 
-# Enabling your agent to use the brain
+# Using Open Index as your agent's context layer
 
 `open-index mcp` runs an MCP server (stdio) exposing the brain to any MCP client —
-**read and write**:
+**read and write by default**:
 
-- `navigation_guidelines()` — orient: doc_types, fields, relationships, how to query/write.
+- The server publishes dynamic, brain-specific instructions as part of the agent
+  prompt so supporting hosts can navigate the domain before the first tool call.
+- `navigation_guidelines()` — refresh that guide after the index/schema changes.
 - `search_brain(query, doc_types, limit)` · `get_entity(id)` — read.
 - `put_entity(...)` · `put_entities([...])` · `create_doc_type(...)` — write (validated,
   honors the storage policy). `put_entities` writes a whole batch in one call and
   takes a shared `provenance` block.
 
-`open-index init` drops a `.mcp.json` so Claude Code auto-connects, a `CLAUDE.md`
-documenting the model, and an **`edit-brain` skill** (`.claude/skills/edit-brain/SKILL.md`)
-the agent follows when adding or correlating knowledge. The UI's **Contribute** tab
-shows how to connect — editing happens via the agent or CLI, never in the UI, so files
-stay the source of truth and every write is validated.
+Use `open-index mcp --read-only` (or `open-index serve --read-only`) to opt out
+when an agent should retrieve domain context but never maintain it.
+
+### Local context-fetch analytics
+
+CLI and MCP searches, entity fetches, and navigation-guide reads are recorded in
+the user's local state directory (`~/.local/state/open-index/`), outside the brain
+checkout. The Analytics tab shows fetch counts
+by client/operation, frequently fetched queries or entity IDs, latency, failures,
+zero-result searches, and recent activity. This file stays local and is never
+sent to Open Index's creators.
+
+`open-index init` also includes optional Claude Code conveniences: `.mcp.json`, a
+`CLAUDE.md` describing durable editing workflows (not runtime navigation), and an
+**`edit-brain` skill**. They are one client integration, not a requirement for
+building legal, marketing, support, or other specialized agents on Open Index.
 
 ## Using the brain from a cloud agent (production)
 

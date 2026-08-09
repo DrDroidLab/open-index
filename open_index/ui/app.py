@@ -17,6 +17,7 @@ anything appeared, which read as an empty or broken screen.
 from __future__ import annotations
 
 import os
+from time import perf_counter
 
 import streamlit as st
 
@@ -149,8 +150,11 @@ def render_explore(brain: Brain, options: dict) -> None:
 
 def _render_results(brain: Brain, query: str, doc_types, options: dict) -> None:
     try:
+        # source="ui" so browsing here shows up in the Analytics tab alongside
+        # CLI and agent traffic — otherwise the usage picture has a hole in it.
         results = brain.search(query=query, doc_types=doc_types, limit=50,
-                               semantic_weight=options["semantic_weight"])
+                               semantic_weight=options["semantic_weight"],
+                               source="ui")
     except Exception as exc:  # a backend that's down shouldn't blank the page
         st.error(f"Search failed: {exc}")
         return
@@ -193,7 +197,7 @@ def render_entity(brain: Brain, entity_id: str) -> None:
     if st.button("← back", key="entity_back"):
         _goto(None)
 
-    entity = brain.get_entity(entity_id)
+    entity = brain.get_entity(entity_id, source="ui")
     if entity is None:
         st.warning(f"No entity `{entity_id}`.")
         return
@@ -317,6 +321,69 @@ def render_graph(brain: Brain, graph: ContextGraph) -> None:
 # Jobs — connectors and their schedules.
 # --------------------------------------------------------------------------- #
 
+def render_analytics(brain: Brain) -> None:
+    """Which context was fetched, by whom, and how often — across CLI, MCP and UI.
+
+    The number worth watching is zero-result searches: those are the questions
+    this brain was asked and could not answer, i.e. what to model next.
+    """
+    summary = brain.analytics_summary()
+    if not summary.get("available", True):
+        st.warning("Analytics are unavailable — the local state directory is not writable.")
+        return
+
+    st.caption(
+        "Stored in `~/.local/state/open-index/`, outside the brain checkout. "
+        "Search text and entity ids stay on this machine."
+    )
+
+    cols = st.columns(4)
+    cols[0].metric("fetches", summary["total_fetches"])
+    cols[1].metric("failed", summary["failed_fetches"])
+    cols[2].metric("zero-result searches", summary["zero_result_searches"])
+    cols[3].metric("avg latency", f"{summary['average_duration_ms']:.0f} ms")
+
+    if not summary["total_fetches"]:
+        st.info("Nothing recorded yet. Search here, or query the brain from the "
+                "CLI or your agent, and the usage shows up in this tab.")
+        return
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("**By client**")
+        st.bar_chart([{"client": k, "fetches": v}
+                      for k, v in summary["by_source"].items()],
+                     x="client", y="fetches")
+    with right:
+        st.markdown("**By operation**")
+        st.bar_chart([{"operation": k, "fetches": v}
+                      for k, v in summary["by_operation"].items()],
+                     x="operation", y="fetches")
+
+    st.markdown("**Most requested context**")
+    if summary["by_context"]:
+        st.dataframe([{"context": c, "fetches": n}
+                      for c, n in summary["by_context"].items()],
+                     hide_index=True, use_container_width=True)
+    else:
+        st.caption("No named context fetched yet.")
+
+    with st.expander("Recent fetches"):
+        events = brain.analytics_events(limit=100)
+        if not events:
+            st.caption("No events yet.")
+            return
+        st.dataframe([{
+            "time": e["fetched_at"],
+            "client": e["source"],
+            "operation": e["operation"],
+            "context": e["query"] or e["entity_id"] or "navigation guide",
+            "results": e["result_count"],
+            "ms": e["duration_ms"],
+            "ok": bool(e["success"]),
+        } for e in events], hide_index=True, use_container_width=True)
+
+
 def render_jobs(brain: Brain) -> None:
     from open_index.connectors.runner import discover_connectors
     from open_index.scheduling import RunState
@@ -357,11 +424,15 @@ def main() -> None:
     st.markdown(ROW_CSS, unsafe_allow_html=True)
 
     options = render_sidebar(brain)
-    tab_explore, tab_map, tab_jobs = st.tabs(["Explore", "Map", "Jobs"])
+    tab_explore, tab_map, tab_analytics, tab_jobs = st.tabs(
+        ["Explore", "Map", "Analytics", "Jobs"]
+    )
     with tab_explore:
         render_explore(brain, options)
     with tab_map:
         render_map(brain)
+    with tab_analytics:
+        render_analytics(brain)
     with tab_jobs:
         render_jobs(brain)
 

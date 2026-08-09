@@ -11,14 +11,16 @@ Write (grow the brain — this is what makes it continuously improving):
     put_entity(...) — add/update an entity (validated, persisted to disk).
     create_doc_type(...) — define a new concept.
 
-Run with `open-index mcp --brain <dir>`; speaks MCP over stdio, so an agent like
-Claude Code can both read context from the brain and write learnings back to it
+Run with `open-index mcp --brain <dir>`; it speaks MCP over stdio so a
+domain-specialized agent can both read context and write durable knowledge back
 through the same connection.
 """
 
 from __future__ import annotations
 
 import json
+import inspect
+from time import perf_counter
 from typing import Any, Optional
 
 from open_index.brain import Brain
@@ -52,27 +54,43 @@ def _load_server_class():
 def build_server(brain: Brain, read_only: bool = False):
     """Construct an MCP server bound to an open brain.
 
-    read_only=True registers only the read tools (navigation_guidelines,
+    Read+write is the default. read_only=True registers only the read tools (navigation_guidelines,
     search_brain, get_entity) — no put_entity / create_doc_type. Use it for a
     public/shared endpoint that agents may query but not mutate; run a separate
     authenticated read+write endpoint for writers."""
     server_cls = _load_server_class()
     suffix = " (read-only)" if read_only else ""
-    server = server_cls(f"open-index:{brain.config.name}{suffix}")
+    name = f"open-index:{brain.config.name}{suffix}"
+    # MCP clients that honor server instructions inject this domain context
+    # prompt before the first turn, avoiding an orientation tool call.
+    guide_started = perf_counter()
+    guide = brain.navigation_guidelines(source=None, include_writes=not read_only)
+    if "instructions" in inspect.signature(server_cls).parameters:
+        server = server_cls(name, instructions=guide)
+        # Record delivery only when this SDK can actually publish instructions.
+        brain.record_fetch(
+            source="prompt", operation="navigation_guidelines",
+            started=guide_started, result_count=sum(brain.counts().values()),
+            result_doc_types=brain.counts(),
+        )
+    else:
+        server = server_cls(name)
 
     # ---- read ------------------------------------------------------------- #
 
     @server.tool()
     def navigation_guidelines() -> str:
-        """Orient yourself in this brain. CALL THIS FIRST, before any search or
-        write — it is the complete guide to this brain and you do not need any
-        other documentation.
+        """Refresh this brain's domain context instructions — the complete guide
+        to this brain; you should not need any other documentation.
 
-        Returns markdown covering: the doc_type/entity/relationship model, the
+        Returns markdown covering the doc_type/entity/relationship model, the
         entity id convention, every doc_type with its full field schema and
         relationship vocabulary, example entities, and worked `put_entity` /
-        `create_doc_type` calls with the full schema vocabulary."""
-        return brain.navigation_guidelines(read_only=read_only)
+        `put_entities` / `create_doc_type` calls with the schema vocabulary.
+
+        MCP hosts pre-inject this through server instructions; call it after the
+        index changes, or when the host does not support server instructions."""
+        return brain.navigation_guidelines(source="mcp", include_writes=not read_only)
 
     @server.tool()
     def search_brain(
@@ -83,7 +101,9 @@ def build_server(brain: Brain, read_only: bool = False):
         """Search the brain. `query` is free text; `doc_types` optionally filters
         to specific concepts (e.g. ["product", "issue"]). Returns matching
         entities ranked by relevance, plus per-doc_type counts."""
-        results = brain.search(query=query, doc_types=doc_types, limit=limit)
+        results = brain.search(
+            query=query, doc_types=doc_types, limit=limit, source="mcp"
+        )
         return json.dumps(
             {
                 "total": results.total,
@@ -97,7 +117,7 @@ def build_server(brain: Brain, read_only: bool = False):
     def get_entity(entity_id: str) -> str:
         """Fetch a single entity by id (e.g. "product:checkout"), including its
         outgoing and incoming relationships with their edge meanings."""
-        entity = brain.get_entity(entity_id)
+        entity = brain.get_entity(entity_id, source="mcp")
         if entity is None:
             return json.dumps({"error": f"no entity '{entity_id}'"})
         payload = entity.to_json()
@@ -386,7 +406,7 @@ def build_server(brain: Brain, read_only: bool = False):
 
 
 def serve(brain_dir: str, read_only: bool = False) -> None:
-    """Run the MCP server over stdio (for local agents / Claude Code)."""
+    """Run the MCP server over stdio for a local domain-specialized agent."""
     brain = Brain.open(brain_dir)
     server = build_server(brain, read_only=read_only)
     server.run()

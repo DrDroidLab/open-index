@@ -17,7 +17,8 @@ This repo is a **brain** (a context graph built with Open Index). You can edit i
 - **By editing files** then running `open-index index` and `open-index validate`.
 
 ## Always start here
-Call `navigation_guidelines()` (MCP) or read `doc_types/*.yaml`. It tells you which
+Use the navigation guide pre-injected by the MCP host, when available. Otherwise
+call `navigation_guidelines()` (MCP) or read `doc_types/*.yaml`. It tells you which
 doc_types exist, their fields, and the **relationship vocabulary already in use**.
 Reuse existing doc_types and relationship meanings instead of inventing near-duplicates.
 

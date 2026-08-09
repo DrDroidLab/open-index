@@ -97,7 +97,7 @@ def test_populated_brain_has_no_bootstrap_section(brain):
 
 def test_read_only_guide_omits_write_tools(brain):
     """Describing tools that aren't registered only misleads."""
-    md = brain.navigation_guidelines(read_only=True)
+    md = brain.navigation_guidelines(include_writes=False)
     assert "put_entity" not in md
     assert "create_doc_type" not in md
     # ...but reading is still fully documented.
@@ -106,7 +106,7 @@ def test_read_only_guide_omits_write_tools(brain):
 
 
 def test_read_write_guide_includes_write_tools(brain):
-    assert "put_entity" in brain.navigation_guidelines(read_only=False)
+    assert "put_entity" in brain.navigation_guidelines(include_writes=True)
 
 
 def test_required_fields_are_marked(brain):

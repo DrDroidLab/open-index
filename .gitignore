@@ -3,6 +3,7 @@
 *.db-journal
 *.db-wal
 .open_index_state.json
+.open_index_analytics.db
 
 # Docker env — holds OPEN_INDEX_TOKEN. Commit .env.example instead.
 .env
