@@ -23,11 +23,15 @@ http_port: 80
 opensearch_heap: 512m
 
 indexes:
-  - name: support
-    description: Customer support knowledge — products, issues, segments.
+  - name: aviation-mro-index
+    description: >-
+      Line and base maintenance for a narrowbody fleet — ATA taxonomy, fault
+      messages, task cards, MEL entries and defect history. SYNTHETIC DEMO DATA.
 
-  - name: sales
-    description: Sales pipeline — accounts, deals, contacts.
+  - name: commercial-lines-index
+    description: >-
+      Commercial-lines placement for an SMB brokerage — carriers, appetite
+      rules, class codes, state rules and submission playbooks. SYNTHETIC DEMO DATA.
 
   # read_only exposes search/get/navigation but no write tools. Useful for an
   # index that agents should consult but never modify.
