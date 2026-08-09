@@ -251,6 +251,20 @@ and entities stay in your git repo. On start the entrypoint:
    `OPEN_INDEX_SKIP_INDEX=1`),
 4. execs `open-index serve`.
 
+### Permissions on the mounted brain directory
+
+The container runs as uid **10001** (not root), so a bind-mounted brain directory
+owned by your user is not writable by it — indexing fails on the first write.
+Give the container ownership and keep group access for yourself:
+
+```bash
+sudo chown -R 10001:"$(id -g)" /path/to/my-brain
+chmod -R g+rwX /path/to/my-brain
+```
+
+You can still read and edit the files; writes from inside the container land as
+uid 10001 with your group.
+
 ### Running one-off commands
 
 ```bash
