@@ -276,6 +276,28 @@ def mcp_client_config(url: str, server_name: str = "open-index") -> str:
     )
 
 
+# The three ideas someone needs before anything else on the page makes sense.
+# Spelled out because "doc_type" means nothing to a first-time visitor, and the
+# help tab is what the app opens on.
+MODEL_GUIDE = [
+    ("doc_type",
+     "A **concept** this index tracks, and the fields kept for it — `issue`, "
+     "`carrier`, `aircraft`. It is the schema, not the data: defining one says "
+     "what an issue *is*, not that any exist. The Schema tab lists them all."),
+    ("entity (a doc)",
+     "**One instance** of a doc_type — one issue, one carrier, one aircraft. "
+     "Its id is always `<doc_type>:<slug>`, so `issue:payment-declined` is an "
+     "issue called `payment-declined`. This is the document you search for and "
+     "the agent reads."),
+    ("relationship",
+     "An **optional** link from one entity to another, with free text saying "
+     "what the link means — `product:checkout` → *has common issue* → "
+     "`issue:payment-declined`. Entities work perfectly well without any. Edges "
+     "are what turn a list of documents into something you can traverse, so an "
+     "index with none is a searchable table rather than a graph."),
+]
+
+
 # What each tool does, in the order an agent would reach for them. Kept here
 # rather than in the page so the list can be asserted against the tools the MCP
 # server actually registers — a stale tool list in the docs is worse than none.

@@ -378,3 +378,30 @@ def test_legend_is_ordered_by_count(brain):
 
 def test_graph_width_fits_beside_the_legend():
     assert view.GRAPH_WIDTH <= 1000
+
+
+# -- the model explanation on the help tab ------------------------------------
+
+
+def test_model_guide_covers_the_three_ideas():
+    terms = " ".join(t for t, _ in view.MODEL_GUIDE).lower()
+    assert "doc_type" in terms
+    assert "entity" in terms and "doc" in terms   # both names for an instance
+    assert "relationship" in terms
+
+
+def test_model_guide_says_relationships_are_optional():
+    text = dict(view.MODEL_GUIDE)["relationship"].lower()
+    assert "optional" in text
+    assert "without any" in text, "should say entities are valid with no edges"
+
+
+def test_model_guide_explains_the_id_convention():
+    """The single most common write failure, so it belongs in the explanation."""
+    text = " ".join(w for _, w in view.MODEL_GUIDE)
+    assert "<doc_type>:<slug>" in text
+
+
+def test_model_guide_distinguishes_schema_from_data():
+    text = dict(view.MODEL_GUIDE)["doc_type"].lower()
+    assert "schema" in text

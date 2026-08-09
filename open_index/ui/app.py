@@ -441,14 +441,16 @@ def render_schema(brain: Brain) -> None:
                 st.caption("No fields declared.")
 
             relationships = view.schema_relationship_rows(brain, row.name)
+            st.markdown("**Relationships (optional)**")
             if relationships:
-                st.markdown("**Relationships**")
                 st.table(relationships)
                 st.caption("Declared edges are validated against their target "
                            "doc_type. Undeclared ones still work — they just "
                            "aren't checked.")
             else:
-                st.caption("No relationships declared or in use for this type.")
+                st.caption("None declared or in use. Entities of this type are "
+                           "valid without any; edges are what make the index "
+                           "traversable rather than just searchable.")
 
 
 def render_how_to_use(brain: Brain) -> None:
@@ -461,6 +463,14 @@ def render_how_to_use(brain: Brain) -> None:
     mcp_url = os.environ.get("OPEN_INDEX_PUBLIC_URL", "")
     read_only = os.environ.get("OPEN_INDEX_READ_ONLY", "").lower() in ("1", "true", "yes")
 
+    st.markdown("### What an index holds")
+    st.caption(
+        "Three ideas, and the whole thing follows from them."
+    )
+    for term, what in view.MODEL_GUIDE:
+        st.markdown(f"- **{term}** — {what}")
+
+    st.divider()
     st.markdown(f"### Connect an agent to `{_esc(summary.name)}`")
     st.caption(
         "This index speaks MCP, so any MCP-capable agent can query it — and, "

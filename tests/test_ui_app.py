@@ -209,6 +209,22 @@ def test_row_css_inherits_colour_through_the_label_element():
 # -- How to use ----------------------------------------------------------------
 
 
+def test_help_tab_explains_the_model_before_the_connection_block(populated):
+    """The vocabulary has to land before "point your agent at this URL" means
+    anything to a first-time visitor."""
+    markdown = [m.value for m in populated.markdown]
+    headings = [m for m in markdown if m.startswith("###")]
+    assert any("What an index holds" in h for h in headings)
+    assert headings.index(next(h for h in headings if "What an index holds" in h)) \
+        < headings.index(next(h for h in headings if "Connect an agent" in h))
+
+
+def test_schema_marks_relationships_optional(populated):
+    populated.tabs[1].run()   # Schema
+    assert not populated.exception
+    assert any("Relationships (optional)" in m.value for m in populated.markdown)
+
+
 def test_help_is_the_first_tab_so_it_opens_on_load(populated):
     """Streamlit selects the first tab, so a first-time visitor lands on the
     explanation instead of having to find it."""
