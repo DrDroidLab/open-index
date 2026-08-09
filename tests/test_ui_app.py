@@ -14,6 +14,8 @@ pytest.importorskip("streamlit")
 
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
+from open_index.ui import view  # noqa: E402
+
 APP = Path(__file__).resolve().parent.parent / "open_index" / "ui" / "app.py"
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "support-brain"
 
@@ -178,3 +180,21 @@ def test_empty_brain_explains_the_next_step(empty):
     text = " ".join(c.value for c in empty.caption) + " ".join(
         i.value for i in empty.info)
     assert "no entities" in text.lower()
+
+
+# -- dark mode ----------------------------------------------------------------
+
+
+def test_row_css_is_theme_agnostic():
+    """A hardcoded white row background rendered white-on-white under the dark
+    theme, which kept its light text — the entity list became invisible."""
+    style = view.ROW_CSS.lower()
+    assert "background:#fff" not in style
+    assert "background:transparent" in style
+    assert "color:inherit" in style
+
+
+def test_row_css_inherits_colour_through_the_label_element():
+    """Streamlit wraps button labels in <p>, which otherwise keeps its own
+    colour and ignores the inherit on the button."""
+    assert "> button p{color:inherit" in view.ROW_CSS

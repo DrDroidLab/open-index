@@ -100,7 +100,10 @@ def test_filtered_search_records_the_returned_count(brain):
 
 
 def test_zero_result_searches_are_counted(brain):
-    brain.search(query="nothingmatchesthisquery", source="cli")
+    # semantic_weight=0 pins this to keyword matching. With an embedding
+    # provider installed, hybrid search returns *something* for any query, so
+    # the assertion would depend on which extras happen to be present.
+    brain.search(query="nothingmatchesthisquery", semantic_weight=0.0, source="cli")
     assert brain.analytics_summary()["zero_result_searches"] >= 1
 
 

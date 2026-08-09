@@ -33,19 +33,19 @@ def _open_brain(brain_dir: str) -> Brain:
     return Brain.open(brain_dir)
 
 
-# Buttons styled as full-width list rows, so results and neighbours read as a
-# list rather than a wall of chrome.
-ROW_CSS = """
-<style>
-div[data-testid='stButton'] > button{
-  width:100%; text-align:left; justify-content:flex-start;
-  border:1px solid #ececec; border-radius:6px; background:#fff;
-  padding:7px 12px; font-weight:400; font-size:0.92rem; margin-bottom:-1px;
-}
-div[data-testid='stButton'] > button:hover{background:#f5f6f8;border-color:#dcdcdc;color:inherit}
-div[data-testid='stButton'] > button:focus{box-shadow:none;color:inherit}
-</style>
-"""
+
+
+def _theme_type() -> str:
+    """Whether the viewer is in light or dark mode.
+
+    Streamlit reports this per-session, so it follows the browser preference
+    even when the server was never configured with a theme. Older versions
+    don't expose it at all, hence the guarded lookup.
+    """
+    try:
+        return getattr(st.context.theme, "type", None) or "light"
+    except Exception:
+        return "light"
 
 
 def _dot(color: str) -> str:
@@ -296,22 +296,45 @@ def render_graph(brain: Brain, graph: ContextGraph) -> None:
                   "edges": [e.__dict__ for e in graph.edges]})
         return
 
+    palette = view.graph_theme(_theme_type())
+
     nodes = [
         Node(id=n.id, label=n.label, color=n.color,
              size=22 if n.is_anchor else 16, shape="dot",
-             title=f"{n.doc_type} · {n.id}")
+             title=f"{n.doc_type} · {n.id}",
+             # strokeWidth 0 removes vis's white halo, which on a dark canvas
+             # turns every label into heavy outlined text.
+             font={"color": palette["node_label"], "size": 15,
+                   "strokeWidth": palette["stroke_width"], "face": "sans-serif"})
         for n in graph.nodes
     ]
-    edges = [Edge(source=e.source, target=e.target, label=e.meaning)
-             for e in graph.edges]
+    edges = [
+        Edge(source=e.source, target=e.target, label=e.meaning,
+             color=palette["edge"],
+             font={"color": palette["edge_label"], "size": 12,
+                   "strokeWidth": palette["stroke_width"], "align": "middle",
+                   "face": "sans-serif"})
+        for e in graph.edges
+    ]
+
+    busy = len(graph.nodes) > view.BUSY_GRAPH_NODES
     config = Config(
-        width="100%", height=650, directed=True,
-        # Physics keeps large graphs drifting (and the canvas can stay blank
-        # while hundreds of nodes settle) — freeze the layout past ~150 nodes.
-        physics=len(graph.nodes) <= 150,
+        # An int, not "100%": the library formats this as f"{width}px", so a CSS
+        # string yields "100%px" and the canvas never sizes — which is what left
+        # the graph stranded in a corner instead of centred.
+        width=view.GRAPH_WIDTH, height=view.GRAPH_HEIGHT, directed=True,
+        # Physics stays on even for busy graphs: vis only fits the viewport to
+        # the content as part of stabilisation, so disabling it means the map
+        # never centres. Slow big graphs down instead of freezing them.
+        physics=True, stabilization=True, fit=True,
+        maxVelocity=15 if busy else 50,
         hierarchical=False, collapsible=False,
     )
-    clicked = agraph(nodes=nodes, edges=edges, config=config)
+    # The canvas is a fixed pixel width, so on a wide page it would sit flush
+    # left. Centre it in the content area rather than letting it hug the edge.
+    _left, middle, _right = st.columns([1, 20, 1])
+    with middle:
+        clicked = agraph(nodes=nodes, edges=edges, config=config)
     if clicked and clicked not in st.session_state.get("expanded", set()):
         st.session_state.setdefault("expanded", set()).add(clicked)
         st.rerun()
@@ -421,7 +444,7 @@ def render_jobs(brain: Brain) -> None:
 
 def main() -> None:
     brain = _open_brain(os.environ.get("OPEN_INDEX_DIR", "."))
-    st.markdown(ROW_CSS, unsafe_allow_html=True)
+    st.markdown(view.ROW_CSS, unsafe_allow_html=True)
 
     options = render_sidebar(brain)
     tab_explore, tab_map, tab_analytics, tab_jobs = st.tabs(

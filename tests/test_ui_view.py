@@ -4,6 +4,8 @@ These pin the behaviour that made the old UI read as broken: a map that drew
 nothing until you made a selection, and structure you had to hunt for.
 """
 
+import re
+
 import pytest
 
 from open_index.brain import Brain
@@ -174,3 +176,53 @@ def test_unknown_search_mode_falls_back_to_configured(brain):
 
 def test_color_for_unknown_doc_type_is_the_default(brain):
     assert view.color_for(brain, "nope") == view.DEFAULT_COLOR
+
+
+# -- map theming and canvas sizing --------------------------------------------
+#
+# Two bugs these pin, both reported from a dark-mode screenshot: labels rendered
+# near-black on a near-black canvas, and the graph sat in a corner instead of
+# centred because the canvas width was an invalid CSS value.
+
+
+def test_graph_width_is_an_int_not_a_css_string():
+    """streamlit-agraph does f"{width}px", so "100%" becomes "100%px" and the
+    canvas never sizes — the cause of the off-centre map."""
+    assert isinstance(view.GRAPH_WIDTH, int)
+    assert isinstance(view.GRAPH_HEIGHT, int)
+    # Reproduce the library's formatting and check it yields valid CSS.
+    for value in (view.GRAPH_WIDTH, view.GRAPH_HEIGHT):
+        rendered = f"{value}px"
+        assert re.fullmatch(r"\d+px", rendered), f"invalid CSS length: {rendered}"
+
+
+def test_dark_theme_labels_are_light():
+    dark = view.graph_theme("dark")
+    light = view.graph_theme("light")
+    assert dark["node_label"] != light["node_label"]
+    # A light label on a dark canvas: high channel values.
+    assert int(dark["node_label"].lstrip("#")[:2], 16) > 0x80
+    assert int(light["node_label"].lstrip("#")[:2], 16) < 0x80
+
+
+def test_label_halo_is_disabled_in_both_themes():
+    """vis's default white stroke turns every label into outlined text."""
+    for theme in ("dark", "light"):
+        assert view.graph_theme(theme)["stroke_width"] == 0
+
+
+def test_unknown_or_missing_theme_falls_back_to_light():
+    """Streamlit reports None when the viewer follows their browser setting."""
+    assert view.graph_theme(None) == view.graph_theme("light")
+    assert view.graph_theme("") == view.graph_theme("light")
+    assert view.graph_theme("solarized") == view.graph_theme("light")
+
+
+def test_theme_lookup_is_case_insensitive():
+    assert view.graph_theme("Dark") == view.graph_theme("dark")
+
+
+def test_every_theme_defines_the_full_palette():
+    keys = {"node_label", "edge_label", "edge", "stroke_width"}
+    for theme in ("dark", "light"):
+        assert keys <= set(view.graph_theme(theme))
