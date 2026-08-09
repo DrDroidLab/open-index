@@ -67,6 +67,19 @@ class BrainSummary:
         return bool(self.doc_types)
 
 
+def resolve_brain_choice(available: list[str], requested: Optional[str]) -> Optional[str]:
+    """Which brain the explorer should show.
+
+    `requested` comes from the ?brain= query parameter, so a link to one brain
+    stays a link to that brain. An unknown or missing value falls back to the
+    first rather than erroring — a stale bookmark should land somewhere useful,
+    not on a stack trace.
+    """
+    if not available:
+        return None
+    return requested if requested in available else available[0]
+
+
 def color_for(brain: Brain, doc_type: str) -> str:
     dt = brain.config.doc_type(doc_type)
     return dt.display.color if dt else DEFAULT_COLOR

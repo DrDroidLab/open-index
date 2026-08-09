@@ -282,3 +282,51 @@ def test_connection_block_appends_the_mcp_path():
 
     block = json.loads(view.mcp_client_config("https://x.example.com/demo"))
     assert block["mcpServers"]["open-index"]["url"].endswith("/mcp")
+
+
+# -- one UI process serving many brains ----------------------------------------
+
+
+@pytest.fixture
+def multi(tmp_path, monkeypatch):
+    from open_index.brain import Brain
+
+    root = tmp_path / "brains"
+    root.mkdir()
+    for name in ("alpha", "beta"):
+        shutil.copytree(EXAMPLE, root / name)
+        Brain.open(root / name).index()
+    monkeypatch.delenv("OPEN_INDEX_DIR", raising=False)
+    monkeypatch.setenv("OPEN_INDEX_BRAINS_ROOT", str(root))
+    return AppTest.from_file(str(APP), default_timeout=180).run()
+
+
+def test_many_brains_render_with_a_picker(multi):
+    assert not multi.exception, [e.value for e in multi.exception]
+    picker = next(s for s in multi.sidebar.selectbox if s.label.startswith("Index"))
+    assert set(picker.options) == {"alpha", "beta"}
+
+
+def test_the_picker_reports_how_many_indexes(multi):
+    picker = next(s for s in multi.sidebar.selectbox if s.label.startswith("Index"))
+    assert "(2)" in picker.label
+
+
+def test_switching_brain_reruns_cleanly(multi):
+    picker = next(s for s in multi.sidebar.selectbox if s.label.startswith("Index"))
+    picker.set_value("beta").run()
+    assert not multi.exception
+
+
+def test_an_empty_brains_root_explains_itself(tmp_path, monkeypatch):
+    empty = tmp_path / "none"
+    empty.mkdir()
+    monkeypatch.delenv("OPEN_INDEX_DIR", raising=False)
+    monkeypatch.setenv("OPEN_INDEX_BRAINS_ROOT", str(empty))
+    at = AppTest.from_file(str(APP), default_timeout=180).run()
+    assert any("No brains found" in e.value for e in at.error)
+
+
+def test_single_brain_mode_shows_no_picker(populated):
+    """OPEN_INDEX_DIR alone must behave exactly as before."""
+    assert not any(s.label.startswith("Index") for s in populated.sidebar.selectbox)

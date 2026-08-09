@@ -491,21 +491,13 @@ def build_transport_security(
 
 
 def discover_brains(root: str) -> dict[str, "Path"]:
-    """Every brain directory directly under `root`, keyed by directory name.
+    """Brains under `root`. Re-exported from config for the serve entry points."""
+    from open_index.config import discover_brains as _discover
 
-    A "brain" is any subdirectory holding a brain.yaml, so a root can sit
-    alongside unrelated folders without confusing anything.
-    """
-    from pathlib import Path
-
-    base = Path(root).expanduser().resolve()
-    if not base.is_dir():
-        raise SystemExit(f"no such directory: {base}")
-    return {
-        child.name: child
-        for child in sorted(base.iterdir())
-        if (child / "brain.yaml").exists()
-    }
+    try:
+        return _discover(root)
+    except FileNotFoundError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def token_for(name: str, default: Optional[str] = None) -> Optional[str]:

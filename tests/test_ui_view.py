@@ -405,3 +405,23 @@ def test_model_guide_explains_the_id_convention():
 def test_model_guide_distinguishes_schema_from_data():
     text = dict(view.MODEL_GUIDE)["doc_type"].lower()
     assert "schema" in text
+
+
+# -- one UI process, many brains -----------------------------------------------
+
+
+def test_query_param_selects_the_brain():
+    assert view.resolve_brain_choice(["a", "b", "c"], "b") == "b"
+
+
+def test_unknown_brain_falls_back_to_the_first():
+    """A stale bookmark should land somewhere useful, not on a stack trace."""
+    assert view.resolve_brain_choice(["a", "b"], "deleted") == "a"
+
+
+def test_no_request_picks_the_first():
+    assert view.resolve_brain_choice(["a", "b"], None) == "a"
+
+
+def test_no_brains_selects_nothing():
+    assert view.resolve_brain_choice([], "a") is None

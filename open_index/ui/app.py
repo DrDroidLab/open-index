@@ -33,6 +33,40 @@ def _open_brain(brain_dir: str) -> Brain:
     return Brain.open(brain_dir)
 
 
+@st.cache_resource
+def _available_brains(root: str) -> dict:
+    """Brains under a root, cached so every rerun does not re-stat the disk."""
+    from open_index.config import discover_brains
+
+    return {name: str(path) for name, path in discover_brains(root).items()}
+
+
+def _select_brain():
+    """The brain this page is showing, and the picker when there are several.
+
+    With OPEN_INDEX_BRAINS_ROOT set, one Streamlit process serves every brain
+    under it — the alternative is a process (and a ~250MB embedding model) per
+    brain, which is what stops a host at a handful. `?brain=<name>` deep-links
+    to one.
+    """
+    root = os.environ.get("OPEN_INDEX_BRAINS_ROOT")
+    if not root:
+        return _open_brain(os.environ.get("OPEN_INDEX_DIR", ".")), None
+
+    brains = _available_brains(root)
+    if not brains:
+        st.error(f"No brains found under `{_esc(root)}`.")
+        st.caption("A brain is a directory containing `brain.yaml`. Create one "
+                   "with `open-index init <name>`.")
+        st.stop()
+
+    names = list(brains)
+    chosen = view.resolve_brain_choice(names, st.query_params.get("brain"))
+    if st.query_params.get("brain") != chosen:
+        st.query_params["brain"] = chosen
+    return _open_brain(brains[chosen]), (names, chosen)
+
+
 
 
 def _theme_type() -> str:
@@ -62,11 +96,22 @@ def _esc(text) -> str:
 # Sidebar — the brain at a glance. Always visible, on every tab.
 # --------------------------------------------------------------------------- #
 
-def render_sidebar(brain: Brain) -> dict:
+def render_sidebar(brain: Brain, picker=None) -> dict:
     """Identity, structure and settings. Returns the chosen search options."""
     summary = view.summarize(brain)
 
     with st.sidebar:
+        if picker:
+            names, chosen = picker
+            selected = st.selectbox(
+                f"Index ({len(names)})", names, index=names.index(chosen),
+                help="Every index served by this host. The URL carries your "
+                     "choice, so a link points at one index.",
+            )
+            if selected != chosen:
+                st.query_params["brain"] = selected
+                st.rerun()
+            st.divider()
         st.markdown(f"### 🧠 {_esc(summary.name)}")
         if summary.description:
             st.caption(summary.description)
@@ -567,10 +612,10 @@ def render_jobs(brain: Brain) -> None:
 
 
 def main() -> None:
-    brain = _open_brain(os.environ.get("OPEN_INDEX_DIR", "."))
+    brain, picker = _select_brain()
     st.markdown(view.ROW_CSS, unsafe_allow_html=True)
 
-    options = render_sidebar(brain)
+    options = render_sidebar(brain, picker)
     # Streamlit opens the first tab, so the help page leftmost means a visitor
     # lands on the explanation rather than having to find it.
     tab_help, tab_schema, tab_explore, tab_map, tab_analytics, tab_jobs = st.tabs(
