@@ -100,6 +100,11 @@ class OpenSearchBackend:
         return {
             "settings": {"index": {"knn": True}},
             "mappings": {
+                # A field declared `string` whose values look like dates would
+                # otherwise be mapped as `date` by dynamic detection, and then
+                # rejected by fuzzy search. The schema decides the type here,
+                # not a guess from the first document indexed.
+                "date_detection": False,
                 "properties": {
                     "id": {"type": "keyword"},
                     "doc_type": {"type": "keyword"},
@@ -137,6 +142,11 @@ class OpenSearchBackend:
         """Mapping without the embedding field (for keyword-only brains)."""
         return {
             "mappings": {
+                # A field declared `string` whose values look like dates would
+                # otherwise be mapped as `date` by dynamic detection, and then
+                # rejected by fuzzy search. The schema decides the type here,
+                # not a guess from the first document indexed.
+                "date_detection": False,
                 "properties": {
                     "id": {"type": "keyword"},
                     "doc_type": {"type": "keyword"},
@@ -261,6 +271,13 @@ class OpenSearchBackend:
                     continue
                 if f.name == label:
                     name_boost = max(name_boost, f.boost)
+                # Only text-ish fields belong in a fuzzy full-text query.
+                # OpenSearch maps a `number` field to long and a timestamp to
+                # date, and rejects the whole query with
+                # "Can only use fuzzy queries on keyword and text fields" if
+                # either is listed — so one numeric field breaks all search.
+                if f.type not in ("string", "text"):
+                    continue
                 boosts[f.name] = max(boosts.get(f.name, 1.0), f.boost)
         fields = [f"name^{name_boost:g}"]
         fields += [f"fields.{name}^{b:g}" for name, b in boosts.items()]
