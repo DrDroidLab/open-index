@@ -37,7 +37,15 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Run as a non-root user. The brain dir is written to (brain.db, entity files),
 # so give the mount point to that user.
-RUN useradd --create-home --uid 10001 openindex && chown -R openindex /brain
+#
+# .cache must exist here, owned by openindex: Docker seeds a named volume from
+# the image's directory (including its ownership) only when the mount point
+# already exists. Without this the volume is created owned by root, the
+# embedding model download fails with EACCES, and semantic search silently
+# degrades to keyword-only — a working server that quietly answers worse.
+RUN useradd --create-home --uid 10001 openindex \
+    && mkdir -p /home/openindex/.cache \
+    && chown -R openindex /brain /home/openindex
 USER openindex
 
 EXPOSE 8080 8501
