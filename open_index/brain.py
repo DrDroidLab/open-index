@@ -11,12 +11,39 @@ import sqlite3
 from time import perf_counter
 from typing import Any, Optional
 
+from dataclasses import dataclass, field
+
 from open_index.config import BrainConfig, iter_entity_files, load_brain_config
-from open_index.models import Entity
+from open_index.models import Entity, Provenance
 from open_index.schema import DocType
 from open_index.storage import get_backend
 from open_index.storage.base import SearchBackend, SearchResults
 from open_index.analytics import AnalyticsStore, NullAnalyticsStore
+
+
+@dataclass
+class BulkResult:
+    """Outcome of a batch write: what landed, and what didn't and why.
+
+    Partial success is the normal case for an import, so this reports both
+    rather than raising — one malformed row should not discard the other 499.
+    """
+
+    written: int = 0
+    errors: list[str] = field(default_factory=list)
+    paths: list[Path] = field(default_factory=list)
+
+    @property
+    def failed(self) -> int:
+        return len(self.errors)
+
+    def summary(self) -> str:
+        text = f"{self.written} written"
+        if self.errors:
+            text += f", {self.failed} failed"
+        if self.paths:
+            text += f", {len(self.paths)} file(s) persisted"
+        return text
 
 
 class Brain:
@@ -131,6 +158,58 @@ class Brain:
             path.write_text(json.dumps(entity.to_json(), indent=2, ensure_ascii=False) + "\n")
             return path
         return None
+
+    def put_entities(
+        self,
+        entities: list[Entity],
+        validate: bool = True,
+        provenance: Optional["Provenance"] = None,
+    ) -> "BulkResult":
+        """Write many entities in one batch.
+
+        Differs from calling `put_entity` in a loop in two ways that matter at
+        volume: the backend writes once (one transaction / one bulk request /
+        one embedding call), and a bad row does not abort the run. Invalid
+        entities are collected in `BulkResult.errors` and everything else still
+        lands — a 500-row import should not be undone by one typo.
+
+        `provenance` is applied to entities that don't carry their own, so a
+        caller importing a batch attributes it once instead of per row. An
+        entity's own provenance always wins.
+        """
+        result = BulkResult()
+        writable: list[tuple[Entity, Optional[DocType]]] = []
+
+        for entity in entities:
+            if provenance is not None and entity.provenance is None:
+                entity = entity.model_copy(update={"provenance": provenance})
+            if validate:
+                errors = self.validate_entity(entity)
+                if errors:
+                    result.errors.append(f"{entity.id}: {'; '.join(errors)}")
+                    continue
+            writable.append((entity, self.config.doc_type(entity.doc_type)))
+
+        if not writable:
+            return result
+
+        self.backend.upsert_many(writable)
+        result.written = len(writable)
+
+        # File-backed types keep JSON on disk as the source of truth; index-backed
+        # ones live only in the DB. Same policy as put_entity, applied per row.
+        for entity, dt in writable:
+            if dt is not None and dt.storage == "file" and self.config.root is not None:
+                result.paths.append(self._write_entity_file(entity))
+        return result
+
+    def _write_entity_file(self, entity: Entity) -> Path:
+        import json
+
+        path = self.entity_path(entity)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(entity.to_json(), indent=2, ensure_ascii=False) + "\n")
+        return path
 
     def _file_backed_types(self) -> set[str]:
         return {n for n, dt in self.config.doc_types.items() if dt.storage == "file"}
@@ -345,17 +424,22 @@ class Brain:
         self, examples_per_type: int = 3, source: Optional[str] = None,
         include_writes: bool = True,
     ) -> str:
-        """A markdown guide telling an agent how to navigate *this* brain.
+        """The domain context instructions for this brain.
 
-        Mirrors the reference `build_navigation_guidelines`: enumerate every
-        doc_type with its count, fields (marking searchable ones + boost),
-        example entities, and a concrete search call — plus how to write back.
-        This is the read tool an agent calls first to orient itself."""
+        MCP hosts inject this before the first turn, and for a remote brain it is
+        the *only* documentation an agent ever sees — `CLAUDE.md` and the
+        `edit-brain` skill are files on the brain host, invisible over MCP. So it
+        has to be self-contained: the model, the id convention, the exact call
+        shapes, and the full schema vocabulary, not just an inventory.
+
+        `include_writes=False` drops the authoring sections for a read-only
+        endpoint, where describing tools that aren't registered only misleads.
+        `source` attributes the fetch in analytics.
+        """
         started = perf_counter()
         counts = self.counts()
         total = sum(counts.values())
-        lines: list[str] = []
-        lines.append(f"# {self.config.name} — Domain Context Instructions")
+        lines: list[str] = [f"# {self.config.name} — Domain Context Instructions"]
         if self.config.description:
             lines.append(f"\n{self.config.description}")
         lines.append(
@@ -363,64 +447,20 @@ class Brain:
             "Use this brain to ground domain work in structured context, traverse "
             "related knowledge, and keep durable domain knowledge current.\n\n"
             f"This brain holds **{total} entities** across "
-            f"**{len(self.config.doc_types)} doc_types**. Each entity may link to "
-            "others via `related_to` edges (`target` + `relationship_edge_meaning`)."
+            f"**{len(self.config.doc_types)} doc_types**."
         )
 
-        lines.append("\n## How to read")
-        lines.append(
-            "- `search_brain(query=\"...\", doc_types=[...], limit=N)` — search/filter entities.\n"
-            "- `get_entity(entity_id)` — one entity plus its incoming/outgoing relationships.\n"
-            "- Start with a query; filter by `doc_types` to narrow."
-        )
-        lines.append("\n## Retrieval workflow")
-        lines.append(
-            "1. Start with `search_brain(query=\"...\")` using the user's domain terms.\n"
-            "2. Narrow with `doc_types=[...]` when the concept is known.\n"
-            "3. Call `get_entity(entity_id)` for promising results to fetch full fields and edges.\n"
-            "4. Follow relationship targets when the answer depends on connected entities; "
-            "the edge meaning explains why the traversal is relevant.\n"
-            "5. If results are empty, broaden the terms before assuming the index has no context."
-        )
+        lines.extend(self._guide_model_section())
+        lines.extend(self._guide_read_section())
+
         if include_writes:
-            lines.append("\n## How to write")
-            lines.append(
-                "Read and write access is the default. Write back durable, validated "
-                "domain knowledge when work reveals something worth retaining.\n"
-                "- `put_entity(...)` — add or update an entity (validated, persisted to disk).\n"
-                "- `create_doc_type(...)` — define a new concept when none fits.\n"
-                "- Prefer reusing an existing doc_type over inventing one."
-            )
+            if not self.config.doc_types:
+                # An empty brain is exactly when an agent needs the most help and
+                # the inventory below tells it nothing. Lead with a bootstrap.
+                lines.extend(self._guide_bootstrap_section())
+            lines.extend(self._guide_write_section())
 
-        lines.append("\n## Doc types")
-        for name, dt in self.config.doc_types.items():
-            count = counts.get(name, 0)
-            lines.append(f"\n### {name} ({count})")
-            if dt.description:
-                lines.append(dt.description)
-            searchable = [f for f in dt.fields if f.search != "none"]
-            if searchable:
-                field_bits = ", ".join(
-                    f"`{f.name}`"
-                    + (f" (boost {f.boost:g})" if f.boost != 1 else "")
-                    for f in sorted(searchable, key=lambda x: -x.boost)
-                )
-                lines.append(f"- **Searchable:** {field_bits}")
-            # Relationships — declared (the expected vocabulary) + observed (in use).
-            if dt.relationships:
-                decl = ", ".join(
-                    f"`{r.name}`" + (f" → {r.target_doc_type}" if r.target_doc_type else "")
-                    for r in dt.relationships
-                )
-                lines.append(f"- **Relationships (declared):** {decl}")
-            observed = self.observed_relationships(name)
-            if observed:
-                obs = ", ".join(f'"{m}" ×{n}' for m, n in sorted(observed.items(), key=lambda x: -x[1]))
-                lines.append(f"- **Relationships (in use):** {obs}")
-            examples = self.backend.all_entities([name])[:examples_per_type]
-            if examples:
-                lines.append("- **Examples:** " + ", ".join(f"`{e.id}`" for e in examples))
-            lines.append(f'- **Query:** `search_brain(query="...", doc_types=["{name}"])`')
+        lines.extend(self._guide_doc_types_section(counts, examples_per_type))
 
         guide = "\n".join(lines)
         if source:
@@ -429,6 +469,169 @@ class Brain:
                 result_count=total, result_doc_types=counts,
             )
         return guide
+
+    # -- navigation_guidelines sections ----------------------------------------
+
+    @staticmethod
+    def _guide_model_section() -> list[str]:
+        return [
+            "\n## The model (three things)",
+            "- **doc_type** — a concept this brain tracks, plus the schema of its fields\n"
+            "  (e.g. `service`, `issue`, `customer`).\n"
+            "- **entity** — one instance of a doc_type. Its id is **always**\n"
+            "  `<doc_type>:<slug>` (e.g. `issue:payment-declined`); the prefix must match\n"
+            "  the doc_type or the write is rejected. Allowed characters: `a-z A-Z 0-9 . _ -`.\n"
+            "- **relationship** — every entity may link to any other through `related_to`:\n"
+            "  `{\"target\": \"<entity_id>\", \"relationship_edge_meaning\": \"<free text>\"}`.\n"
+            "  The edges are the point of the brain — an entity with no edges is a note.",
+        ]
+
+    @staticmethod
+    def _guide_read_section() -> list[str]:
+        return [
+            "\n## How to read",
+            '- `search_brain(query="...", doc_types=[...], limit=N)` — search/filter entities.\n'
+            "- `get_entity(entity_id)` — one entity plus its incoming *and* outgoing edges.\n"
+            "- Start broad with a query, then narrow with `doc_types`. To enumerate a type,\n"
+            "  search with an empty query and a `doc_types` filter.",
+            "\n## Retrieval workflow",
+            '1. Start with `search_brain(query="...")` using the user\'s domain terms.\n'
+            "2. Narrow with `doc_types=[...]` when the concept is known.\n"
+            "3. Call `get_entity(entity_id)` on promising results for full fields and edges.\n"
+            "4. Follow relationship targets when the answer depends on connected entities;\n"
+            "   the edge meaning explains why the traversal is relevant.\n"
+            "5. If results are empty, broaden the terms before assuming there is no context.",
+        ]
+
+    @staticmethod
+    def _guide_bootstrap_section() -> list[str]:
+        return [
+            "\n## ⚠️ This brain is empty — start here",
+            "No doc_types are defined yet, so `put_entity` will reject everything: an\n"
+            "entity cannot exist without its concept. Define the concepts first.\n"
+            "\n"
+            "Ask what domain this brain is for, then model 3–6 concepts and the\n"
+            "relationships between them before adding entities. A support brain might be\n"
+            "`product`, `issue`, `user_segment`; an infra brain `service`, `datastore`,\n"
+            "`runbook`. Create each with `create_doc_type`, then add entities with\n"
+            "`put_entity`, always setting `related_to`.",
+        ]
+
+    @staticmethod
+    def _guide_write_section() -> list[str]:
+        return [
+            "\n## How to write",
+            "Read and write access is the default. Write back durable, validated domain\n"
+            "knowledge whenever work reveals something worth retaining.",
+            "\n### Add or update an entity — `put_entity`",
+            "```python\n"
+            "put_entity(\n"
+            '    doc_type="issue",\n'
+            '    id="issue:payment-declined",          # must be "<doc_type>:<slug>"\n'
+            '    name="Payment declined at checkout",\n'
+            '    fields={"severity": "high", "status": "open"},   # schema fields go here\n'
+            "    related_to=[\n"
+            '        {"target": "product:checkout",\n'
+            '         "relationship_edge_meaning": "is a common issue of"},\n'
+            "    ],\n"
+            ")\n"
+            "```\n"
+            "- It is an **upsert** — writing the same id again replaces that entity.\n"
+            "- `fields` holds the doc_type's schema fields. Do not put `id`, `doc_type`,\n"
+            "  `name`, or `related_to` inside it; they are separate arguments.\n"
+            "- Prefer a relationship meaning the doc_type already declares or uses (listed\n"
+            "  per type below) over inventing a near-duplicate phrasing.\n"
+            "- Edges may point at entities that don't exist yet; they resolve later.\n"
+            "- Whether a JSON file is written is decided by the doc_type's `storage`\n"
+            "  policy, not by you — see below.",
+            "\n### Define a new concept — `create_doc_type`",
+            "Only when no existing doc_type fits. Check the inventory below first;\n"
+            "reusing a type is almost always better than adding a near-duplicate.\n"
+            "```python\n"
+            "create_doc_type(\n"
+            '    doc_type="runbook",\n'
+            '    description="A procedure for handling a known failure.",\n'
+            '    storage="file",\n'
+            "    fields=[\n"
+            '        {"name": "name", "type": "string", "search": "syntactic", "boost": 6},\n'
+            '        {"name": "steps", "type": "text", "search": "semantic"},\n'
+            "    ],\n"
+            "    relationships=[\n"
+            '        {"name": "resolves", "target_doc_type": "alert"},\n'
+            "    ],\n"
+            ")\n"
+            "```",
+            "\n### Schema vocabulary",
+            "Field spec keys (only `name` is required):\n"
+            "\n"
+            "| key | values | meaning |\n"
+            "|---|---|---|\n"
+            "| `type` | `string` `text` `number` `boolean` `timestamp` | the value's data type |\n"
+            "| `processing` | `keyword` `text` `timestamp` | `keyword` = exact/filter, `text` = tokenized |\n"
+            "| `search` | `syntactic` `semantic` `none` | `syntactic` = keyword match, `semantic` = vector, `none` = not indexed |\n"
+            "| `boost` | number > 0 (default 1) | search weight; a hit in `boost: 6` outranks `boost: 1` 6-to-1 |\n"
+            "| `required` | `true` / `false` | reject entities missing this field |\n"
+            "\n"
+            "Convention: give every type a `name` field with a high boost, and a\n"
+            "`description` field with `search: semantic` so it's findable by meaning.\n"
+            "\n"
+            "`relationships` declares the edge vocabulary for the type — each entry is\n"
+            "`{\"name\": \"<meaning>\", \"target_doc_type\": \"<type>\"}`. Declaring makes edges\n"
+            "discoverable and lightly validated; entities may still use other meanings.\n"
+            "\n"
+            "**`storage` — where this type's entities live (choose deliberately):**\n"
+            "- `\"index\"` (default) — the search DB owns them; **no files written**. Right\n"
+            "  for connector-pulled, high-volume, or temporal data that would churn git.\n"
+            "- `\"file\"` — JSON under `entities/<doc_type>/` is the source of truth,\n"
+            "  git-tracked and reviewable. Right for curated, human/agent-authored data.",
+        ]
+
+    def _guide_doc_types_section(
+        self, counts: dict[str, int], examples_per_type: int
+    ) -> list[str]:
+        if not self.config.doc_types:
+            return ["\n## Doc types", "\n_None defined yet._"]
+
+        lines = ["\n## Doc types (what this brain already knows)"]
+        for name, dt in self.config.doc_types.items():
+            count = counts.get(name, 0)
+            noun = "entity" if count == 1 else "entities"
+            lines.append(f"\n### {name} ({count} {noun} · storage: {dt.storage})")
+            if dt.description:
+                lines.append(dt.description)
+
+            if dt.fields:
+                # Full detail, not just searchable names: an agent authoring an
+                # entity needs the types and which fields are mandatory.
+                lines.append("- **Fields:**")
+                for f in dt.fields:
+                    bits = [f.type, f.search]
+                    if f.boost != 1:
+                        bits.append(f"boost {f.boost:g}")
+                    if f.required:
+                        bits.append("**required**")
+                    desc = f" — {f.description}" if f.description else ""
+                    lines.append(f"  - `{f.name}` ({', '.join(bits)}){desc}")
+
+            if dt.relationships:
+                decl = ", ".join(
+                    f"`{r.name}`" + (f" → {r.target_doc_type}" if r.target_doc_type else "")
+                    for r in dt.relationships
+                )
+                lines.append(f"- **Relationships (declared):** {decl}")
+            observed = self.observed_relationships(name)
+            if observed:
+                obs = ", ".join(
+                    f'"{m}" ×{n}'
+                    for m, n in sorted(observed.items(), key=lambda x: -x[1])
+                )
+                lines.append(f"- **Relationships (in use):** {obs}")
+
+            examples = self.backend.all_entities([name])[:examples_per_type]
+            if examples:
+                lines.append("- **Examples:** " + ", ".join(f"`{e.id}`" for e in examples))
+            lines.append(f'- **Query:** `search_brain(query="...", doc_types=["{name}"])`')
+        return lines
 
     def structure(self, examples_per_type: int = 3) -> dict[str, Any]:
         """A textual/structured description of the brain: doc_types, their

@@ -34,7 +34,9 @@ def _open_brain(brain_dir: str):
 
     try:
         return Brain.open(brain_dir)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, ValueError) as exc:
+        # ValueError covers a bad brain.yaml / env override (e.g. an unknown
+        # search backend) — a user error, not something to show a traceback for.
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
@@ -106,6 +108,102 @@ def add_entity(
         b.put_entity(entity)  # honors the doc_type's storage policy
         added += 1
     typer.secho(f"✓ stored {added} entity(ies)", fg=typer.colors.GREEN)
+
+
+@app.command("import")
+def import_entities(
+    file: str = typer.Argument(..., help="A .json (array), .jsonl, or .csv file."),
+    brain: str = BrainOpt,
+    doc_type: Optional[str] = typer.Option(
+        None, "--doc-type", "-t",
+        help="doc_type for rows that don't name one (required for CSV).",
+    ),
+    id_field: str = typer.Option(
+        "id", "--id-field",
+        help="Which column/key holds the id or slug. Slugs are prefixed with the doc_type.",
+    ),
+    asserted_by: Optional[str] = typer.Option(
+        None, "--asserted-by",
+        help="Attribution for the whole batch, e.g. 'import:crm-2026-08'.",
+    ),
+    confidence: Optional[float] = typer.Option(
+        None, "--confidence", min=0.0, max=1.0,
+        help="Confidence for the whole batch (0.0-1.0).",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Validate and report without writing."
+    ),
+):
+    """Bulk-import entities from a JSON array, JSONL, or CSV file.
+
+    Rows that fail validation are reported and skipped; the rest still land.
+
+        open-index import people.csv --doc-type person --asserted-by import:hr
+    """
+    from open_index.bulk import load_entity_records
+
+    b = _open_brain(brain)
+    path = Path(file)
+    if not path.exists():
+        typer.secho(f"no such file: {path}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    try:
+        records, parse_errors = load_entity_records(
+            path, doc_type=doc_type, id_field=id_field
+        )
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    from open_index.models import Entity, Provenance
+
+    entities = []
+    for i, rec in enumerate(records):
+        try:
+            entities.append(Entity.from_dict(rec))
+        except (TypeError, ValueError, KeyError) as exc:
+            parse_errors.append(f"row {i + 1}: {exc}")
+
+    provenance = None
+    if asserted_by or confidence is not None:
+        from datetime import datetime, timezone
+
+        provenance = Provenance(
+            asserted_by=asserted_by,
+            asserted_at=datetime.now(timezone.utc).isoformat(),
+            confidence=confidence,
+        )
+
+    if dry_run:
+        problems = list(parse_errors)
+        valid = 0
+        for entity in entities:
+            errors = b.validate_entity(entity)
+            problems.extend(f"{entity.id}: {e}" for e in errors)
+            valid += not errors
+        for problem in problems:
+            typer.secho(f"  ✗ {problem}", fg=typer.colors.RED, err=True)
+        typer.secho(
+            f"dry run: {valid} entity(ies) would be written, "
+            f"{len(problems)} problem(s) — nothing written",
+            fg=typer.colors.YELLOW if problems else typer.colors.GREEN,
+        )
+        raise typer.Exit(1 if problems else 0)
+
+    result = b.put_entities(entities, provenance=provenance)
+    for err in parse_errors + result.errors:
+        typer.secho(f"  ✗ {err}", fg=typer.colors.RED, err=True)
+
+    failed = len(parse_errors) + result.failed
+    typer.secho(
+        f"✓ imported {result.written} entities"
+        + (f" ({failed} skipped)" if failed else "")
+        + (f", {len(result.paths)} file(s) written" if result.paths else ""),
+        fg=typer.colors.YELLOW if failed else typer.colors.GREEN,
+    )
+    if failed:
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -293,6 +391,53 @@ def mcp(
     serve(str(Path(brain).resolve()), read_only=read_only)
 
 
+@app.command("mcp-config")
+def mcp_config(
+    brain: str = BrainOpt,
+    url: Optional[str] = typer.Option(
+        None, "--url",
+        help="Remote brain URL (host:port or full https://…/mcp). Omit for a local stdio brain.",
+    ),
+    token: Optional[str] = typer.Option(
+        None, "--token", envvar="OPEN_INDEX_TOKEN",
+        help="Bearer token for a remote brain (or set OPEN_INDEX_TOKEN).",
+    ),
+    name: str = typer.Option("open-index", "--name", help="MCP server name in your agent."),
+    cli: bool = typer.Option(False, "--cli", help="Print the `claude mcp add` one-liner instead of JSON."),
+):
+    """Print the MCP connection block to paste into your agent.
+
+    Local brain (agent spawns the server itself):
+
+        open-index mcp-config --brain ./my-brain
+
+    Remote brain (an `open-index serve` reachable over the network):
+
+        open-index mcp-config --url brain.internal:8080 --token $OPEN_INDEX_TOKEN
+
+    Writes to stdout, so it pipes straight into a config file:
+
+        open-index mcp-config > .mcp.json
+    """
+    from open_index.mcp_config import (
+        as_claude_cli, as_json, local_stdio_config, remote_http_config,
+    )
+
+    if url:
+        config = remote_http_config(url, token=token, server_name=name)
+    else:
+        root = Path(brain).expanduser().resolve()
+        if not (root / "brain.yaml").exists():
+            typer.secho(
+                f"no brain.yaml in {root} — pass --brain <dir>, or --url for a remote brain",
+                fg=typer.colors.RED, err=True,
+            )
+            raise typer.Exit(1)
+        config = local_stdio_config(root, server_name=name)
+
+    typer.echo(as_claude_cli(config, server_name=name) if cli else as_json(config))
+
+
 @app.command()
 def serve(
     brain: str = BrainOpt,
@@ -302,6 +447,11 @@ def serve(
         None, envvar="OPEN_INDEX_TOKEN",
         help="Bearer token required on requests (or set OPEN_INDEX_TOKEN).",
     ),
+    public_url: Optional[str] = typer.Option(
+        None, "--public-url", envvar="OPEN_INDEX_PUBLIC_URL",
+        help="Externally reachable URL, when behind a proxy/tunnel/load balancer. "
+             "Only used to print correct connection details.",
+    ),
     read_only: bool = typer.Option(
         False, "--read-only",
         help="Opt out of default read+write mode and expose only read tools.",
@@ -309,19 +459,51 @@ def serve(
 ):
     """Serve the MCP server over HTTP so remote/cloud agents connect by URL.
 
-    Register http://<host>:<port>/mcp as a remote MCP server in your agent.
-    Pair with the OpenSearch backend for a shared, multi-writer brain.
+    Prints the exact URL + config to register in your agent. Pair with the
+    OpenSearch backend for a shared, multi-writer brain.
     """
+    from open_index.mcp_config import advertised_urls, mask_token
     from open_index.mcp_server import serve_http
 
+    root = Path(brain).resolve()
+    b = _open_brain(str(root))
     mode = "read-only" if read_only else "read+write"
-    typer.secho(f"serving brain '{Path(brain).name}' MCP ({mode}) at http://{host}:{port}/mcp",
-                fg=typer.colors.GREEN)
-    serve_http(
-        str(Path(brain).resolve()), host=host, port=port, token=token,
-        read_only=read_only,
+
+    typer.secho(
+        f"open-index · brain '{b.config.name}' · {mode} · "
+        f"search backend: {b.config.search.backend}",
+        fg=typer.colors.GREEN, bold=True,
     )
+    typer.echo(f"  listening on {host}:{port}")
+
+    urls = advertised_urls(host, port, public_url=public_url)
+    typer.echo("")
+    for label, endpoint in urls:
+        typer.secho(f"  {label:<22} {endpoint}" if label else f"  {endpoint}",
+                    fg=typer.colors.CYAN)
+
+    typer.echo("")
+    if token:
+        typer.echo(f"  auth: Authorization: Bearer {mask_token(token)}")
+    else:
+        typer.secho(
+            "  auth: NONE — anyone who can reach this port can "
+            + ("read" if read_only else "read AND WRITE")
+            + " the brain.\n        Set --token / OPEN_INDEX_TOKEN before exposing it.",
+            fg=typer.colors.YELLOW,
+        )
+
+    # The whole point: hand the user something they can paste, not a bind address.
+    connect_url = urls[-1][1]
+    hint = f"  agent config:  open-index mcp-config --url {connect_url}"
+    if token:
+        hint += " --token $OPEN_INDEX_TOKEN"
+    typer.echo(hint)
+    typer.echo("")
+
+    serve_http(str(root), host=host, port=port, token=token, read_only=read_only,
+               warn_unauthenticated=False)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - module entry point
     app()

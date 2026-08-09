@@ -24,8 +24,8 @@ from time import perf_counter
 from typing import Any, Optional
 
 from open_index.brain import Brain
+from open_index.schema import DocType, DocTypeDisplay, FieldSpec, RelationshipSpec
 from open_index.models import Entity, Provenance, Relationship
-from open_index.schema import DocType, DocTypeDisplay, FieldSpec
 
 
 def _load_server_class():
@@ -80,12 +80,17 @@ def build_server(brain: Brain, read_only: bool = False):
 
     @server.tool()
     def navigation_guidelines() -> str:
-        """Refresh this brain's domain context instructions: every
-        doc_type, its counts, searchable fields, example entities, and how to
-        search and write. MCP hosts should pre-inject this through server
-        instructions; call this after the index changes or when the host does
-        not support server instructions."""
-        return brain.navigation_guidelines(source="mcp")
+        """Refresh this brain's domain context instructions — the complete guide
+        to this brain; you should not need any other documentation.
+
+        Returns markdown covering the doc_type/entity/relationship model, the
+        entity id convention, every doc_type with its full field schema and
+        relationship vocabulary, example entities, and worked `put_entity` /
+        `put_entities` / `create_doc_type` calls with the schema vocabulary.
+
+        MCP hosts pre-inject this through server instructions; call it after the
+        index changes, or when the host does not support server instructions."""
+        return brain.navigation_guidelines(source="mcp", include_writes=not read_only)
 
     @server.tool()
     def search_brain(
@@ -139,36 +144,85 @@ def build_server(brain: Brain, read_only: bool = False):
         id: str,
         name: str = "",
         fields: Optional[dict[str, Any]] = None,
-        related_to: Optional[list[dict[str, str]]] = None,
+        # dict[str, Any], not dict[str, str]: an edge may carry a nested
+        # "provenance" object. The MCP SDK builds this tool's input schema from
+        # these annotations, so a str-valued hint makes the server reject
+        # per-edge provenance before the body ever runs.
+        related_to: Optional[list[dict[str, Any]]] = None,
         provenance: Optional[dict[str, Any]] = None,
         valid_from: Optional[str] = None,
         valid_to: Optional[str] = None,
     ) -> str:
-        """Add or update an entity in the brain (validated + persisted to disk).
+        """Add or update an entity (an upsert — the same id replaces it).
 
-        `id` must look like "<doc_type>:<slug>" (e.g. "issue:payment-declined").
-        `fields` are the schema fields for the doc_type. `related_to` is a list of
-        {"target": "<entity_id>", "relationship_edge_meaning": "<free text>"}
-        edges, e.g. {"target": "product:checkout", "relationship_edge_meaning":
-        "has common issue"}. Use this to record new knowledge or corrections.
+        Args:
+            doc_type: An EXISTING doc_type. Call navigation_guidelines() to see
+                them; create_doc_type() first if none fits.
+            id: Must be "<doc_type>:<slug>", e.g. "issue:payment-declined". The
+                prefix has to match `doc_type`. Chars: a-z A-Z 0-9 . _ -
+            name: Human-readable label.
+            fields: The doc_type's schema fields, e.g.
+                {"severity": "high", "status": "open"}. Do NOT put id/doc_type/
+                name/related_to in here — they are separate arguments.
+            related_to: Edges to other entities, each
+                {"target": "<entity_id>", "relationship_edge_meaning": "<text>"}.
+                Prefer a meaning the doc_type already declares or uses. Targets
+                may not exist yet. Always set these — the edges are the point.
+                Each edge may carry its own "provenance" block: a well-attributed
+                entity can still carry a guessed edge.
+            provenance: Where the claim came from and how far to trust it —
+                {"asserted_by": "agent:<name>", "asserted_at": "<ISO-8601>",
+                 "confidence": 0.0-1.0, "evidence": "<what justified it, verbatim>"}.
+                Supply it whenever you INFER something rather than reading it
+                directly, and set `confidence` honestly — readers filter on it,
+                and an unscored claim is treated as untrusted, not certain.
+            valid_from / valid_to: When the claim is true OF THE WORLD, which is
+                not when you asserted it. A memory limit that was 25Gi until a
+                deploy has `valid_to` at the deploy, while the assertion about it
+                is `asserted_at` now. Omit both if the claim has no time bound.
 
-        `provenance` records where the claim came from and how far to trust it:
-        {"asserted_by": "agent:<name>", "asserted_at": "<ISO-8601>",
-         "confidence": 0.0-1.0, "evidence": "<what justified it, verbatim>"}.
-        Supply it whenever you INFER something rather than reading it directly, and
-        set `confidence` honestly — readers filter on it, and an unscored claim is
-        treated as untrusted rather than certain.
+        Whether a JSON file is written follows the doc_type's `storage` policy
+        ("file" writes one, "index" keeps it in the DB); you don't choose."""
+        dt = brain.config.doc_type(doc_type)
+        if dt is None:
+            known = list(brain.config.doc_types)
+            return json.dumps({
+                "error": f"unknown doc_type '{doc_type}'",
+                "known_doc_types": known,
+                "hint": (
+                    "Use one of known_doc_types, or define this concept first with "
+                    "create_doc_type(...)."
+                    if known else
+                    "This brain has no doc_types yet. Define one with create_doc_type(...) "
+                    "before adding entities."
+                ),
+            })
 
-        `valid_from`/`valid_to` bound when the claim is true OF THE WORLD, which is
-        not the same as when you asserted it. A memory limit that was 25Gi until a
-        deploy has `valid_to` at the deploy; the assertion about it is `asserted_at`
-        now. Omit both if the claim carries no time bound."""
-        if brain.config.doc_type(doc_type) is None:
-            return json.dumps(
-                {"error": f"unknown doc_type '{doc_type}'. Create it first with "
-                          "create_doc_type, or use an existing one: "
-                          f"{list(brain.config.doc_types)}"}
-            )
+        expected_prefix = f"{doc_type}:"
+        if not id.startswith(expected_prefix):
+            return json.dumps({
+                "error": f"id '{id}' does not match doc_type '{doc_type}'",
+                "hint": f"ids are '<doc_type>:<slug>' — use '{expected_prefix}<slug>'.",
+            })
+
+        # Build provenance first, so a malformed attribution block is reported as
+        # such instead of surfacing as a confusing schema-field error below. A
+        # claim that looks attributed but is not is worse than a plainly
+        # unattributed one, so this must fail loudly rather than drop silently.
+        try:
+            entity_provenance = Provenance(**provenance) if provenance else None
+            edge_provenance = [
+                Provenance(**r["provenance"])
+                if isinstance(r.get("provenance"), dict) else None
+                for r in (related_to or [])
+            ]
+        except (TypeError, ValueError) as exc:
+            return json.dumps({
+                "error": f"invalid provenance: {exc}",
+                "hint": '{"asserted_by": "agent:<name>", "asserted_at": "<ISO-8601>", '
+                        '"confidence": 0.0-1.0, "evidence": "<what justified it>"}',
+            })
+
         try:
             entity = Entity(
                 id=id,
@@ -179,45 +233,146 @@ def build_server(brain: Brain, read_only: bool = False):
                     Relationship(
                         target=r["target"],
                         relationship_edge_meaning=r.get("relationship_edge_meaning", ""),
-                        # Per-edge provenance: a well-attributed entity can still carry
-                        # a guessed edge, and the two need separate trust.
-                        provenance=(Provenance(**r["provenance"])
-                                    if isinstance(r.get("provenance"), dict) else None),
+                        # Per-edge provenance: a well-attributed entity can still
+                        # carry a guessed edge, and the two need separate trust.
+                        provenance=p,
                     )
-                    for r in (related_to or [])
+                    for r, p in zip(related_to or [], edge_provenance)
                 ],
-                provenance=Provenance(**provenance) if provenance else None,
+                provenance=entity_provenance,
                 valid_from=valid_from,
                 valid_to=valid_to,
             )
-        except (TypeError, ValueError) as exc:
-            # A malformed provenance block must be a visible error, not silently
-            # dropped — a claim that looks attributed but is not is worse than one
-            # that is plainly unattributed.
-            return json.dumps({"error": f"invalid provenance or validity: {exc}"})
-        try:
             path = brain.put_entity(entity)
-        except ValueError as exc:
-            return json.dumps({"error": str(exc)})
+        except KeyError:
+            return json.dumps({
+                "error": "each related_to entry needs a 'target'",
+                "hint": '[{"target": "product:checkout", '
+                        '"relationship_edge_meaning": "affects"}]',
+            })
+        except ValueError as exc:  # includes pydantic validation errors
+            return json.dumps({
+                "error": str(exc),
+                "known_fields": [f.name for f in dt.fields],
+                "hint": "See navigation_guidelines() for this doc_type's schema.",
+            })
+
         # path is None for index-backed types (DB is the source of truth).
         return json.dumps({"ok": True, "id": entity.id, "path": str(path) if path else None})
+
+    @server.tool()
+    def put_entities(
+        entities: list[dict[str, Any]],
+        provenance: Optional[dict[str, Any]] = None,
+    ) -> str:
+        """Add or update MANY entities in one call. Use this instead of calling
+        put_entity repeatedly — importing a list, backfilling from a document,
+        or recording a batch of findings.
+
+        Args:
+            entities: A list of entity objects, each shaped like a put_entity
+                call: {"doc_type": "...", "id": "<doc_type>:<slug>",
+                "name": "...", "fields": {...}, "related_to": [...]}. Fields may
+                also be written flat alongside the reserved keys. Each may carry
+                its own "provenance", "valid_from" and "valid_to".
+            provenance: Attribution applied to every entity that does not carry
+                its own — attribute the batch once rather than per row. Same
+                shape as put_entity's: {"asserted_by": ..., "asserted_at": ...,
+                "confidence": 0.0-1.0, "evidence": ...}.
+
+        A row that fails validation does not abort the rest. The reply reports
+        `written`, `failed`, and per-entity `errors`, so check it rather than
+        assuming everything landed."""
+        if not entities:
+            return json.dumps({"ok": True, "written": 0, "failed": 0, "errors": []})
+
+        try:
+            shared = Provenance(**provenance) if provenance else None
+        except (TypeError, ValueError) as exc:
+            return json.dumps({"error": f"invalid provenance: {exc}"})
+
+        # Non-dict elements are rejected by the tool's input schema before this
+        # runs (entities is list[dict[str, Any]]), so every raw here is a dict.
+        parsed: list[Entity] = []
+        errors: list[str] = []
+        for i, raw in enumerate(entities):
+            doc_type = raw.get("doc_type")
+            if doc_type is None:
+                errors.append(f"[{i}]: missing 'doc_type'")
+                continue
+            if brain.config.doc_type(doc_type) is None:
+                errors.append(
+                    f"[{i}] {raw.get('id', '?')}: unknown doc_type '{doc_type}' "
+                    f"(known: {list(brain.config.doc_types)})"
+                )
+                continue
+            try:
+                # from_dict so callers may write schema fields flat, matching the
+                # entity JSON files on disk.
+                parsed.append(Entity.from_dict(raw))
+            except (TypeError, ValueError, KeyError) as exc:
+                errors.append(f"[{i}] {raw.get('id', '?')}: {exc}")
+
+        result = brain.put_entities(parsed, provenance=shared)
+        errors.extend(result.errors)
+        return json.dumps({
+            "ok": not errors,
+            "written": result.written,
+            "failed": len(errors),
+            "errors": errors[:50],
+            "paths": [str(p) for p in result.paths],
+        }, indent=2)
 
     @server.tool()
     def create_doc_type(
         doc_type: str,
         description: str = "",
         fields: Optional[list[dict[str, Any]]] = None,
+        relationships: Optional[list[dict[str, str]]] = None,
         color: str = "#6b7280",
         label_field: str = "name",
         storage: str = "index",
     ) -> str:
-        """Define a new doc_type (concept) in the brain, persisted to
-        doc_types/<name>.yaml. `fields` is a list of field specs, each like
-        {"name": "severity", "type": "string", "processing": "keyword",
-        "search": "syntactic", "boost": 2}. `storage` is "index" (DB is the
-        source of truth — default, for generated/high-volume data) or "file"
-        (JSON entities tracked in git — for curated data). Only create a new
-        doc_type when no existing one fits — check navigation_guidelines first."""
+        """Define a new concept, persisted to doc_types/<name>.yaml.
+
+        Only when no existing doc_type fits — call navigation_guidelines() first;
+        reusing a type beats adding a near-duplicate.
+
+        Args:
+            doc_type: Singular, lowercase concept name, e.g. "runbook".
+            description: What one of these is — shown to future agents.
+            fields: Field specs. Only "name" is required in each. Keys:
+                name       — field name
+                type       — string | text | number | boolean | timestamp
+                processing — keyword | text | timestamp  (keyword = exact/filter)
+                search     — syntactic | semantic | none
+                             (syntactic = keyword match, semantic = vector search)
+                boost      — number > 0, default 1. Search weight: a hit in a
+                             boost-6 field outranks a boost-1 hit 6-to-1.
+                required   — true to reject entities missing it
+                Convention: a high-boost `name` field, plus a `description` field
+                with search "semantic" so entities are findable by meaning.
+            relationships: The edge vocabulary for this type, each
+                {"name": "<meaning>", "target_doc_type": "<other_type>"}.
+                Makes correlations discoverable and lightly validated.
+            storage: "index" (default) — the DB owns these entities, no files
+                written; right for generated/high-volume/temporal data.
+                "file" — JSON under entities/<doc_type>/ is the git-tracked
+                source of truth; right for curated data.
+            color: Hex color for this type's nodes on the map.
+            label_field: Which field labels a node. Defaults to "name".
+
+        Example:
+            create_doc_type(
+                doc_type="runbook",
+                description="A procedure for handling a known failure.",
+                storage="file",
+                fields=[
+                    {"name": "name", "type": "string", "search": "syntactic", "boost": 6},
+                    {"name": "steps", "type": "text", "search": "semantic"},
+                ],
+                relationships=[{"name": "resolves", "target_doc_type": "alert"}],
+            )"""
         try:
             dt = DocType(
                 doc_type=doc_type,
@@ -225,11 +380,27 @@ def build_server(brain: Brain, read_only: bool = False):
                 storage=storage,
                 display=DocTypeDisplay(label_field=label_field, color=color),
                 fields=[FieldSpec.model_validate(f) for f in (fields or [])],
+                relationships=[
+                    RelationshipSpec.model_validate(r) for r in (relationships or [])
+                ],
             )
             path = brain.create_doc_type(dt)
         except ValueError as exc:
-            return json.dumps({"error": str(exc)})
-        return json.dumps({"ok": True, "doc_type": doc_type, "path": str(path)})
+            return json.dumps({
+                "error": str(exc),
+                "hint": (
+                    "Check the field spec vocabulary in navigation_guidelines(). "
+                    "storage must be 'index' or 'file'; search must be "
+                    "'syntactic', 'semantic', or 'none'."
+                ),
+            })
+        return json.dumps({
+            "ok": True,
+            "doc_type": doc_type,
+            "path": str(path),
+            "next": f'Add entities with put_entity(doc_type="{doc_type}", '
+                    f'id="{doc_type}:<slug>", ...).',
+        })
 
     return server
 
@@ -264,6 +435,7 @@ def _bearer_auth_middleware(app, token: str):
 def serve_http(
     brain_dir: str, host: str = "0.0.0.0", port: int = 8080,
     token: Optional[str] = None, read_only: bool = False,
+    warn_unauthenticated: bool = True,
 ) -> None:
     """Run the MCP server over streamable HTTP so remote/cloud agents can connect
     by URL. Register `http://<host>:<port>/mcp` as a remote MCP server in the
@@ -283,10 +455,12 @@ def serve_http(
     app = server.streamable_http_app()
     if token:
         app = _bearer_auth_middleware(app, token)
-    else:
+    elif warn_unauthenticated:
+        # The CLI prints its own (richer) warning in the startup banner and passes
+        # warn_unauthenticated=False; this covers programmatic callers.
         import sys
         print(
-            "WARNING: serving with no --token; the writable endpoint is unauthenticated. "
+            "WARNING: serving with no token; the endpoint is unauthenticated. "
             "Set OPEN_INDEX_TOKEN or --token for anything networked.",
             file=sys.stderr,
         )

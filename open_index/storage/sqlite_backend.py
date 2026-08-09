@@ -260,48 +260,106 @@ class SQLiteBackend:
             score += boost * matched
         return score
 
+    def _write_entity_rows(self, cur: sqlite3.Cursor, entity: Entity) -> None:
+        """Write one entity's row, FTS row and edges. Caller owns the transaction."""
+        data = json.dumps(entity.to_json(), ensure_ascii=False)
+
+        # Remove any prior FTS row for this entity (keyed by entities.rowid).
+        row = cur.execute("SELECT rowid FROM entities WHERE id = ?", (entity.id,)).fetchone()
+        if row is not None:
+            cur.execute("DELETE FROM entities_fts WHERE rowid = ?", (row["rowid"],))
+
+        cur.execute(
+            """
+            INSERT INTO entities (id, doc_type, name, data, created_at, updated_at)
+            VALUES (?, ?, ?, ?, COALESCE((SELECT created_at FROM entities WHERE id = ?), datetime('now')), datetime('now'))
+            ON CONFLICT(id) DO UPDATE SET
+                doc_type = excluded.doc_type,
+                name = excluded.name,
+                data = excluded.data,
+                updated_at = datetime('now')
+            """,
+            (entity.id, entity.doc_type, entity.name, data, entity.id),
+        )
+        rowid = cur.execute("SELECT rowid FROM entities WHERE id = ?", (entity.id,)).fetchone()["rowid"]
+        cur.execute(
+            "INSERT INTO entities_fts (rowid, name, search_text) VALUES (?, ?, ?)",
+            (rowid, entity.name, self._build_search_text(entity)),
+        )
+
+        # Replace this entity's outgoing edges.
+        cur.execute("DELETE FROM relationships WHERE source_id = ?", (entity.id,))
+        for rel in entity.related_to:
+            cur.execute(
+                "INSERT OR IGNORE INTO relationships (source_id, target_id, meaning) VALUES (?, ?, ?)",
+                (entity.id, rel.target, rel.relationship_edge_meaning),
+            )
+
     def upsert_entity(self, entity: Entity, doc_type: Optional[DocType] = None) -> None:
         if doc_type is not None:
             self._doc_types[doc_type.doc_type] = doc_type
-        data = json.dumps(entity.to_json(), ensure_ascii=False)
 
         with self._lock:
-            cur = self._conn.cursor()
-
-            # Remove any prior FTS row for this entity (keyed by entities.rowid).
-            row = cur.execute("SELECT rowid FROM entities WHERE id = ?", (entity.id,)).fetchone()
-            if row is not None:
-                cur.execute("DELETE FROM entities_fts WHERE rowid = ?", (row["rowid"],))
-
-            cur.execute(
-                """
-                INSERT INTO entities (id, doc_type, name, data, created_at, updated_at)
-                VALUES (?, ?, ?, ?, COALESCE((SELECT created_at FROM entities WHERE id = ?), datetime('now')), datetime('now'))
-                ON CONFLICT(id) DO UPDATE SET
-                    doc_type = excluded.doc_type,
-                    name = excluded.name,
-                    data = excluded.data,
-                    updated_at = datetime('now')
-                """,
-                (entity.id, entity.doc_type, entity.name, data, entity.id),
-            )
-            rowid = cur.execute("SELECT rowid FROM entities WHERE id = ?", (entity.id,)).fetchone()["rowid"]
-            cur.execute(
-                "INSERT INTO entities_fts (rowid, name, search_text) VALUES (?, ?, ?)",
-                (rowid, entity.name, self._build_search_text(entity)),
-            )
-
-            # Replace this entity's outgoing edges.
-            cur.execute("DELETE FROM relationships WHERE source_id = ?", (entity.id,))
-            for rel in entity.related_to:
-                cur.execute(
-                    "INSERT OR IGNORE INTO relationships (source_id, target_id, meaning) VALUES (?, ?, ?)",
-                    (entity.id, rel.target, rel.relationship_edge_meaning),
-                )
+            self._write_entity_rows(self._conn.cursor(), entity)
             self._conn.commit()
 
         # Embeddings are computed outside the lock because encoding may be slow.
         self._store_embedding(entity)
+
+    def upsert_many(self, items: list[tuple[Entity, Optional[DocType]]]) -> None:
+        """One transaction and one embedding call for the whole batch.
+
+        The per-entity path commits and encodes each time; on a few hundred rows
+        that dominates the import. Embedding models batch well, so the single
+        encode call here is the larger of the two savings."""
+        if not items:
+            return
+
+        for _entity, doc_type in items:
+            if doc_type is not None:
+                self._doc_types[doc_type.doc_type] = doc_type
+
+        with self._lock:
+            cur = self._conn.cursor()
+            for entity, _doc_type in items:
+                self._write_entity_rows(cur, entity)
+            self._conn.commit()
+
+        self._store_embeddings_many([entity for entity, _ in items])
+
+    def _store_embeddings_many(self, entities: list[Entity]) -> None:
+        """Encode every embeddable entity in one call, then write the vectors."""
+        # Resolve texts first so a batch of non-semantic doc_types never triggers
+        # lazy provider construction (which loads a model).
+        pending = [
+            (entity, text)
+            for entity in entities
+            if (text := semantic_text_for(entity, self._doc_types.get(entity.doc_type)))
+        ]
+        if not pending:
+            return
+        provider = self._get_embedding_provider()
+        if provider is None:
+            return
+
+        vectors = provider.encode([text for _entity, text in pending])
+        rows = [
+            (entity.id, provider.name, struct.pack(f"{len(vector)}f", *vector))
+            for (entity, _text), vector in zip(pending, vectors)
+        ]
+        with self._lock:
+            self._conn.executemany(
+                """
+                INSERT INTO entity_embeddings (entity_id, model, vector, updated_at)
+                VALUES (?, ?, ?, datetime('now'))
+                ON CONFLICT(entity_id) DO UPDATE SET
+                    model = excluded.model,
+                    vector = excluded.vector,
+                    updated_at = excluded.updated_at
+                """,
+                rows,
+            )
+            self._conn.commit()
 
     def delete_by_doc_type(self, doc_types: list[str]) -> None:
         if not doc_types:

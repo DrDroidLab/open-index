@@ -1,5 +1,6 @@
 ### Open Index
 
+[![tests](https://github.com/DrDroidLab/open-index/actions/workflows/tests.yml/badge.svg)](https://github.com/DrDroidLab/open-index/actions/workflows/tests.yml)
 [![Join our Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/AQ3tusPtZn)
 
 **Open Index** is a tool for building domain specific accurate, structured data that agents can actually operate on — and for keeping that data correct as things change.
@@ -30,6 +31,9 @@ open-index index --brain my-brain
 open-index ui    --brain my-brain
 ```
 
+Prefer containers, or need a brain several agents share? →
+**[`docs/deployment.md`](./docs/deployment.md)** (`docker compose --profile sqlite up`).
+
 ### Commands
 
 | Command | What it does |
@@ -37,14 +41,16 @@ open-index ui    --brain my-brain
 | `open-index init <name> [dir]` | Scaffold a new brain directory. |
 | `open-index add-doc-type <name>` | Add a doc_type schema stub under `doc_types/`. |
 | `open-index add-entity <file>` | Validate + store an entity JSON file. |
+| `open-index import <file>` | Bulk-import entities from JSON / JSONL / CSV. |
 | `open-index index` | (Re)load `entities/**/*.json` into the search index. |
 | `open-index validate` | Validate `brain.yaml`, schemas, and every entity file (use in CI). |
 | `open-index ingest <connector>` | Run a connector now to pull entities from an MCP server. |
 | `open-index run [--force] [--loop N]` | Run every connector whose `schedule` is due (wire into cron/CI). |
 | `open-index search <query> [-t doc_type]` | Search from the terminal. |
-| `open-index ui` | Launch the Streamlit explorer (Structure / Search / **Map** / Analytics / Edit). |
+| `open-index ui` | Launch the Streamlit explorer (Explore / **Map** / Analytics / Jobs). |
 | `open-index mcp [--read-only]` | Run the MCP context layer over stdio. **Read+write by default**; `--read-only` opts out of writes. |
-| `open-index serve [--port --token --read-only]` | Serve the same default read+write MCP context layer over HTTP for remote agents. |
+| `open-index serve [--port --token --read-only]` | Serve the same read+write MCP context layer over **HTTP** for remote agents (bearer-token auth). |
+| `open-index mcp-config [--url --token]` | Print the MCP connection block to paste into your agent. |
 
 ### A context layer for domain-specialized agents
 
@@ -173,9 +179,21 @@ Then `open-index index` (loads file-backed entities) and `open-index validate`.
 
 ### 3. Populate at scale (four ways, one validated store)
 
-1. **Manual / agent** — write JSON, or let your domain agent call `put_entity` /
-   `create_doc_type` over MCP.
-2. **Bulk** — hand a file of records to your agent, or a connector.
+1. **Manual / agent** — write JSON, or open Claude Code in the folder and let it call
+   `put_entity` / `create_doc_type` over MCP.
+2. **Bulk** — import a file directly, or let an agent write a batch in one call with
+   `put_entities`:
+
+   ```bash
+   open-index import issues.csv --doc-type issue --asserted-by import:jira
+   open-index import export.jsonl --dry-run        # validate first, write nothing
+   ```
+
+   JSON arrays, JSONL, and CSV all work. Bare slugs are qualified (`checkout` →
+   `product:checkout`), CSV scalars are coerced, and a `related_to` column takes
+   `target|meaning` pairs separated by `;`. A bad row is reported and skipped —
+   the rest still land. `--asserted-by` / `--confidence` attribute the whole
+   batch once instead of per row.
 3. **Connectors** — `connectors/*.py` pull from an MCP server on a `schedule`; run with
    `open-index ingest <name>` or `open-index run` (cron/CI-friendly).
 4. **Agent write-back** — a Stop hook that records learnings via `put_entity` (the
@@ -185,9 +203,13 @@ See [Entity Management](./entity-management.md) for guidance on cadence and deca
 
 ### 4. Explore
 
-`open-index ui` → **Structure** (doc_types, fields, relationships), **Search**,
-**Map** (anchor a doc_type, pick entities, click a node to expand its correlations),
-and **Analytics** (what context CLI/MCP/UI clients fetched and how often).
+`open-index ui` opens a read-only explorer. The sidebar always shows every doc_type
+with its count and storage policy, so the structure is visible without navigating
+anywhere. Four tabs: **Explore** (search + browse + drill into an entity's
+relationships), **Map** (auto-anchored on the most-connected entities — click any
+node to expand it), **Analytics** (what context CLI/MCP/UI clients fetched, and how
+often — zero-result searches show what to model next), and **Jobs** (connectors and
+their schedules).
 
 # Using Open Index as your agent's context layer
 
@@ -198,7 +220,9 @@ and **Analytics** (what context CLI/MCP/UI clients fetched and how often).
   prompt so supporting hosts can navigate the domain before the first tool call.
 - `navigation_guidelines()` — refresh that guide after the index/schema changes.
 - `search_brain(query, doc_types, limit)` · `get_entity(id)` — read.
-- `put_entity(...)` · `create_doc_type(...)` — write (validated, honors the storage policy).
+- `put_entity(...)` · `put_entities([...])` · `create_doc_type(...)` — write (validated,
+  honors the storage policy). `put_entities` writes a whole batch in one call and
+  takes a shared `provenance` block.
 
 Use `open-index mcp --read-only` (or `open-index serve --read-only`) to opt out
 when an agent should retrieve domain context but never maintain it.
@@ -219,46 +243,88 @@ building legal, marketing, support, or other specialized agents on Open Index.
 
 ## Using the brain from a cloud agent (production)
 
-Two shapes, depending on whether one agent or many share the brain:
+📖 **[Full deployment guide → `docs/deployment.md`](./docs/deployment.md)** — local,
+remote (with and without Docker), TLS/proxying, and exactly what to paste into
+Claude Code, Claude Desktop, or Cursor.
 
-**Embedded (one agent, you own the runtime).** Bake the package + brain dir into the
-agent's image and let it spawn the MCP server over stdio — no network, works today:
+### Getting the connection details
 
-```jsonc
-{ "mcpServers": { "brain": { "command": "open-index", "args": ["mcp", "--brain", "/app/brain"] } } }
-```
-
-**Remote (many agents, shared brain).** Run the brain as a networked MCP server and
-register its URL in each agent:
+Never hand-assemble the config. Ask for it:
 
 ```bash
-pip install 'open-index[serve,opensearch]'
-OPEN_INDEX_TOKEN=… open-index serve --brain /srv/acme-brain --port 8080
-# agent registers a remote MCP server:  http://<host>:8080/mcp
-#                                        Authorization: Bearer <OPEN_INDEX_TOKEN>
+open-index mcp-config --brain ./my-brain                        # local (stdio)
+open-index mcp-config --url brain.acme.internal:8080 --token $OPEN_INDEX_TOKEN
+open-index mcp-config --url https://brain.acme.com --token $TOKEN --cli   # `claude mcp add …`
+open-index mcp-config --brain ./my-brain > .mcp.json            # pipes where it belongs
 ```
 
-`open-index serve` exposes the same read+write tools over **streamable HTTP** with
-**bearer-token auth**. For a shared, multi-writer brain, switch the backend to
-**OpenSearch** (SQLite is single-writer) — flip `search.backend` in `brain.yaml`:
+`open-index serve` prints the same details on startup — including the addresses a
+*remote* client can actually reach. (The bind address it listens on, `0.0.0.0`, is
+not one of them.) Behind a proxy or tunnel, pass `--public-url` so what's printed
+is what agents should use.
+
+### With Docker (recommended for a shared brain)
+
+```bash
+cp .env.example .env          # set OPEN_INDEX_TOKEN + BRAIN_DIR
+
+docker compose --profile sqlite     up --build    # single writer, no extra services
+docker compose --profile opensearch up --build    # many writers, incl. the cluster
+```
+
+Both serve `http://localhost:8080/mcp`. Your `brain.yaml` is identical either way —
+the profile sets `OPEN_INDEX_SEARCH_BACKEND`, which overrides the file. Add
+`--profile ui` for the explorer on `:8501`. The brain directory is mounted, not
+baked into the image, so doc_types and entities stay in git.
+
+### Without Docker
+
+```bash
+pip install 'open-index[serve]'                  # add ,opensearch for that backend
+open-index index --brain /srv/acme-brain         # load file-backed entities first
+OPEN_INDEX_TOKEN=… open-index serve --brain /srv/acme-brain --port 8080
+```
+
+`serve` exposes the same read+write tools over **streamable HTTP** with
+**bearer-token auth**. Without a token the endpoint is unauthenticated — anyone who
+can reach the port can write to your brain. Use `--read-only` for a queryable
+endpoint that agents can't mutate.
+
+### Choosing a backend
+
+**SQLite is single-writer.** That, not entity count, is the line: the moment a
+second agent needs to write, move to OpenSearch. It also gives native per-field
+boosting, **fuzzy** (typo-tolerant) search, and k-NN semantic search that scales
+past SQLite's ~10k-entity brute-force ceiling.
+
+Select it per-environment without touching `brain.yaml`:
+
+```bash
+export OPEN_INDEX_SEARCH_BACKEND=opensearch
+export OPEN_INDEX_OPENSEARCH_HOSTS=https://opensearch.internal:9200
+```
+
+…or commit it, with secrets as `${ENV}` refs resolved at connect time:
 
 ```yaml
 search:
   backend: opensearch
   hosts: ["https://opensearch:9200"]
   index: open_index_acme          # optional; defaults to open_index_<name>
-  username: "${OPENSEARCH_USER}"    # ${ENV} resolved at connect time
+  username: "${OPENSEARCH_USER}"
   password: "${OPENSEARCH_PASSWORD}"
   use_ssl: true
   verify_certs: true
 ```
 
-OpenSearch also gives native per-field boosting and **fuzzy** (typo-tolerant) search.
-The doc_type/file-entity part comes from git; index-backed data lives in the cluster,
-so give it a persistent home. Rule of thumb: **local/dev → SQLite; exposed as an
-MCP/API endpoint → OpenSearch + `serve`.**
+The doc_type/file-entity part comes from git; index-backed data lives only in the
+cluster (or `brain.db`), so give it a persistent home and a backup. Rule of thumb:
+**local/dev → SQLite; shared endpoint → OpenSearch + `serve`.**
 
 # Controlling search
+
+📖 **[Full configuration reference → `docs/configuration.md`](./docs/configuration.md)** —
+decision tables for `storage: file | index`, SQLite vs OpenSearch, and every search knob.
 
 **Schema** (per field): data `type` (string/number/boolean/timestamp), `processing`
 (keyword/text/timestamp), and `search` kind (`syntactic` = keyword+prefix,
@@ -311,6 +377,11 @@ pip install -e '.[all]'          # core + UI (Streamlit) + MCP server
 pytest                            # run the test suite
 ```
 
+Note that `pytest` **skips** the MCP and UI suites when those extras aren't
+installed, so a green run on a partial install doesn't mean much — use `[all]`
+(or at least `[ui,mcp]`) locally. CI installs them explicitly and fails if they
+are missing.
+
 ### Making a change
 
 1. **Open an issue first** for anything non-trivial (new backend, schema change,
@@ -320,7 +391,8 @@ pytest                            # run the test suite
 4. If you touched a brain in `examples/`, run `open-index validate --brain examples/<name>`
    so schemas and entities stay consistent.
 5. Update the README / `entity-management.md` when you change user-facing behaviour.
-6. Open a PR describing *what* changed and *why*, and link the issue.
+6. Open a PR describing *what* changed and *why*, and link the issue. CI runs the
+   test suite on Python 3.10 and 3.13 and validates every brain in `examples/`.
 
 ### Good first contributions
 

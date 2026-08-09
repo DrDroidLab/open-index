@@ -5,6 +5,12 @@
 .open_index_state.json
 .open_index_analytics.db
 
+# Docker env — holds OPEN_INDEX_TOKEN. Commit .env.example instead.
+.env
+
+# Default bind mount target for docker compose (BRAIN_DIR).
+/brain/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -15,3 +21,8 @@ build/
 dist/
 .pytest_cache/
 .mypy_cache/
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/

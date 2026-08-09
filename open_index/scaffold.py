@@ -13,12 +13,14 @@ name: {name}
 description: A context graph built with open-index.
 
 storage:
-  backend: sqlite
-  path: ./brain.db
+  path: ./brain.db     # where the SQLite file lives (ignored by OpenSearch)
 
 search:
-  backend: sqlite   # pluggable: sqlite | opensearch
-
+  # The engine that stores AND searches this brain — one decision, made here.
+  #   sqlite     — no external services, single-writer. Right to start with.
+  #   opensearch — many concurrent writers, native fuzzy + k-NN search.
+  # Override per environment with OPEN_INDEX_SEARCH_BACKEND.
+  backend: sqlite
 """
 
 EXAMPLE_DOC_TYPE = """\
@@ -107,9 +109,15 @@ truth behind them.
   Ids look like `<doc_type>:<slug>` (e.g. `product:checkout`).
 
 ## MCP tools
+The MCP host injects this brain's navigation guide — doc_types, their full field
+schemas, the relationship vocabulary in use, and worked write examples — before
+your first turn, so runtime navigation is not duplicated here.
+
 - `search_brain(query, doc_types, limit)` / `get_entity(id)` — query.
-- `put_entity(doc_type, id, name, fields, related_to)` — add/update an entity.
-- `create_doc_type(doc_type, description, fields, color)` — define a new concept.
+- `put_entity(doc_type, id, name, fields, related_to)` — add/update one entity.
+- `put_entities([...])` — add/update many in one call (use this for a batch).
+- `create_doc_type(doc_type, description, fields, relationships, storage, color,
+  label_field)` — define a new concept.
 
 ## Editing this brain
 When asked to add/update knowledge, follow the **edit-brain** skill
@@ -210,10 +218,10 @@ This repo is a **brain** (a context graph built with Open Index). You can edit i
 - **By editing files** then running `open-index index` and `open-index validate`.
 
 ## Always start here
-Use the navigation guide pre-injected by the MCP host, when available. Otherwise
-call `navigation_guidelines()` (MCP) or read `doc_types/*.yaml`. It tells you which
-doc_types exist, their fields, and the **relationship vocabulary already in use**.
-Reuse existing doc_types and relationship meanings instead of inventing near-duplicates.
+Call `navigation_guidelines()` (MCP) or read `doc_types/*.yaml`. It is self-contained:
+which doc_types exist, their full field schemas, the **relationship vocabulary already
+in use**, and the exact call shapes for writing. Reuse existing doc_types and
+relationship meanings instead of inventing near-duplicates.
 
 ## Add / update an entity
 - Id must be `<doc_type>:<slug>` (e.g. `service:checkout`). `put_entity` is an upsert.

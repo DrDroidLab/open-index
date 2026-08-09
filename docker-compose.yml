@@ -1,0 +1,132 @@
+# open-index — pick ONE profile: sqlite or opensearch.
+#
+#   docker compose --profile sqlite     up --build      # local / single agent
+#   docker compose --profile opensearch up --build      # shared / many agents
+#
+# Both serve the same MCP endpoint on http://localhost:8080/mcp and read the
+# same brain directory (BRAIN_DIR, default ./brain) — only the search backend
+# differs, selected by OPEN_INDEX_SEARCH_BACKEND. Nothing in brain.yaml has to
+# change to switch between them.
+#
+# Add `--profile ui` to either one to also get the explorer on :8501.
+#
+# Copy .env.example to .env first — OPEN_INDEX_TOKEN is what stops anyone who
+# can reach port 8080 from writing to your brain.
+
+x-brain-service: &brain-service
+  build:
+    context: .
+    args:
+      EXTRAS: serve,opensearch,ui,semantic
+  image: open-index:local
+  volumes:
+    # Your brain directory: doc_types, entities, connectors, brain.yaml.
+    # Read-write because SQLite writes brain.db here and file-backed entities
+    # are written back on put_entity.
+    - ${BRAIN_DIR:-./brain}:/brain
+  environment: &brain-env
+    OPEN_INDEX_TOKEN: ${OPEN_INDEX_TOKEN:-}
+    # What the startup banner advertises. Defaulted because auto-detection is
+    # wrong inside a container: it finds the container's bridge address (e.g.
+    # 172.20.0.2), which nothing outside the compose network can reach. The
+    # published port on the host is the address that actually works. Override
+    # with the external name when this sits behind a proxy or on a remote host.
+    OPEN_INDEX_PUBLIC_URL: ${OPEN_INDEX_PUBLIC_URL:-http://localhost:${PORT:-8080}/mcp}
+    # Optional: semantic search via an OpenAI-compatible embedding API.
+    OPEN_INDEX_EMBEDDING_BASE_URL: ${OPEN_INDEX_EMBEDDING_BASE_URL:-}
+    OPEN_INDEX_EMBEDDING_API_KEY: ${OPEN_INDEX_EMBEDDING_API_KEY:-}
+    OPEN_INDEX_EMBEDDING_MODEL: ${OPEN_INDEX_EMBEDDING_MODEL:-}
+    OPEN_INDEX_EMBEDDING_DIM: ${OPEN_INDEX_EMBEDDING_DIM:-}
+  restart: unless-stopped
+
+services:
+  # ---------------------------------------------------------------------------
+  # SQLite — zero external services. Single-writer: fine for one agent, a local
+  # trial, or a read-mostly brain. brain.db lives in your mounted brain dir.
+  # ---------------------------------------------------------------------------
+  brain-sqlite:
+    <<: *brain-service
+    profiles: ["sqlite"]
+    container_name: open-index-brain
+    command: ["serve", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      <<: *brain-env
+      OPEN_INDEX_SEARCH_BACKEND: sqlite
+    ports:
+      - "${PORT:-8080}:8080"
+
+  # ---------------------------------------------------------------------------
+  # OpenSearch — for a brain many agents share and write to concurrently. Also
+  # gives native per-field boosting, fuzzy matching, and k-NN semantic search.
+  # ---------------------------------------------------------------------------
+  brain-opensearch:
+    <<: *brain-service
+    profiles: ["opensearch"]
+    container_name: open-index-brain
+    command: ["serve", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      <<: *brain-env
+      OPEN_INDEX_SEARCH_BACKEND: opensearch
+      OPEN_INDEX_OPENSEARCH_HOSTS: http://opensearch:9200
+    ports:
+      - "${PORT:-8080}:8080"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+
+  opensearch:
+    image: opensearchproject/opensearch:2.17.0
+    profiles: ["opensearch"]
+    container_name: open-index-opensearch
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      # Local/dev convenience: no TLS, no auth on the cluster. For production,
+      # enable the security plugin and set search.username/password (or the
+      # OPENSEARCH_USER / OPENSEARCH_PASSWORD env refs) in brain.yaml.
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      # Disk watermarks off for local dev. A Docker VM sitting above 95% full
+      # otherwise trips the flood-stage watermark and flips every index to
+      # read-only, which surfaces as a baffling cluster_block_exception on the
+      # next write rather than as "you are out of disk". Leave these ON in
+      # production, where the watermarks are doing a job worth doing.
+      - cluster.routing.allocation.disk.threshold_enabled=false
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    ports:
+      # Bound to loopback: the brain container reaches it over the compose
+      # network, so it does not need to be exposed to your LAN.
+      - "127.0.0.1:9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Optional explorer UI. Add `--profile ui` alongside a backend profile.
+  # Reads whichever backend you selected via OPEN_INDEX_SEARCH_BACKEND.
+  # ---------------------------------------------------------------------------
+  ui:
+    <<: *brain-service
+    profiles: ["ui"]
+    container_name: open-index-ui
+    command: ["ui", "--port", "8501"]
+    environment:
+      <<: *brain-env
+      OPEN_INDEX_SEARCH_BACKEND: ${OPEN_INDEX_SEARCH_BACKEND:-sqlite}
+      OPEN_INDEX_OPENSEARCH_HOSTS: ${OPEN_INDEX_OPENSEARCH_HOSTS:-http://opensearch:9200}
+      STREAMLIT_SERVER_HEADLESS: "true"
+      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
+    ports:
+      - "${UI_PORT:-8501}:8501"
+
+volumes:
+  opensearch-data:

@@ -85,3 +85,71 @@ def test_build_search_body_no_query_sorts_by_name():
     body = b.build_search_body(None, None, limit=20, counts_only=False)
     assert body["query"]["bool"]["must"] == {"match_all": {}}
     assert body["sort"] == [{"name.kw": "asc"}]
+
+
+# -- provenance / validity round-trip -----------------------------------------
+#
+# SQLite stores the whole entity as a JSON blob, so it round-trips anything
+# added to the model. This backend maps fields explicitly, so a field the model
+# gains and the mapping doesn't is silently dropped on write — which is exactly
+# what happened to provenance. These pin the round-trip.
+
+
+def _roundtrip(entity):
+    return OpenSearchBackend.doc_to_entity(OpenSearchBackend.entity_to_doc(entity))
+
+
+def test_entity_provenance_survives_the_round_trip():
+    from open_index.models import Provenance
+
+    entity = Entity(id="issue:a", doc_type="issue", name="A",
+                    provenance=Provenance(asserted_by="agent:x", confidence=0.8,
+                                          evidence="seen in logs"))
+    back = _roundtrip(entity)
+    assert back.provenance is not None, "provenance dropped on write"
+    assert back.provenance.asserted_by == "agent:x"
+    assert back.provenance.confidence == 0.8
+    assert back.provenance.evidence == "seen in logs"
+
+
+def test_validity_window_survives_the_round_trip():
+    entity = Entity(id="issue:b", doc_type="issue", name="B",
+                    valid_from="2020-01-01", valid_to="2020-06-01")
+    back = _roundtrip(entity)
+    assert back.valid_from == "2020-01-01"
+    assert back.valid_to == "2020-06-01"
+
+
+def test_per_edge_provenance_survives_the_round_trip():
+    from open_index.models import Provenance, Relationship
+
+    entity = Entity(id="issue:c", doc_type="issue", name="C", related_to=[
+        Relationship(target="product:checkout", relationship_edge_meaning="affects",
+                     provenance=Provenance(asserted_by="agent:y", confidence=0.3)),
+    ])
+    edge = _roundtrip(entity).related_to[0]
+    assert edge.relationship_edge_meaning == "affects"
+    assert edge.provenance is not None, "edge provenance dropped on write"
+    assert edge.provenance.confidence == 0.3
+
+
+def test_unattributed_entities_stay_clean():
+    """No provenance must not become an empty block — absence is informative."""
+    doc = OpenSearchBackend.entity_to_doc(Entity(id="issue:d", doc_type="issue"))
+    assert "provenance" not in doc
+    assert "valid_from" not in doc
+    assert _roundtrip(Entity(id="issue:d", doc_type="issue")).provenance is None
+
+
+def test_mapping_declares_provenance_and_validity():
+    props = OpenSearchBackend.mapping()["mappings"]["properties"]
+    assert "provenance" in props
+    assert "valid_from" in props and "valid_to" in props
+    assert "provenance" in props["related_to"]["properties"]
+
+
+def test_reserved_keys_cover_the_metadata_fields():
+    """Otherwise a schema field named `provenance` would collide with it."""
+    from open_index.storage.opensearch_backend import _RESERVED_KEYS
+
+    assert {"provenance", "valid_from", "valid_to"} <= _RESERVED_KEYS

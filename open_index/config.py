@@ -11,6 +11,7 @@ A brain lives in a directory:
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
@@ -20,6 +21,8 @@ import yaml
 from pydantic import BaseModel, Field
 
 from open_index.schema import DocType
+
+logger = logging.getLogger("open_index.config")
 
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -38,7 +41,14 @@ def expand_env(value: Any) -> Any:
 
 
 class StorageConfig(BaseModel):
-    backend: str = "sqlite"
+    """Where SQLite keeps its file. That is all this section controls.
+
+    There is deliberately no `backend` key here: which engine stores and
+    searches the brain is one decision, and it lives in `search.backend`. An
+    earlier version accepted `storage.backend` and silently ignored it, which
+    read as if storage and search could be chosen independently. Old files still
+    load — `load_brain_config` warns instead of failing."""
+
     path: str = "./brain.db"
 
 
@@ -88,6 +98,43 @@ class BrainConfig(BaseModel):
         return p
 
 
+"""Environment overrides applied after brain.yaml is parsed.
+
+These exist so one brain directory can run against different backends without
+editing (and accidentally committing) a change to brain.yaml — the container
+case, where the image is fixed and only the environment differs. Keep this list
+short and explicit: a blanket ${ENV} expansion over the whole file would turn an
+unset variable into an empty string and fail validation in a confusing way.
+"""
+_ENV_OVERRIDES = {
+    "OPEN_INDEX_SEARCH_BACKEND": ("search", "backend"),
+    "OPEN_INDEX_DB_PATH": ("storage", "path"),
+    "OPEN_INDEX_OPENSEARCH_INDEX": ("search", "index"),
+}
+
+# Comma-separated list → search.hosts.
+_ENV_HOSTS = "OPEN_INDEX_OPENSEARCH_HOSTS"
+
+
+def apply_env_overrides(config: "BrainConfig") -> "BrainConfig":
+    """Override backend selection from the environment. Mutates and returns."""
+    for var, (section, key) in _ENV_OVERRIDES.items():
+        value = os.environ.get(var)
+        if value:
+            setattr(getattr(config, section), key, value)
+
+    hosts = os.environ.get(_ENV_HOSTS)
+    if hosts:
+        config.search.hosts = [h.strip() for h in hosts.split(",") if h.strip()]
+
+    if config.search.backend not in ("sqlite", "opensearch"):
+        raise ValueError(
+            f"unknown search backend {config.search.backend!r} "
+            "(expected 'sqlite' or 'opensearch')"
+        )
+    return config
+
+
 def load_brain_config(brain_dir: str | Path) -> BrainConfig:
     """Load brain.yaml and every doc_types/*.yaml under `brain_dir`."""
     root = Path(brain_dir).expanduser().resolve()
@@ -98,7 +145,21 @@ def load_brain_config(brain_dir: str | Path) -> BrainConfig:
         )
 
     raw = yaml.safe_load(brain_yaml.read_text()) or {}
+
+    # `storage.backend` was never read; warn rather than ignore, so a brain that
+    # looks like it selects a backend there learns where the real knob is.
+    storage_raw = raw.get("storage")
+    if isinstance(storage_raw, dict) and "backend" in storage_raw:
+        logger.warning(
+            "%s: 'storage.backend' is not used and will be ignored — the engine "
+            "is chosen by 'search.backend' (currently %r). Remove it to avoid "
+            "confusion.",
+            brain_yaml,
+            (raw.get("search") or {}).get("backend", "sqlite"),
+        )
+
     config = BrainConfig.model_validate(raw)
+    apply_env_overrides(config)
     config.root = root
 
     doc_types_dir = root / "doc_types"
