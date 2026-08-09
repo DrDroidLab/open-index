@@ -100,6 +100,11 @@ class OpenSearchBackend:
         return {
             "settings": {"index": {"knn": True}},
             "mappings": {
+                # A field declared `string` whose values look like dates would
+                # otherwise be mapped as `date` by dynamic detection, and then
+                # rejected by fuzzy search. The schema decides the type here,
+                # not a guess from the first document indexed.
+                "date_detection": False,
                 "properties": {
                     "id": {"type": "keyword"},
                     "doc_type": {"type": "keyword"},
@@ -137,6 +142,11 @@ class OpenSearchBackend:
         """Mapping without the embedding field (for keyword-only brains)."""
         return {
             "mappings": {
+                # A field declared `string` whose values look like dates would
+                # otherwise be mapped as `date` by dynamic detection, and then
+                # rejected by fuzzy search. The schema decides the type here,
+                # not a guess from the first document indexed.
+                "date_detection": False,
                 "properties": {
                     "id": {"type": "keyword"},
                     "doc_type": {"type": "keyword"},
@@ -261,6 +271,13 @@ class OpenSearchBackend:
                     continue
                 if f.name == label:
                     name_boost = max(name_boost, f.boost)
+                # Only text-ish fields belong in a fuzzy full-text query.
+                # OpenSearch maps a `number` field to long and a timestamp to
+                # date, and rejects the whole query with
+                # "Can only use fuzzy queries on keyword and text fields" if
+                # either is listed — so one numeric field breaks all search.
+                if f.type not in ("string", "text"):
+                    continue
                 boosts[f.name] = max(boosts.get(f.name, 1.0), f.boost)
         fields = [f"name^{name_boost:g}"]
         fields += [f"fields.{name}^{b:g}" for name, b in boosts.items()]
@@ -373,9 +390,27 @@ class OpenSearchBackend:
                 "is the cluster running? (search.backend: opensearch)"
             ) from exc
 
+    def _ensure_index_exists(self) -> None:
+        """Recreate the index with our mapping if it has gone missing.
+
+        `ensure_schema` runs once when the brain is opened. If the index is
+        dropped after that — a cluster rebuild, a manual DELETE, a restored
+        snapshot — OpenSearch would auto-create it on the next write using
+        *dynamic* mapping, silently typing `doc_type` as text and breaking every
+        aggregation, and typing date-shaped strings as dates and breaking fuzzy
+        search. Both fail long after the write that caused them, so it is worth
+        one existence check on the write path.
+        """
+        if self._client.indices.exists(index=self.index):
+            return
+        logger.warning("index %s was missing; recreating it with the schema mapping",
+                       self.index)
+        self._client.indices.create(index=self.index, body=self._mapping())
+
     def upsert_entity(self, entity: Entity, doc_type: Optional[DocType] = None) -> None:
         if doc_type is not None:
             self._doc_types[doc_type.doc_type] = doc_type
+        self._ensure_index_exists()
         self._client.index(
             index=self.index, id=entity.id, body=self._doc_with_embedding(entity), refresh=True
         )
@@ -391,6 +426,7 @@ class OpenSearchBackend:
         for _entity, doc_type in items:
             if doc_type is not None:
                 self._doc_types[doc_type.doc_type] = doc_type
+        self._ensure_index_exists()
 
         payload: list[dict] = []
         for entity, _doc_type in items:

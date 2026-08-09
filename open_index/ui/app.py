@@ -22,7 +22,7 @@ from time import perf_counter
 import streamlit as st
 
 from open_index.brain import Brain
-from open_index.graph import ContextGraph, build_graph
+from open_index.graph import ContextGraph, build_graph, build_overview_graph
 from open_index.ui import view
 
 st.set_page_config(page_title="Open Index", page_icon="🧠", layout="wide")
@@ -237,48 +237,59 @@ def render_entity(brain: Brain, entity_id: str) -> None:
 # --------------------------------------------------------------------------- #
 
 def render_map(brain: Brain) -> None:
+    """The whole index at a glance: every entity, coloured by doc_type.
+
+    Anchoring on one entity is the wrong default for someone who has never seen
+    the index — they have no entity in mind. This shows the shape of the whole
+    thing and lets them subtract from it.
+    """
     summary = view.summarize(brain)
     populated = [r.name for r in summary.doc_types if r.count]
     if not populated:
         st.info("No entities to map yet. Add some and run `open-index index`.")
         return
 
-    chosen_types = st.multiselect(
-        "Doc types to include", populated, default=populated,
-        help="Narrow the map to the concepts you care about.",
+    chosen = st.multiselect(
+        "Doc types shown", populated, default=populated,
+        help="Uncheck a type to drop it and its edges from the map.",
     )
-    scope = chosen_types or populated
+    scope = chosen or populated
 
-    # Auto-anchor rather than waiting for a selection. The old UI drew nothing
-    # until you picked entities, which looked like a broken canvas.
-    auto = view.default_anchors(brain, scope)
-    catalog = {f"{e.name}  ({e.id})": e.id
-               for e in brain.backend.all_entities(scope)}
-    auto_labels = [label for label, eid in catalog.items() if eid in auto]
-
-    picked = st.multiselect(
-        "Anchors", list(catalog), default=auto_labels,
-        help="Starting points. Click any node in the map to expand it.",
-    )
-    anchors = [catalog[label] for label in picked]
-
-    expanded = st.session_state.get("expanded", set())
-    if expanded:
-        cols = st.columns([4, 1])
-        cols[0].caption(f"expanded: {', '.join(sorted(expanded))}")
-        if cols[1].button("↺ reset"):
-            st.session_state["expanded"] = set()
+    focus = st.session_state.get("map_focus")
+    if focus:
+        cols = st.columns([5, 1])
+        cols[0].caption(f"Focused on `{focus}` and its immediate neighbours.")
+        if cols[1].button("↩ show all"):
+            st.session_state["map_focus"] = None
             st.rerun()
+        graph = build_graph(brain, [focus], depth=1)
+    else:
+        graph = build_overview_graph(brain, scope, limit=view.MAX_GRAPH_NODES)
 
-    anchors = list(dict.fromkeys(anchors + list(expanded)))
-    if not anchors:
-        st.info("Select at least one anchor above.")
-        return
+    total = sum(r.count for r in summary.doc_types if r.name in scope)
+    if not focus and len(graph.nodes) < total:
+        st.warning(
+            f"Showing the {len(graph.nodes)} most-connected of {total} entities. "
+            "Narrow the doc types above to see the rest."
+        )
 
-    graph = build_graph(brain, anchors, depth=1)
-    st.caption(f"{len(graph.nodes)} nodes · {len(graph.edges)} edges — "
-               "click a node to expand its relationships")
-    render_graph(brain, graph)
+    canvas, legend = st.columns([4, 1])
+    with canvas:
+        st.caption(f"{len(graph.nodes)} nodes · {len(graph.edges)} edges — "
+                   "hover for detail, click a node to focus on it")
+        render_graph(brain, graph)
+    with legend:
+        st.markdown("**Legend**")
+        for row in view.legend_rows(brain, graph):
+            st.markdown(
+                f"{_dot(row['color'])} `{_esc(row['doc_type'])}`"
+                f" <span style='opacity:.6'>{row['count']}</span>",
+                unsafe_allow_html=True,
+            )
+        if graph.edges:
+            st.markdown("---")
+            st.caption("Edges are `related_to` links. Hover one to see which "
+                       "relationship it is.")
 
     # streamlit-agraph doesn't paint on its first render inside a tab (the canvas
     # mounts with zero size). One forced rerun remounts it with the tab active.
@@ -298,24 +309,8 @@ def render_graph(brain: Brain, graph: ContextGraph) -> None:
 
     palette = view.graph_theme(_theme_type())
 
-    nodes = [
-        Node(id=n.id, label=n.label, color=n.color,
-             size=22 if n.is_anchor else 16, shape="dot",
-             title=f"{n.doc_type} · {n.id}",
-             # strokeWidth 0 removes vis's white halo, which on a dark canvas
-             # turns every label into heavy outlined text.
-             font={"color": palette["node_label"], "size": 15,
-                   "strokeWidth": palette["stroke_width"], "face": "sans-serif"})
-        for n in graph.nodes
-    ]
-    edges = [
-        Edge(source=e.source, target=e.target, label=e.meaning,
-             color=palette["edge"],
-             font={"color": palette["edge_label"], "size": 12,
-                   "strokeWidth": palette["stroke_width"], "align": "middle",
-                   "face": "sans-serif"})
-        for e in graph.edges
-    ]
+    nodes = [Node(**spec) for spec in view.graph_node_specs(graph)]
+    edges = [Edge(**spec) for spec in view.graph_edge_specs(graph, palette["edge"])]
 
     busy = len(graph.nodes) > view.BUSY_GRAPH_NODES
     config = Config(
@@ -335,8 +330,8 @@ def render_graph(brain: Brain, graph: ContextGraph) -> None:
     _left, middle, _right = st.columns([1, 20, 1])
     with middle:
         clicked = agraph(nodes=nodes, edges=edges, config=config)
-    if clicked and clicked not in st.session_state.get("expanded", set()):
-        st.session_state.setdefault("expanded", set()).add(clicked)
+    if clicked and clicked != st.session_state.get("map_focus"):
+        st.session_state["map_focus"] = clicked
         st.rerun()
 
 
@@ -407,6 +402,125 @@ def render_analytics(brain: Brain) -> None:
         } for e in events], hide_index=True, use_container_width=True)
 
 
+def render_schema(brain: Brain) -> None:
+    """Every doc_type and the shape of it — the reference before you write."""
+    summary = view.summarize(brain)
+    if not summary.has_schema:
+        st.info("No doc_types defined yet.")
+        st.caption("A doc_type is a concept this index tracks, plus the fields it "
+                   "stores. Create one with `open-index add-doc-type`, or ask an "
+                   "agent to call `create_doc_type`.")
+        return
+
+    st.caption(
+        f"{len(summary.doc_types)} doc_types · {summary.total_entities:,} entities. "
+        "Every entity id is `<doc_type>:<slug>`, and any entity can link to any "
+        "other through `related_to`."
+    )
+
+    for row in summary.doc_types:
+        doc_type = brain.config.doc_type(row.name)
+        noun = "entity" if row.count == 1 else "entities"
+        with st.expander(f"{row.name} · {row.count:,} {noun}",
+                         expanded=len(summary.doc_types) <= 3):
+            if row.description:
+                st.markdown(row.description)
+            st.caption(
+                f"{_dot(row.color)} source of truth: "
+                + ("**files** — JSON under `entities/`, git-trackable"
+                   if row.storage == "file"
+                   else "**search index** — DB-owned, not written to files"),
+                unsafe_allow_html=True,
+            )
+
+            fields = view.schema_field_rows(doc_type)
+            if fields:
+                st.markdown("**Fields**")
+                st.table(fields)
+            else:
+                st.caption("No fields declared.")
+
+            relationships = view.schema_relationship_rows(brain, row.name)
+            if relationships:
+                st.markdown("**Relationships**")
+                st.table(relationships)
+                st.caption("Declared edges are validated against their target "
+                           "doc_type. Undeclared ones still work — they just "
+                           "aren't checked.")
+            else:
+                st.caption("No relationships declared or in use for this type.")
+
+
+def render_how_to_use(brain: Brain) -> None:
+    """Connecting an agent, the tools it gets, and what the other tabs are for.
+
+    Deliberately the rightmost tab: it is the page people come back to, not the
+    one they start on.
+    """
+    summary = view.summarize(brain)
+    mcp_url = os.environ.get("OPEN_INDEX_PUBLIC_URL", "")
+    read_only = os.environ.get("OPEN_INDEX_READ_ONLY", "").lower() in ("1", "true", "yes")
+
+    st.markdown(f"### Connect an agent to `{_esc(summary.name)}`")
+    st.caption(
+        "This index speaks MCP, so any MCP-capable agent can query it — and, "
+        "unless the endpoint is read-only, keep it current."
+    )
+
+    if mcp_url:
+        st.markdown("**1. Point your agent at this URL**")
+        st.code(view.mcp_client_config(mcp_url, server_name=summary.name), language="json")
+        st.caption("Paste into `.mcp.json` (Claude Code), `.cursor/mcp.json` (Cursor), "
+                   "or any MCP client's server config. Or generate it:")
+        st.code(f"open-index mcp-config --url {mcp_url} --name {summary.name} > .mcp.json",
+                language="bash")
+    else:
+        st.info("This explorer isn't configured with a public MCP URL "
+                "(`OPEN_INDEX_PUBLIC_URL`), so the connection block can't be shown.")
+        st.code("open-index mcp-config --brain <brain-dir> > .mcp.json", language="bash")
+
+    st.markdown("**2. Ask it something**")
+    st.caption("No briefing needed — the navigation guide below is injected into the "
+               "MCP handshake, so the agent knows this index's doc_types and "
+               "relationship vocabulary before its first turn.")
+
+    st.divider()
+    st.markdown("### Tools the agent gets")
+
+    st.markdown("**Reading**")
+    for name, what in view.READ_TOOLS:
+        st.markdown(f"- `{name}` — {what}")
+
+    st.markdown("**Writing**")
+    if read_only:
+        st.info("This endpoint is **read-only** — the write tools below are not "
+                "registered on it. Serve without `--read-only` to enable them.")
+    for name, what in view.WRITE_TOOLS:
+        st.markdown(f"- `{name}` — {what}")
+    st.caption("Entity ids are always `<doc_type>:<slug>`. Writes are validated "
+               "against the doc_type schema, and land in the search index (and on "
+               "disk, for `storage: file` types).")
+
+    st.divider()
+    st.markdown("### What each tab does")
+    for name, what in view.TAB_GUIDE:
+        st.markdown(f"- **{name}** — {what}")
+
+    st.divider()
+    st.markdown("### What's in this index right now")
+    st.caption(f"{summary.total_entities:,} entities across "
+               f"{len(summary.doc_types)} doc_types.")
+    if summary.doc_types:
+        st.table([{"doc_type": r.name, "entities": r.count,
+                   "source of truth": "files (git)" if r.storage == "file" else "search index",
+                   "what it holds": r.description or "—"}
+                  for r in summary.doc_types])
+
+    with st.expander("The full navigation guide the agent receives"):
+        st.code(brain.navigation_guidelines(include_writes=not read_only),
+                language="markdown")
+
+
 def render_jobs(brain: Brain) -> None:
     from open_index.connectors.runner import discover_connectors
     from open_index.scheduling import RunState
@@ -447,9 +561,15 @@ def main() -> None:
     st.markdown(view.ROW_CSS, unsafe_allow_html=True)
 
     options = render_sidebar(brain)
-    tab_explore, tab_map, tab_analytics, tab_jobs = st.tabs(
-        ["Explore", "Map", "Analytics", "Jobs"]
+    # Streamlit opens the first tab, so the help page leftmost means a visitor
+    # lands on the explanation rather than having to find it.
+    tab_help, tab_schema, tab_explore, tab_map, tab_analytics, tab_jobs = st.tabs(
+        [name for name, _ in view.TAB_GUIDE]
     )
+    with tab_help:
+        render_how_to_use(brain)
+    with tab_schema:
+        render_schema(brain)
     with tab_explore:
         render_explore(brain, options)
     with tab_map:

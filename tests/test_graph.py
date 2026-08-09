@@ -58,3 +58,67 @@ def test_multiple_anchors(brain):
 def test_anchor_property(brain):
     g = build_graph(brain, ["product:checkout"], depth=1)
     assert g.anchor == "product:checkout"
+
+
+# -- whole-index overview ------------------------------------------------------
+
+
+def test_overview_includes_every_entity_in_scope(brain):
+    from open_index.graph import build_overview_graph
+
+    graph = build_overview_graph(brain, ["product"])
+    assert {n.id for n in graph.nodes} == {
+        e.id for e in brain.backend.all_entities(["product"])}
+
+
+def test_overview_only_draws_edges_with_both_ends_in_scope(brain):
+    """A half-edge to a filtered-out type would render as a line to nowhere."""
+    from open_index.graph import build_overview_graph
+
+    graph = build_overview_graph(brain, ["product"])
+    ids = {n.id for n in graph.nodes}
+    assert all(e.source in ids and e.target in ids for e in graph.edges)
+
+
+def test_overview_keeps_edges_between_included_types(brain):
+    from open_index.graph import build_overview_graph
+
+    graph = build_overview_graph(brain, ["product", "issue"])
+    assert graph.edges, "product→issue edges should survive when both are in scope"
+
+
+def test_overview_colours_nodes_by_doc_type(brain):
+    from open_index.graph import build_overview_graph
+
+    graph = build_overview_graph(brain)
+    by_type = {n.doc_type: n.color for n in graph.nodes}
+    assert len(set(by_type.values())) > 1, "doc_types should be visually distinct"
+
+
+def test_overview_cap_keeps_the_most_connected(brain):
+    """When the cap bites, it must keep the hubs — a random subset of a graph
+    is far less informative than its best-connected part."""
+    from open_index.graph import build_overview_graph
+    from open_index.ui.view import edge_counts
+
+    kept = {n.id for n in build_overview_graph(brain, limit=3).nodes}
+    assert len(kept) == 3
+
+    degree = edge_counts(brain)
+    dropped = {e.id for e in brain.backend.all_entities()} - kept
+    assert min(degree.get(i, 0) for i in kept) >= max(degree.get(i, 0) for i in dropped)
+
+
+def test_overview_of_an_empty_scope(brain):
+    from open_index.graph import build_overview_graph
+
+    graph = build_overview_graph(brain, ["nonexistent-type"])
+    assert graph.nodes == [] and graph.edges == []
+
+
+def test_overview_deduplicates_edges(brain):
+    from open_index.graph import build_overview_graph
+
+    graph = build_overview_graph(brain)
+    keys = [(e.source, e.target, e.meaning) for e in graph.edges]
+    assert len(keys) == len(set(keys))

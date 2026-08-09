@@ -432,10 +432,68 @@ def _bearer_auth_middleware(app, token: str):
     return wrapped
 
 
+def _host_of(url: str) -> Optional[str]:
+    """The host[:port] part of a URL, or None if it isn't parseable."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url if "://" in url else f"http://{url}")
+    return parsed.netloc or None
+
+
+def build_transport_security(
+    public_url: Optional[str] = None, allowed_hosts: Optional[list[str]] = None
+):
+    """Host allow-list for the MCP SDK's DNS-rebinding protection.
+
+    The SDK enables that protection whenever the app is built for a localhost
+    bind, with a hardcoded localhost-only allow-list. Anything reaching the
+    server through a reverse proxy or load balancer therefore arrives with a
+    foreign `Host` header and is rejected with `421 Invalid Host header` — the
+    server looks up, and every proxied request fails.
+
+    Rather than switch the protection off (which is what passing a non-localhost
+    bind address to the SDK quietly does), state which hosts are legitimate:
+    loopback, plus whatever `--public-url` and `--allowed-host` name.
+
+    A literal `*` disables the check — for a brain behind a trusted proxy that
+    already validates Host. Returns settings, or None when the SDK's own default
+    is appropriate.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    entries = [e.strip() for e in (allowed_hosts or []) if e.strip()]
+    if "*" in entries:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+    if public_url:
+        derived = _host_of(public_url)
+        if derived:
+            entries.append(derived)
+
+    hosts = {"127.0.0.1:*", "localhost:*", "[::1]:*", "127.0.0.1", "localhost", "[::1]"}
+    origins = {"http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"}
+    for entry in entries:
+        bare = entry.split(":", 1)[0] if not entry.startswith("[") else entry
+        # Both forms: proxies drop the port when it is the scheme default, so
+        # "example.com" and "example.com:8080" must both pass.
+        hosts.update({entry, bare, f"{bare}:*"})
+        for scheme in ("http", "https"):
+            origins.update({f"{scheme}://{entry}", f"{scheme}://{bare}",
+                            f"{scheme}://{bare}:*"})
+
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=sorted(hosts),
+        allowed_origins=sorted(origins),
+    )
+
+
 def serve_http(
     brain_dir: str, host: str = "0.0.0.0", port: int = 8080,
     token: Optional[str] = None, read_only: bool = False,
     warn_unauthenticated: bool = True,
+    public_url: Optional[str] = None,
+    allowed_hosts: Optional[list[str]] = None,
 ) -> None:
     """Run the MCP server over streamable HTTP so remote/cloud agents can connect
     by URL. Register `http://<host>:<port>/mcp` as a remote MCP server in the
@@ -452,7 +510,10 @@ def serve_http(
 
     brain = Brain.open(brain_dir)
     server = build_server(brain, read_only=read_only)
-    app = server.streamable_http_app()
+    app = server.streamable_http_app(
+        transport_security=build_transport_security(public_url, allowed_hosts),
+        host=host,
+    )
     if token:
         app = _bearer_auth_middleware(app, token)
     elif warn_unauthenticated:
