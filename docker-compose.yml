@@ -26,9 +26,12 @@ x-brain-service: &brain-service
     - ${BRAIN_DIR:-./brain}:/brain
   environment: &brain-env
     OPEN_INDEX_TOKEN: ${OPEN_INDEX_TOKEN:-}
-    # Printed in the startup banner so the connection details are correct when
-    # this sits behind a proxy or on a remote host.
-    OPEN_INDEX_PUBLIC_URL: ${OPEN_INDEX_PUBLIC_URL:-}
+    # What the startup banner advertises. Defaulted because auto-detection is
+    # wrong inside a container: it finds the container's bridge address (e.g.
+    # 172.20.0.2), which nothing outside the compose network can reach. The
+    # published port on the host is the address that actually works. Override
+    # with the external name when this sits behind a proxy or on a remote host.
+    OPEN_INDEX_PUBLIC_URL: ${OPEN_INDEX_PUBLIC_URL:-http://localhost:${PORT:-8080}/mcp}
     # Optional: semantic search via an OpenAI-compatible embedding API.
     OPEN_INDEX_EMBEDDING_BASE_URL: ${OPEN_INDEX_EMBEDDING_BASE_URL:-}
     OPEN_INDEX_EMBEDDING_API_KEY: ${OPEN_INDEX_EMBEDDING_API_KEY:-}
@@ -84,6 +87,12 @@ services:
       # OPENSEARCH_USER / OPENSEARCH_PASSWORD env refs) in brain.yaml.
       - DISABLE_SECURITY_PLUGIN=true
       - DISABLE_INSTALL_DEMO_CONFIG=true
+      # Disk watermarks off for local dev. A Docker VM sitting above 95% full
+      # otherwise trips the flood-stage watermark and flips every index to
+      # read-only, which surfaces as a baffling cluster_block_exception on the
+      # next write rather than as "you are out of disk". Leave these ON in
+      # production, where the watermarks are doing a job worth doing.
+      - cluster.routing.allocation.disk.threshold_enabled=false
     ulimits:
       memlock: { soft: -1, hard: -1 }
       nofile: { soft: 65536, hard: 65536 }

@@ -43,7 +43,8 @@ logger = logging.getLogger("open_index.storage.opensearch")
 # Reserved top-level keys; everything else on an entity is a schema field.
 # `embedding` is reserved so user schema fields can never collide with the vector
 # payload stored at the top level of each OpenSearch document.
-_RESERVED_KEYS = {"id", "doc_type", "name", "related_to", "embedding"}
+_RESERVED_KEYS = {"id", "doc_type", "name", "related_to", "embedding",
+                  "provenance", "valid_from", "valid_to"}
 _MAX_ALL = 10_000  # cap for all_entities / relationship scans
 
 
@@ -108,9 +109,17 @@ class OpenSearchBackend:
                         "properties": {
                             "target": {"type": "keyword"},
                             "meaning": {"type": "keyword"},
+                            "provenance": {"type": "object", "enabled": False},
                         },
                     },
                     "fields": {"type": "object", "dynamic": True},
+                    # Attribution and validity are stored, not searched: filtering
+                    # on them happens in Brain.search after retrieval, so mapping
+                    # them as enabled fields would only invite type conflicts
+                    # (e.g. a non-ISO valid_from failing a date mapping).
+                    "provenance": {"type": "object", "enabled": False},
+                    "valid_from": {"type": "keyword"},
+                    "valid_to": {"type": "keyword"},
                     "embedding": {
                         "type": "knn_vector",
                         "dimension": dimension,
@@ -137,9 +146,17 @@ class OpenSearchBackend:
                         "properties": {
                             "target": {"type": "keyword"},
                             "meaning": {"type": "keyword"},
+                            "provenance": {"type": "object", "enabled": False},
                         },
                     },
                     "fields": {"type": "object", "dynamic": True},
+                    # Attribution and validity are stored, not searched: filtering
+                    # on them happens in Brain.search after retrieval, so mapping
+                    # them as enabled fields would only invite type conflicts
+                    # (e.g. a non-ISO valid_from failing a date mapping).
+                    "provenance": {"type": "object", "enabled": False},
+                    "valid_from": {"type": "keyword"},
+                    "valid_to": {"type": "keyword"},
                 }
             }
         }
@@ -158,16 +175,34 @@ class OpenSearchBackend:
 
     @staticmethod
     def entity_to_doc(entity: Entity) -> dict:
-        return {
+        doc = {
             "id": entity.id,
             "doc_type": entity.doc_type,
             "name": entity.name,
             "related_to": [
-                {"target": r.target, "meaning": r.relationship_edge_meaning}
+                {
+                    "target": r.target,
+                    "meaning": r.relationship_edge_meaning,
+                    # Per-edge attribution, same as the entity-level block. Unlike
+                    # SQLite (which stores the whole entity as a JSON blob) this
+                    # backend maps fields explicitly, so anything omitted here is
+                    # silently lost on write.
+                    **({"provenance": r.provenance.model_dump(exclude_none=True)}
+                       if r.provenance else {}),
+                }
                 for r in entity.related_to
             ],
             "fields": dict(entity.fields),
         }
+        if entity.provenance is not None:
+            doc["provenance"] = entity.provenance.model_dump(exclude_none=True)
+        # Validity bounds decide whether a claim holds at a given instant; drop
+        # them and `as_of` filtering silently changes meaning per backend.
+        if entity.valid_from:
+            doc["valid_from"] = entity.valid_from
+        if entity.valid_to:
+            doc["valid_to"] = entity.valid_to
+        return doc
 
     def _doc_with_embedding(self, entity: Entity) -> dict:
         """Build the OpenSearch document including a vector embedding when the
@@ -191,10 +226,17 @@ class OpenSearchBackend:
             "doc_type": source["doc_type"],
             "name": source.get("name", ""),
             "related_to": [
-                {"target": r["target"], "relationship_edge_meaning": r.get("meaning", "")}
+                {
+                    "target": r["target"],
+                    "relationship_edge_meaning": r.get("meaning", ""),
+                    **({"provenance": r["provenance"]} if r.get("provenance") else {}),
+                }
                 for r in source.get("related_to", [])
             ],
         }
+        for key in ("provenance", "valid_from", "valid_to"):
+            if source.get(key):
+                flat[key] = source[key]
         flat.update(source.get("fields", {}))
         return Entity.from_dict(flat)
 
