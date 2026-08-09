@@ -23,7 +23,14 @@ x-brain-service: &brain-service
     # Your brain directory: doc_types, entities, connectors, brain.yaml.
     # Read-write because SQLite writes brain.db here and file-backed entities
     # are written back on put_entity.
+    #
+    # The container runs as uid 10001, so this directory must be writable by
+    # it — otherwise indexing fails on a bind mount. See docs/deployment.md.
     - ${BRAIN_DIR:-./brain}:/brain
+    # The local embedding model (~90MB) is downloaded on first use. Without a
+    # persistent cache it is re-downloaded every time a container is recreated,
+    # which turns a restart into a multi-minute stall.
+    - model-cache:/home/openindex/.cache
   environment: &brain-env
     OPEN_INDEX_TOKEN: ${OPEN_INDEX_TOKEN:-}
     # What the startup banner advertises. Defaulted because auto-detection is
@@ -130,3 +137,4 @@ services:
 
 volumes:
   opensearch-data:
+  model-cache:
