@@ -10,13 +10,20 @@
 # Where agents will reach this host. Used for the connection details printed by
 # `fleet.py tokens` and by each container's startup banner — set it to the load
 # balancer's address, not the VM's, once the LB is in front.
-public_base_url: http://20.83.97.30
+# nip.io resolves <ip>.nip.io to <ip>, which gives Caddy a real hostname to
+# obtain a Let's Encrypt certificate for — a bare IP cannot have one.
+public_base_url: https://20.83.97.30.nip.io
 
 # Host directory holding one subdirectory per brain.
 brains_root: /home/azureuser/brains
 
-# Port nginx publishes on the host. The LB should forward to this.
+# Caddy publishes 80 (ACME challenge + redirect) and 443. A load balancer in
+# front should forward both, or terminate TLS itself and forward 80.
 http_port: 80
+
+# These indexes hold synthetic demo data and are deliberately open: no bearer
+# token on the MCP endpoints, no password on the UIs. Set true to gate both.
+auth: false
 
 # Heap for the shared OpenSearch container. Keep total under the box's RAM:
 # roughly opensearch_heap * 2 + 330MB per index (brain + ui) + 500MB for the OS.

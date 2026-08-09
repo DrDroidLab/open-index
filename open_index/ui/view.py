@@ -262,6 +262,64 @@ div[data-testid='stButton'] > button p{color:inherit;margin:0}
 """
 
 
+def mcp_client_config(url: str, server_name: str = "open-index") -> str:
+    """The JSON block to paste into an agent, as displayed in the How to use tab."""
+    import json
+
+    from open_index.mcp_config import normalize_mcp_url
+
+    return json.dumps(
+        {"mcpServers": {server_name: {"type": "http", "url": normalize_mcp_url(url)}}},
+        indent=2,
+    )
+
+
+# What each tool does, in the order an agent would reach for them. Kept here
+# rather than in the page so the list can be asserted against the tools the MCP
+# server actually registers — a stale tool list in the docs is worse than none.
+READ_TOOLS = [
+    ("navigation_guidelines()",
+     "The whole guide to this index: every doc_type, its fields, the "
+     "relationship vocabulary in use, and worked examples. Injected into the "
+     "MCP handshake, so an agent starts oriented."),
+    ("search_brain(query, doc_types, limit)",
+     "Free-text search, hybrid keyword + semantic. `doc_types` narrows it."),
+    ("get_entity(entity_id)",
+     "One entity with its outgoing AND incoming edges — the incoming direction "
+     "answers \"what else points at this?\"."),
+]
+
+WRITE_TOOLS = [
+    ("put_entity(doc_type, id, name, fields, related_to)",
+     "Add or update one entity. Upsert — the same id replaces it."),
+    ("put_entities([...])",
+     "A whole batch in one call, with optional shared provenance. Use this "
+     "rather than calling put_entity in a loop."),
+    ("create_doc_type(doc_type, description, fields, relationships, storage)",
+     "Define a new concept, when no existing doc_type fits."),
+]
+
+# What each tab is for. Ordered as they appear.
+TAB_GUIDE = [
+    ("Explore",
+     "Search the index, or browse by doc_type. Open an entity to see its fields, "
+     "its attribution, and every relationship in both directions — click through "
+     "to walk the graph."),
+    ("Map",
+     "The same relationships drawn. It auto-anchors on the most-connected "
+     "entities so it shows something immediately; click any node to expand it, "
+     "and narrow by doc_type to cut the noise."),
+    ("Analytics",
+     "What has been asked of this index, by which client (CLI, agent, this UI) "
+     "and how often. Zero-result searches are the interesting number: they are "
+     "the questions this index cannot yet answer."),
+    ("Jobs",
+     "Connectors that pull entities in on a schedule, with their last run."),
+    ("How to use",
+     "This page."),
+]
+
+
 def graph_theme(theme_type: Optional[str]) -> dict:
     """Label and edge colours for the map, given Streamlit's active theme.
 

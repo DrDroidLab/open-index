@@ -55,10 +55,6 @@ def test_empty_brain_runs_without_exceptions(empty):
     assert not empty.exception, [e.value for e in empty.exception]
 
 
-def test_tabs(populated):
-    assert [t.label for t in populated.tabs] == ["Explore", "Map", "Analytics", "Jobs"]
-
-
 # -- structure is visible without hunting for it ------------------------------
 
 
@@ -198,3 +194,58 @@ def test_row_css_inherits_colour_through_the_label_element():
     """Streamlit wraps button labels in <p>, which otherwise keeps its own
     colour and ignores the inherit on the button."""
     assert "> button p{color:inherit" in view.ROW_CSS
+
+
+# -- How to use ----------------------------------------------------------------
+
+
+def test_how_to_use_is_the_rightmost_tab(populated):
+    assert [t.label for t in populated.tabs][-1] == "How to use"
+
+
+def test_tab_guide_matches_the_tabs_actually_rendered(populated):
+    """A stale list of what-each-tab-does is worse than none."""
+    assert [t.label for t in populated.tabs] == [n for n, _ in view.TAB_GUIDE]
+
+
+def test_documented_tools_match_the_registered_mcp_tools(brain):
+    """The tab must not advertise a tool the server does not expose, nor miss one."""
+    pytest.importorskip("mcp")
+    import asyncio as _asyncio
+
+    from open_index.mcp_server import build_server
+
+    server = build_server(brain)
+    registered = {t.name for t in
+                  _asyncio.new_event_loop().run_until_complete(server.list_tools())}
+    documented = {name.split("(")[0] for name, _ in view.READ_TOOLS + view.WRITE_TOOLS}
+    assert documented == registered, (
+        f"docs vs server mismatch: only-in-docs={documented - registered}, "
+        f"only-on-server={registered - documented}")
+
+
+def test_read_only_tools_are_the_documented_read_set(brain):
+    pytest.importorskip("mcp")
+    import asyncio as _asyncio
+
+    from open_index.mcp_server import build_server
+
+    server = build_server(brain, read_only=True)
+    registered = {t.name for t in
+                  _asyncio.new_event_loop().run_until_complete(server.list_tools())}
+    assert {n.split("(")[0] for n, _ in view.READ_TOOLS} == registered
+
+
+def test_connection_block_is_valid_json_with_the_url():
+    import json
+
+    block = json.loads(view.mcp_client_config("https://x.example.com/demo/mcp", "demo"))
+    assert block["mcpServers"]["demo"]["url"] == "https://x.example.com/demo/mcp"
+    assert block["mcpServers"]["demo"]["type"] == "http"
+
+
+def test_connection_block_appends_the_mcp_path():
+    import json
+
+    block = json.loads(view.mcp_client_config("https://x.example.com/demo"))
+    assert block["mcpServers"]["open-index"]["url"].endswith("/mcp")

@@ -407,6 +407,76 @@ def render_analytics(brain: Brain) -> None:
         } for e in events], hide_index=True, use_container_width=True)
 
 
+def render_how_to_use(brain: Brain) -> None:
+    """Connecting an agent, the tools it gets, and what the other tabs are for.
+
+    Deliberately the rightmost tab: it is the page people come back to, not the
+    one they start on.
+    """
+    summary = view.summarize(brain)
+    mcp_url = os.environ.get("OPEN_INDEX_PUBLIC_URL", "")
+    read_only = os.environ.get("OPEN_INDEX_READ_ONLY", "").lower() in ("1", "true", "yes")
+
+    st.markdown(f"### Connect an agent to `{_esc(summary.name)}`")
+    st.caption(
+        "This index speaks MCP, so any MCP-capable agent can query it — and, "
+        "unless the endpoint is read-only, keep it current."
+    )
+
+    if mcp_url:
+        st.markdown("**1. Point your agent at this URL**")
+        st.code(view.mcp_client_config(mcp_url, server_name=summary.name), language="json")
+        st.caption("Paste into `.mcp.json` (Claude Code), `.cursor/mcp.json` (Cursor), "
+                   "or any MCP client's server config. Or generate it:")
+        st.code(f"open-index mcp-config --url {mcp_url} --name {summary.name} > .mcp.json",
+                language="bash")
+    else:
+        st.info("This explorer isn't configured with a public MCP URL "
+                "(`OPEN_INDEX_PUBLIC_URL`), so the connection block can't be shown.")
+        st.code("open-index mcp-config --brain <brain-dir> > .mcp.json", language="bash")
+
+    st.markdown("**2. Ask it something**")
+    st.caption("No briefing needed — the navigation guide below is injected into the "
+               "MCP handshake, so the agent knows this index's doc_types and "
+               "relationship vocabulary before its first turn.")
+
+    st.divider()
+    st.markdown("### Tools the agent gets")
+
+    st.markdown("**Reading**")
+    for name, what in view.READ_TOOLS:
+        st.markdown(f"- `{name}` — {what}")
+
+    st.markdown("**Writing**")
+    if read_only:
+        st.info("This endpoint is **read-only** — the write tools below are not "
+                "registered on it. Serve without `--read-only` to enable them.")
+    for name, what in view.WRITE_TOOLS:
+        st.markdown(f"- `{name}` — {what}")
+    st.caption("Entity ids are always `<doc_type>:<slug>`. Writes are validated "
+               "against the doc_type schema, and land in the search index (and on "
+               "disk, for `storage: file` types).")
+
+    st.divider()
+    st.markdown("### What each tab does")
+    for name, what in view.TAB_GUIDE:
+        st.markdown(f"- **{name}** — {what}")
+
+    st.divider()
+    st.markdown("### What's in this index right now")
+    st.caption(f"{summary.total_entities:,} entities across "
+               f"{len(summary.doc_types)} doc_types.")
+    if summary.doc_types:
+        st.table([{"doc_type": r.name, "entities": r.count,
+                   "source of truth": "files (git)" if r.storage == "file" else "search index",
+                   "what it holds": r.description or "—"}
+                  for r in summary.doc_types])
+
+    with st.expander("The full navigation guide the agent receives"):
+        st.code(brain.navigation_guidelines(include_writes=not read_only),
+                language="markdown")
+
+
 def render_jobs(brain: Brain) -> None:
     from open_index.connectors.runner import discover_connectors
     from open_index.scheduling import RunState
@@ -447,8 +517,10 @@ def main() -> None:
     st.markdown(view.ROW_CSS, unsafe_allow_html=True)
 
     options = render_sidebar(brain)
-    tab_explore, tab_map, tab_analytics, tab_jobs = st.tabs(
-        ["Explore", "Map", "Analytics", "Jobs"]
+    # "How to use" sits rightmost on purpose: it is the reference people return
+    # to, not the page they should land on.
+    tab_explore, tab_map, tab_analytics, tab_jobs, tab_help = st.tabs(
+        [name for name, _ in view.TAB_GUIDE]
     )
     with tab_explore:
         render_explore(brain, options)
@@ -458,6 +530,8 @@ def main() -> None:
         render_analytics(brain)
     with tab_jobs:
         render_jobs(brain)
+    with tab_help:
+        render_how_to_use(brain)
 
 
 main()
