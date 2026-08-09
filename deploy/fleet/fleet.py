@@ -164,17 +164,25 @@ def write_htpasswd_files(config: dict, values: dict) -> None:
     its own credentials, matching how the bearer tokens already behave.
     """
     directory = NGINX_DIR / "htpasswd.d"
-    if directory.exists():
-        shutil.rmtree(directory)
-    directory.mkdir(parents=True)
+    directory.mkdir(parents=True, exist_ok=True)
 
+    wanted = set()
     for entry in config["indexes"]:
         if not entry.get("ui", True):
             continue
         name = entry["name"]
+        wanted.add(name)
         path = directory / name
         path.write_text(f"{name}:{htpasswd_hash(values[ui_pw_var(name)])}\n")
         path.chmod(0o644)  # nginx runs as its own user inside the container
+
+    # Prune removed indexes by deleting files, never by replacing the directory.
+    # This directory is bind-mounted into nginx; recreating it swaps the inode
+    # and the running container keeps the old, now-empty one — the files are
+    # visibly present on the host while nginx reports "No such file".
+    for stale in directory.iterdir():
+        if stale.name not in wanted:
+            stale.unlink()
 
 
 # -- rendering ----------------------------------------------------------------
