@@ -1,0 +1,60 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to a PR makes the in-flight run irrelevant.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor declared in pyproject (requires-python) and the current
+        # release. An untested floor is a claim that quietly stops being true.
+        python-version: ["3.10", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        # Deliberately not the `semantic` extra: fastembed pulls onnxruntime and
+        # downloads a ~90MB model at runtime. The semantic tests use a fake
+        # embedding provider, and numpy is the only piece of that extra they
+        # actually need.
+        run: pip install -e '.[ui,mcp,opensearch,serve,dev]' numpy
+
+      - name: Check the optional deps are importable
+        # Four test modules call pytest.importorskip("mcp") / ("streamlit"). If
+        # the install above ever breaks, those ~60 tests would skip and the job
+        # would still go green — so fail here instead.
+        run: python -c "import mcp, streamlit, streamlit_agraph, opensearchpy, numpy"
+
+      - name: Run tests
+        # -rs lists skip reasons, so a suite that stops running is visible in
+        # the log rather than hidden behind a passing tick.
+        run: pytest -q -rs
+
+      - name: Validate the example brains
+        # Schemas and entities drift out of sync with the code; this is the same
+        # check CONTRIBUTING asks for in a PR.
+        run: |
+          for brain in examples/*/; do
+            echo "--- $brain"
+            open-index validate --brain "$brain"
+          done

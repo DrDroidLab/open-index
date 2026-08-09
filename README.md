@@ -1,5 +1,6 @@
 ### Open Index
 
+[![tests](https://github.com/DrDroidLab/open-index/actions/workflows/tests.yml/badge.svg)](https://github.com/DrDroidLab/open-index/actions/workflows/tests.yml)
 [![Join our Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/AQ3tusPtZn)
 
 **Open Index** is a tool for building domain specific accurate, structured data that agents can actually operate on — and for keeping that data correct as things change.
@@ -376,6 +377,11 @@ pip install -e '.[all]'          # core + UI (Streamlit) + MCP server
 pytest                            # run the test suite
 ```
 
+Note that `pytest` **skips** the MCP and UI suites when those extras aren't
+installed, so a green run on a partial install doesn't mean much — use `[all]`
+(or at least `[ui,mcp]`) locally. CI installs them explicitly and fails if they
+are missing.
+
 ### Making a change
 
 1. **Open an issue first** for anything non-trivial (new backend, schema change,
@@ -385,7 +391,8 @@ pytest                            # run the test suite
 4. If you touched a brain in `examples/`, run `open-index validate --brain examples/<name>`
    so schemas and entities stay consistent.
 5. Update the README / `entity-management.md` when you change user-facing behaviour.
-6. Open a PR describing *what* changed and *why*, and link the issue.
+6. Open a PR describing *what* changed and *why*, and link the issue. CI runs the
+   test suite on Python 3.10 and 3.13 and validates every brain in `examples/`.
 
 ### Good first contributions
 
