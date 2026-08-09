@@ -27,10 +27,11 @@ x-brain-service: &brain-service
     # The container runs as uid 10001, so this directory must be writable by
     # it — otherwise indexing fails on a bind mount. See docs/deployment.md.
     - ${BRAIN_DIR:-./brain}:/brain
-    # The local embedding model (~90MB) is downloaded on first use. Without a
-    # persistent cache it is re-downloaded every time a container is recreated,
-    # which turns a restart into a multi-minute stall.
-    - model-cache:/home/openindex/.cache
+    # The local embedding model (~90MB) is downloaded on first use. fastembed
+    # otherwise caches it under a temp directory, which a container throws away
+    # on every recreate — turning each restart into a fresh download.
+    # OPEN_INDEX_EMBEDDING_CACHE (below) points it here.
+    - model-cache:/home/openindex/model-cache
   environment: &brain-env
     OPEN_INDEX_TOKEN: ${OPEN_INDEX_TOKEN:-}
     # What the startup banner advertises. Defaulted because auto-detection is
@@ -39,6 +40,9 @@ x-brain-service: &brain-service
     # published port on the host is the address that actually works. Override
     # with the external name when this sits behind a proxy or on a remote host.
     OPEN_INDEX_PUBLIC_URL: ${OPEN_INDEX_PUBLIC_URL:-http://localhost:${PORT:-8080}/mcp}
+    # Where the local embedding model is cached — backed by the model-cache
+    # volume so it survives container recreates.
+    OPEN_INDEX_EMBEDDING_CACHE: /home/openindex/model-cache
     # Optional: semantic search via an OpenAI-compatible embedding API.
     OPEN_INDEX_EMBEDDING_BASE_URL: ${OPEN_INDEX_EMBEDDING_BASE_URL:-}
     OPEN_INDEX_EMBEDDING_API_KEY: ${OPEN_INDEX_EMBEDDING_API_KEY:-}

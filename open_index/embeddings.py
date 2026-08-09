@@ -55,7 +55,8 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 class FastEmbedProvider:
     """Local ONNX embedding via fastembed (default: BAAI/bge-small-en-v1.5)."""
 
-    def __init__(self, model: str = "BAAI/bge-small-en-v1.5", dim: Optional[int] = None):
+    def __init__(self, model: str = "BAAI/bge-small-en-v1.5", dim: Optional[int] = None,
+                 cache_dir: Optional[str] = None):
         try:
             from fastembed import TextEmbedding
         except ImportError as exc:  # pragma: no cover - optional dependency
@@ -64,7 +65,13 @@ class FastEmbedProvider:
             ) from exc
         self.model = model
         self._dim = dim or 384
-        self._embedder = TextEmbedding(model_name=model)
+        # fastembed defaults to a temp directory, which containers throw away on
+        # every recreate — a ~90MB re-download each restart. `cache_dir` (from
+        # OPEN_INDEX_EMBEDDING_CACHE) lets a deployment point it somewhere
+        # persistent; passing None keeps fastembed's own default.
+        self.cache_dir = cache_dir
+        kwargs = {"cache_dir": cache_dir} if cache_dir else {}
+        self._embedder = TextEmbedding(model_name=model, **kwargs)
 
     @property
     def name(self) -> str:
@@ -276,7 +283,9 @@ def get_embedding_provider(config) -> Optional[EmbeddingProvider]:
     model = os.environ.get("OPEN_INDEX_EMBEDDING_MODEL")
     dim = os.environ.get("OPEN_INDEX_EMBEDDING_DIM")
     local_model = (config.search.embedding_model if config else None) or "BAAI/bge-small-en-v1.5"
-    key = (base_url, api_key, model, dim, None if base_url else local_model)
+    cache_dir = os.environ.get("OPEN_INDEX_EMBEDDING_CACHE")
+    key = (base_url, api_key, model, dim,
+           None if base_url else (local_model, cache_dir))
     if key in _provider_cache:
         return _provider_cache[key]
 
@@ -302,7 +311,9 @@ def get_embedding_provider(config) -> Optional[EmbeddingProvider]:
             )
         else:
             try:
-                provider = FastEmbedProvider(local_model)
+                provider = FastEmbedProvider(
+                    local_model, cache_dir=os.environ.get("OPEN_INDEX_EMBEDDING_CACHE")
+                )
             except Exception as exc:  # pragma: no cover
                 _warn_once(f"Could not create FastEmbedProvider: {exc}")
 

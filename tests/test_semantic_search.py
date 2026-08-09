@@ -260,3 +260,73 @@ def test_weight_override_does_not_mutate_config(tmp_path):
     brain = _open_support_with_embeddings(tmp_path)
     brain.search("payment", doc_types=["issue"], semantic_weight=1.0)
     assert brain.config.search.semantic_weight == 0.3
+
+
+# -- embedding cache location -------------------------------------------------
+#
+# fastembed defaults to a temp directory, which a container discards on every
+# recreate — a ~90MB re-download per restart. Deployments point it somewhere
+# persistent via OPEN_INDEX_EMBEDDING_CACHE.
+
+
+def test_cache_dir_is_passed_through_to_fastembed(monkeypatch):
+    captured = {}
+
+    class FakeTextEmbedding:
+        def __init__(self, model_name, **kwargs):
+            captured.update(model_name=model_name, **kwargs)
+
+    import sys
+    import types
+
+    fake = types.ModuleType("fastembed")
+    fake.TextEmbedding = FakeTextEmbedding
+    monkeypatch.setitem(sys.modules, "fastembed", fake)
+
+    from open_index.embeddings import FastEmbedProvider
+
+    FastEmbedProvider("some/model", cache_dir="/var/cache/oi")
+    assert captured["cache_dir"] == "/var/cache/oi"
+
+
+def test_no_cache_dir_leaves_fastembed_default(monkeypatch):
+    """Passing cache_dir=None explicitly would override fastembed's default."""
+    captured = {}
+
+    class FakeTextEmbedding:
+        def __init__(self, model_name, **kwargs):
+            captured.update(model_name=model_name, **kwargs)
+
+    import sys
+    import types
+
+    fake = types.ModuleType("fastembed")
+    fake.TextEmbedding = FakeTextEmbedding
+    monkeypatch.setitem(sys.modules, "fastembed", fake)
+
+    from open_index.embeddings import FastEmbedProvider
+
+    FastEmbedProvider("some/model")
+    assert "cache_dir" not in captured
+
+
+def test_provider_cache_is_keyed_on_the_cache_dir(monkeypatch, tmp_path):
+    """Two different cache dirs must not share one cached provider."""
+    import open_index.embeddings as emb
+    from open_index.config import load_brain_config
+
+    emb._provider_cache.clear()
+    config = load_brain_config(_copy_support(tmp_path))
+
+    monkeypatch.setenv("OPEN_INDEX_EMBEDDING_CACHE", "/cache/a")
+    emb.get_embedding_provider(config)
+    monkeypatch.setenv("OPEN_INDEX_EMBEDDING_CACHE", "/cache/b")
+    emb.get_embedding_provider(config)
+
+    assert len(emb._provider_cache) == 2, "cache_dir is not part of the cache key"
+
+
+def _copy_support(tmp_path):
+    dst = tmp_path / "support"
+    shutil.copytree(SUPPORT, dst)
+    return dst
