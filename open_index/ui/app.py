@@ -22,7 +22,7 @@ from time import perf_counter
 import streamlit as st
 
 from open_index.brain import Brain
-from open_index.graph import ContextGraph, build_graph
+from open_index.graph import ContextGraph, build_graph, build_overview_graph
 from open_index.ui import view
 
 st.set_page_config(page_title="Open Index", page_icon="🧠", layout="wide")
@@ -237,48 +237,59 @@ def render_entity(brain: Brain, entity_id: str) -> None:
 # --------------------------------------------------------------------------- #
 
 def render_map(brain: Brain) -> None:
+    """The whole index at a glance: every entity, coloured by doc_type.
+
+    Anchoring on one entity is the wrong default for someone who has never seen
+    the index — they have no entity in mind. This shows the shape of the whole
+    thing and lets them subtract from it.
+    """
     summary = view.summarize(brain)
     populated = [r.name for r in summary.doc_types if r.count]
     if not populated:
         st.info("No entities to map yet. Add some and run `open-index index`.")
         return
 
-    chosen_types = st.multiselect(
-        "Doc types to include", populated, default=populated,
-        help="Narrow the map to the concepts you care about.",
+    chosen = st.multiselect(
+        "Doc types shown", populated, default=populated,
+        help="Uncheck a type to drop it and its edges from the map.",
     )
-    scope = chosen_types or populated
+    scope = chosen or populated
 
-    # Auto-anchor rather than waiting for a selection. The old UI drew nothing
-    # until you picked entities, which looked like a broken canvas.
-    auto = view.default_anchors(brain, scope)
-    catalog = {f"{e.name}  ({e.id})": e.id
-               for e in brain.backend.all_entities(scope)}
-    auto_labels = [label for label, eid in catalog.items() if eid in auto]
-
-    picked = st.multiselect(
-        "Anchors", list(catalog), default=auto_labels,
-        help="Starting points. Click any node in the map to expand it.",
-    )
-    anchors = [catalog[label] for label in picked]
-
-    expanded = st.session_state.get("expanded", set())
-    if expanded:
-        cols = st.columns([4, 1])
-        cols[0].caption(f"expanded: {', '.join(sorted(expanded))}")
-        if cols[1].button("↺ reset"):
-            st.session_state["expanded"] = set()
+    focus = st.session_state.get("map_focus")
+    if focus:
+        cols = st.columns([5, 1])
+        cols[0].caption(f"Focused on `{focus}` and its immediate neighbours.")
+        if cols[1].button("↩ show all"):
+            st.session_state["map_focus"] = None
             st.rerun()
+        graph = build_graph(brain, [focus], depth=1)
+    else:
+        graph = build_overview_graph(brain, scope, limit=view.MAX_GRAPH_NODES)
 
-    anchors = list(dict.fromkeys(anchors + list(expanded)))
-    if not anchors:
-        st.info("Select at least one anchor above.")
-        return
+    total = sum(r.count for r in summary.doc_types if r.name in scope)
+    if not focus and len(graph.nodes) < total:
+        st.warning(
+            f"Showing the {len(graph.nodes)} most-connected of {total} entities. "
+            "Narrow the doc types above to see the rest."
+        )
 
-    graph = build_graph(brain, anchors, depth=1)
-    st.caption(f"{len(graph.nodes)} nodes · {len(graph.edges)} edges — "
-               "click a node to expand its relationships")
-    render_graph(brain, graph)
+    canvas, legend = st.columns([4, 1])
+    with canvas:
+        st.caption(f"{len(graph.nodes)} nodes · {len(graph.edges)} edges — "
+                   "hover for detail, click a node to focus on it")
+        render_graph(brain, graph)
+    with legend:
+        st.markdown("**Legend**")
+        for row in view.legend_rows(brain, graph):
+            st.markdown(
+                f"{_dot(row['color'])} `{_esc(row['doc_type'])}`"
+                f" <span style='opacity:.6'>{row['count']}</span>",
+                unsafe_allow_html=True,
+            )
+        if graph.edges:
+            st.markdown("---")
+            st.caption("Edges are `related_to` links. Hover one to see which "
+                       "relationship it is.")
 
     # streamlit-agraph doesn't paint on its first render inside a tab (the canvas
     # mounts with zero size). One forced rerun remounts it with the tab active.
@@ -298,20 +309,29 @@ def render_graph(brain: Brain, graph: ContextGraph) -> None:
 
     palette = view.graph_theme(_theme_type())
 
+    # Edge labels are dropped once there are many of them: overlapping text on
+    # every line is what made the map unreadable. The relationship is still on
+    # the hover tooltip, which is where you look when you care about one edge.
+    label_edges = len(graph.edges) <= view.MAX_LABELLED_EDGES
+
     nodes = [
-        Node(id=n.id, label=n.label, color=n.color,
-             size=22 if n.is_anchor else 16, shape="dot",
-             title=f"{n.doc_type} · {n.id}",
+        Node(id=n.id, label=view.truncate_label(n.label), color=n.color,
+             size=22 if n.is_anchor else 14, shape="dot",
+             title=view.node_tooltip(n.id, n.label, n.doc_type,
+                                     {k: v for k, v in (n.data or {}).items()
+                                      if k not in ("id", "doc_type", "related_to")}),
              # strokeWidth 0 removes vis's white halo, which on a dark canvas
              # turns every label into heavy outlined text.
-             font={"color": palette["node_label"], "size": 15,
+             font={"color": palette["node_label"], "size": 14,
                    "strokeWidth": palette["stroke_width"], "face": "sans-serif"})
         for n in graph.nodes
     ]
     edges = [
-        Edge(source=e.source, target=e.target, label=e.meaning,
+        Edge(source=e.source, target=e.target,
+             label=e.meaning if label_edges else "",
+             title=view.edge_tooltip(e.source, e.target, e.meaning),
              color=palette["edge"],
-             font={"color": palette["edge_label"], "size": 12,
+             font={"color": palette["edge_label"], "size": 11,
                    "strokeWidth": palette["stroke_width"], "align": "middle",
                    "face": "sans-serif"})
         for e in graph.edges
@@ -335,8 +355,8 @@ def render_graph(brain: Brain, graph: ContextGraph) -> None:
     _left, middle, _right = st.columns([1, 20, 1])
     with middle:
         clicked = agraph(nodes=nodes, edges=edges, config=config)
-    if clicked and clicked not in st.session_state.get("expanded", set()):
-        st.session_state.setdefault("expanded", set()).add(clicked)
+    if clicked and clicked != st.session_state.get("map_focus"):
+        st.session_state["map_focus"] = clicked
         st.rerun()
 
 

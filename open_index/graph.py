@@ -69,6 +69,62 @@ def _label_for(brain: Brain, entity) -> str:
     return entity.label_for(label_field)
 
 
+def build_overview_graph(
+    brain: Brain,
+    doc_types: Optional[list[str]] = None,
+    limit: int = 250,
+) -> ContextGraph:
+    """Every entity of the given doc_types, with the edges that run between them.
+
+    The anchor-and-expand view answers "what is around this one thing?". This
+    answers the other question — "what does this index look like?" — which is
+    what you want when you have never seen the index before and have no entity
+    in mind to anchor on.
+
+    Only edges whose *both* ends are in scope are drawn: a dangling half-edge to
+    a filtered-out doc_type would render as an unexplained line to nowhere.
+
+    `limit` caps the node count, keeping the most-connected entities. A force
+    layout with thousands of nodes is neither readable nor quick, and the
+    best-connected ones are the ones worth seeing. Callers should report when
+    the cap bit — silently showing a subset reads as "this is everything".
+    """
+    entities = brain.backend.all_entities(doc_types)
+
+    degree: dict[str, int] = {e.id: 0 for e in entities}
+    for entity in entities:
+        for rel in entity.related_to:
+            degree[entity.id] = degree.get(entity.id, 0) + 1
+            if rel.target in degree:
+                degree[rel.target] = degree.get(rel.target, 0) + 1
+
+    if len(entities) > limit:
+        entities = sorted(entities, key=lambda e: (-degree.get(e.id, 0), e.id))[:limit]
+
+    in_scope = {e.id for e in entities}
+    graph = ContextGraph(anchors=[])
+    for entity in entities:
+        graph.nodes.append(GraphNode(
+            id=entity.id,
+            label=_label_for(brain, entity),
+            doc_type=entity.doc_type,
+            color=_color_for(brain, entity.doc_type),
+            depth=0,
+            data=entity.to_json(),
+        ))
+
+    seen: set[tuple[str, str, str]] = set()
+    for entity in entities:
+        for source, target, meaning in brain.backend.relationships_from(entity.id):
+            if target not in in_scope:
+                continue
+            key = (source, target, meaning)
+            if key not in seen:
+                seen.add(key)
+                graph.edges.append(GraphEdge(source, target, meaning))
+    return graph
+
+
 def build_graph(brain: Brain, anchors: str | list[str], depth: int = 1) -> ContextGraph:
     """Build the map around one or more anchor entities.
 

@@ -289,3 +289,73 @@ def test_declared_but_unused_relationships_show_zero(brain):
 def test_help_tab_is_first_in_the_guide():
     assert view.TAB_GUIDE[0][0] == view.HELP_TAB
     assert [n for n, _ in view.TAB_GUIDE][:3] == ["?", "Schema", "Explore"]
+
+
+# -- map readability -----------------------------------------------------------
+#
+# Long entity names drawn next to their dot were the main thing making the map
+# unreadable; the full text moves to the hover tooltip.
+
+
+def test_short_labels_are_left_alone():
+    assert view.truncate_label("Checkout") == "Checkout"
+
+
+def test_long_labels_are_truncated_with_an_ellipsis():
+    long = "N412NL 2026-05-18 — Same WING A.ICE VLV OPEN L message five weeks after"
+    out = view.truncate_label(long)
+    assert len(out) <= view.MAX_NODE_LABEL + 1
+    assert out.endswith("…")
+
+
+def test_truncation_collapses_whitespace():
+    assert view.truncate_label("a   b") == "a b"
+
+
+def test_truncation_does_not_end_on_punctuation():
+    assert not view.truncate_label("Wing anti-ice valve, left side").rstrip("…").endswith(",")
+
+
+def test_node_tooltip_carries_the_full_name_and_type():
+    tip = view.node_tooltip("issue:x", "A very long name that got truncated",
+                            "issue", {"severity": "high"})
+    assert "A very long name that got truncated" in tip
+    assert "issue:x" in tip
+    assert "severity: high" in tip
+
+
+def test_node_tooltip_skips_empty_fields_and_caps_length():
+    tip = view.node_tooltip("t:x", "N", "t",
+                            {f"f{i}": "v" for i in range(20)} | {"blank": ""})
+    assert "blank" not in tip
+    assert len(tip.splitlines()) <= 7
+
+
+def test_edge_tooltip_names_the_relationship():
+    tip = view.edge_tooltip("a:1", "b:2", "depends on")
+    assert "depends on" in tip and "a:1" in tip and "b:2" in tip
+
+
+def test_edge_tooltip_handles_an_unlabelled_edge():
+    assert "related" in view.edge_tooltip("a:1", "b:2", "")
+
+
+def test_legend_describes_what_is_on_screen(brain):
+    from open_index.graph import build_overview_graph
+
+    graph = build_overview_graph(brain, ["product", "issue"])
+    rows = view.legend_rows(brain, graph)
+    assert {r["doc_type"] for r in rows} <= {"product", "issue"}
+    assert all(r["color"].startswith("#") for r in rows)
+    assert sum(r["count"] for r in rows) == len(graph.nodes)
+
+
+def test_legend_is_ordered_by_count(brain):
+    from open_index.graph import build_overview_graph
+
+    rows = view.legend_rows(brain, build_overview_graph(brain))
+    assert [r["count"] for r in rows] == sorted([r["count"] for r in rows], reverse=True)
+
+
+def test_graph_width_fits_beside_the_legend():
+    assert view.GRAPH_WIDTH <= 1000

@@ -207,7 +207,9 @@ def semantic_weight_for(mode: str) -> Optional[float]:
 # does `f"{width}px"`, so a CSS string like "100%" becomes the invalid value
 # "100%px", the canvas fails to size, and the graph is stranded in a corner
 # instead of centred.
-GRAPH_WIDTH = 1200
+# Sized to sit beside the legend column rather than to fill the page: at the
+# old full-page width the canvas overflowed its column once the legend arrived.
+GRAPH_WIDTH = 950
 GRAPH_HEIGHT = 650
 
 # Past this many nodes a force layout keeps drifting, so we slow it down rather
@@ -383,6 +385,65 @@ def schema_relationship_rows(brain, doc_type_name: str) -> list[dict]:
                 "in use": count,
             })
     return rows
+
+
+# Node labels are drawn next to the dot, so a long one overlaps its neighbours
+# and the map becomes unreadable. The full text lives in the hover tooltip.
+MAX_NODE_LABEL = 22
+
+# Cap on nodes drawn at once. Past this a force layout stops settling and the
+# picture stops being readable regardless.
+MAX_GRAPH_NODES = 250
+
+# Above this many edges, their labels are hidden: overlapping relationship text
+# on every line is the main thing that made the map unreadable.
+MAX_LABELLED_EDGES = 60
+
+
+def truncate_label(text: str, limit: int = MAX_NODE_LABEL) -> str:
+    """Shorten a node label, breaking on a word boundary where one is close."""
+    text = " ".join(str(text).split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)
+    head = cut[0] if len(cut) > 1 and len(cut[0]) >= limit - 8 else text[:limit]
+    return head.rstrip(" ,;:—-") + "…"
+
+
+def node_tooltip(entity_id: str, name: str, doc_type: str,
+                 fields: Optional[dict] = None) -> str:
+    """What hovering a node shows: the full name, its type, and a few fields.
+
+    vis renders this as plain text, so it is newline-separated rather than HTML.
+    """
+    lines = [name, f"{doc_type} · {entity_id}"]
+    for key, value in list((fields or {}).items()):
+        if value in (None, "") or key == "name":
+            continue
+        text = " ".join(str(value).split())
+        lines.append(f"{key}: {text[:90]}{'…' if len(text) > 90 else ''}")
+        if len(lines) >= 7:   # a tooltip taller than the graph helps nobody
+            break
+    return "\n".join(lines)
+
+
+def edge_tooltip(source: str, target: str, meaning: str) -> str:
+    return f"{source}\n  —[{meaning or 'related'}]→\n{target}"
+
+
+def legend_rows(brain, graph) -> list[dict]:
+    """Doc types present in a drawn graph, with their colour and node count.
+
+    Built from the graph rather than the schema so it describes what is on
+    screen: a doc_type filtered out, or cut by the node cap, should not appear.
+    """
+    counts: dict[str, int] = {}
+    for node in graph.nodes:
+        counts[node.doc_type] = counts.get(node.doc_type, 0) + 1
+    return [
+        {"doc_type": name, "count": counts[name], "color": color_for(brain, name)}
+        for name in sorted(counts, key=lambda n: (-counts[n], n))
+    ]
 
 
 def graph_theme(theme_type: Optional[str]) -> dict:

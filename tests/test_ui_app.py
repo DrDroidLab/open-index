@@ -5,6 +5,7 @@ browser would. These guard the specific complaints that prompted the rebuild:
 structure you had to hunt for, and a map that opened blank.
 """
 
+import os
 import shutil
 from pathlib import Path
 
@@ -84,20 +85,27 @@ def test_empty_brain_sidebar_explains_what_to_do(empty):
 # -- the map no longer opens blank --------------------------------------------
 
 
-def test_map_preselects_anchors(populated):
-    """The original complaint: nothing rendered until you made a selection."""
-    anchors = next(m for m in populated.multiselect if m.label == "Anchors")
-    assert anchors.value, "map opened with no anchors selected"
-
-
-def test_map_anchor_options_are_entity_labels(populated):
-    anchors = next(m for m in populated.multiselect if m.label == "Anchors")
-    assert all("(" in option and ")" in option for option in anchors.options)
+def test_map_draws_without_any_selection(populated):
+    """The original complaint: nothing rendered until you made a selection. The
+    map now opens on the whole index, so there is always something to see."""
+    populated.tabs[3].run()  # Map
+    assert not populated.exception
 
 
 def test_map_doc_type_filter_defaults_to_everything(populated):
-    types = next(m for m in populated.multiselect if m.label == "Doc types to include")
+    types = next(m for m in populated.multiselect if m.label == "Doc types shown")
     assert set(types.value) == set(types.options)
+    assert types.options, "every populated doc_type should be filterable"
+
+
+def test_map_filter_lists_only_populated_doc_types(populated, tmp_path):
+    """A doc_type with no entities would be a dead checkbox."""
+    from open_index.brain import Brain
+    from open_index.schema import DocType
+
+    types = next(m for m in populated.multiselect if m.label == "Doc types shown")
+    counts = Brain.open(os.environ["OPEN_INDEX_DIR"]).counts()
+    assert all(counts.get(name, 0) > 0 for name in types.options)
 
 
 # -- explore ------------------------------------------------------------------
