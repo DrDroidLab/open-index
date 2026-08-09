@@ -309,33 +309,8 @@ def render_graph(brain: Brain, graph: ContextGraph) -> None:
 
     palette = view.graph_theme(_theme_type())
 
-    # Edge labels are dropped once there are many of them: overlapping text on
-    # every line is what made the map unreadable. The relationship is still on
-    # the hover tooltip, which is where you look when you care about one edge.
-    label_edges = len(graph.edges) <= view.MAX_LABELLED_EDGES
-
-    nodes = [
-        Node(id=n.id, label=view.truncate_label(n.label), color=n.color,
-             size=22 if n.is_anchor else 14, shape="dot",
-             title=view.node_tooltip(n.id, n.label, n.doc_type,
-                                     {k: v for k, v in (n.data or {}).items()
-                                      if k not in ("id", "doc_type", "related_to")}),
-             # strokeWidth 0 removes vis's white halo, which on a dark canvas
-             # turns every label into heavy outlined text.
-             font={"color": palette["node_label"], "size": 14,
-                   "strokeWidth": palette["stroke_width"], "face": "sans-serif"})
-        for n in graph.nodes
-    ]
-    edges = [
-        Edge(source=e.source, target=e.target,
-             label=e.meaning if label_edges else "",
-             title=view.edge_tooltip(e.source, e.target, e.meaning),
-             color=palette["edge"],
-             font={"color": palette["edge_label"], "size": 11,
-                   "strokeWidth": palette["stroke_width"], "align": "middle",
-                   "face": "sans-serif"})
-        for e in graph.edges
-    ]
+    nodes = [Node(**spec) for spec in view.graph_node_specs(graph)]
+    edges = [Edge(**spec) for spec in view.graph_edge_specs(graph, palette["edge"])]
 
     busy = len(graph.nodes) > view.BUSY_GRAPH_NODES
     config = Config(

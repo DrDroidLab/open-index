@@ -297,23 +297,42 @@ def test_help_tab_is_first_in_the_guide():
 # unreadable; the full text moves to the hover tooltip.
 
 
-def test_short_labels_are_left_alone():
-    assert view.truncate_label("Checkout") == "Checkout"
+def test_nodes_carry_no_label(brain):
+    """Entity names are long and arbitrary; drawn beside every dot they overlap
+    each other. Identity comes from the tooltip instead."""
+    from open_index.graph import build_overview_graph
+
+    specs = view.graph_node_specs(build_overview_graph(brain))
+    assert specs
+    assert all(s["label"] == "" for s in specs)
+    # Empty string, not None: None serialises to null and vis draws that.
+    assert all(s["label"] is not None for s in specs)
 
 
-def test_long_labels_are_truncated_with_an_ellipsis():
-    long = "N412NL 2026-05-18 — Same WING A.ICE VLV OPEN L message five weeks after"
-    out = view.truncate_label(long)
-    assert len(out) <= view.MAX_NODE_LABEL + 1
-    assert out.endswith("…")
+def test_every_node_carries_its_identity_on_hover(brain):
+    from open_index.graph import build_overview_graph
+
+    specs = {s["id"]: s for s in view.graph_node_specs(build_overview_graph(brain))}
+    spec = specs["product:checkout"]
+    assert "Checkout" in spec["title"]
+    assert "product:checkout" in spec["title"]
 
 
-def test_truncation_collapses_whitespace():
-    assert view.truncate_label("a   b") == "a b"
+def test_edges_carry_no_label_but_name_the_relationship(brain):
+    from open_index.graph import build_overview_graph
+
+    specs = view.graph_edge_specs(build_overview_graph(brain), "#ccc")
+    assert specs
+    assert all(s["label"] == "" for s in specs)
+    assert any("has common issue" in s["title"] for s in specs)
 
 
-def test_truncation_does_not_end_on_punctuation():
-    assert not view.truncate_label("Wing anti-ice valve, left side").rstrip("…").endswith(",")
+def test_node_colour_comes_from_the_doc_type(brain):
+    from open_index.graph import build_overview_graph
+
+    graph = build_overview_graph(brain)
+    by_id = {n.id: n.color for n in graph.nodes}
+    assert all(s["color"] == by_id[s["id"]] for s in view.graph_node_specs(graph))
 
 
 def test_node_tooltip_carries_the_full_name_and_type():

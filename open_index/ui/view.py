@@ -387,27 +387,9 @@ def schema_relationship_rows(brain, doc_type_name: str) -> list[dict]:
     return rows
 
 
-# Node labels are drawn next to the dot, so a long one overlaps its neighbours
-# and the map becomes unreadable. The full text lives in the hover tooltip.
-MAX_NODE_LABEL = 22
-
 # Cap on nodes drawn at once. Past this a force layout stops settling and the
 # picture stops being readable regardless.
 MAX_GRAPH_NODES = 250
-
-# Above this many edges, their labels are hidden: overlapping relationship text
-# on every line is the main thing that made the map unreadable.
-MAX_LABELLED_EDGES = 60
-
-
-def truncate_label(text: str, limit: int = MAX_NODE_LABEL) -> str:
-    """Shorten a node label, breaking on a word boundary where one is close."""
-    text = " ".join(str(text).split())
-    if len(text) <= limit:
-        return text
-    cut = text[:limit].rsplit(" ", 1)
-    head = cut[0] if len(cut) > 1 and len(cut[0]) >= limit - 8 else text[:limit]
-    return head.rstrip(" ,;:—-") + "…"
 
 
 def node_tooltip(entity_id: str, name: str, doc_type: str,
@@ -443,6 +425,47 @@ def legend_rows(brain, graph) -> list[dict]:
     return [
         {"doc_type": name, "count": counts[name], "color": color_for(brain, name)}
         for name in sorted(counts, key=lambda n: (-counts[n], n))
+    ]
+
+
+def graph_node_specs(graph, anchor_size: int = 20, size: int = 13) -> list[dict]:
+    """Node payloads for the map renderer.
+
+    Nothing is labelled on the canvas. Entity names are long and arbitrary —
+    drawn beside every dot they overlap each other and their own edges, and no
+    amount of truncation fixes a dense graph. The picture carries shape and
+    colour; identity comes from the tooltip, and the legend explains the colours.
+
+    `label` is an empty string rather than None: None serialises to null and vis
+    draws that literally.
+    """
+    specs = []
+    for node in graph.nodes:
+        fields = {k: v for k, v in (node.data or {}).items()
+                  if k not in ("id", "doc_type", "related_to")}
+        specs.append({
+            "id": node.id,
+            "label": "",
+            "color": node.color,
+            "shape": "dot",
+            "size": anchor_size if node.is_anchor else size,
+            "title": node_tooltip(node.id, node.label, node.doc_type, fields),
+        })
+    return specs
+
+
+def graph_edge_specs(graph, color: str) -> list[dict]:
+    """Edge payloads. Unlabelled for the same reason as nodes — the relationship
+    is on the tooltip."""
+    return [
+        {
+            "source": edge.source,
+            "target": edge.target,
+            "label": "",
+            "title": edge_tooltip(edge.source, edge.target, edge.meaning),
+            "color": color,
+        }
+        for edge in graph.edges
     ]
 
 
