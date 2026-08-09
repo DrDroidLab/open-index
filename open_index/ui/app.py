@@ -586,7 +586,7 @@ def main() -> None:
     st.markdown(view.ROW_CSS, unsafe_allow_html=True)
 
     options = render_sidebar(brain)
-    # Streamlit opens the first tab, so "?" leftmost means a first-time visitor
+    # Streamlit opens the first tab, so the help page leftmost means a visitor
     # lands on the explanation rather than having to find it.
     tab_help, tab_schema, tab_explore, tab_map, tab_analytics, tab_jobs = st.tabs(
         [name for name, _ in view.TAB_GUIDE]

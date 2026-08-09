@@ -288,7 +288,7 @@ def test_declared_but_unused_relationships_show_zero(brain):
 
 def test_help_tab_is_first_in_the_guide():
     assert view.TAB_GUIDE[0][0] == view.HELP_TAB
-    assert [n for n, _ in view.TAB_GUIDE][:3] == ["?", "Schema", "Explore"]
+    assert [n for n, _ in view.TAB_GUIDE][:3] == ["How to use?", "Schema", "Explore"]
 
 
 # -- map readability -----------------------------------------------------------

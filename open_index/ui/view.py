@@ -302,8 +302,8 @@ WRITE_TOOLS = [
 ]
 
 # The tab label for the help page. Leftmost, so it is what a first-time visitor
-# lands on, and a bare question mark so it reads as help rather than content.
-HELP_TAB = "?"
+# lands on, and phrased as the question they are actually asking.
+HELP_TAB = "How to use?"
 
 # What each tab is for, in the order they appear. This list *is* the tab order —
 # the page builds its tabs from it, so the two cannot drift apart.
