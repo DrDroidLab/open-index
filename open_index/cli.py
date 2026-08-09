@@ -452,6 +452,12 @@ def serve(
         help="Externally reachable URL, when behind a proxy/tunnel/load balancer. "
              "Only used to print correct connection details.",
     ),
+    allowed_host: Optional[list[str]] = typer.Option(
+        None, "--allowed-host", envvar="OPEN_INDEX_ALLOWED_HOSTS",
+        help="Host header(s) to accept, when behind a proxy or load balancer. "
+             "Repeatable. The host from --public-url is added automatically. "
+             "Use '*' to disable the check entirely (trusted proxy only).",
+    ),
     read_only: bool = typer.Option(
         False, "--read-only",
         help="Opt out of default read+write mode and expose only read tools.",
@@ -502,7 +508,8 @@ def serve(
     typer.echo("")
 
     serve_http(str(root), host=host, port=port, token=token, read_only=read_only,
-               warn_unauthenticated=False)
+               warn_unauthenticated=False, public_url=public_url,
+               allowed_hosts=list(allowed_host or []))
 
 
 if __name__ == "__main__":  # pragma: no cover - module entry point

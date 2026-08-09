@@ -1,0 +1,39 @@
+# The indexes served by this host.
+#
+# Each entry becomes one brain, reachable at <public_base_url>/<name>/mcp with
+# an explorer UI at <public_base_url>/<name>/ui.
+# They share a single OpenSearch cluster (one index per brain), which is what
+# makes adding an index cheap: a ~250MB container, not another cluster.
+#
+# After editing, run:  ./fleet.py up
+
+# Where agents will reach this host. Used for the connection details printed by
+# `fleet.py tokens` and by each container's startup banner — set it to the load
+# balancer's address, not the VM's, once the LB is in front.
+public_base_url: http://20.83.97.30
+
+# Host directory holding one subdirectory per brain.
+brains_root: /home/azureuser/brains
+
+# Port nginx publishes on the host. The LB should forward to this.
+http_port: 80
+
+# Heap for the shared OpenSearch container. Keep total under the box's RAM:
+# roughly opensearch_heap * 2 + 330MB per index (brain + ui) + 500MB for the OS.
+opensearch_heap: 512m
+
+indexes:
+  - name: support
+    description: Customer support knowledge — products, issues, segments.
+
+  - name: sales
+    description: Sales pipeline — accounts, deals, contacts.
+
+  # read_only exposes search/get/navigation but no write tools. Useful for an
+  # index that agents should consult but never modify.
+  # ui: false drops the explorer container for this index (~71MB) when nobody
+  # needs to browse it by hand.
+  # - name: policies
+  #   description: Company policies, reference only.
+  #   read_only: true
+  #   ui: false

@@ -198,3 +198,106 @@ def test_serve_http_reports_a_missing_uvicorn(brain, monkeypatch):
     monkeypatch.setattr(builtins, "__import__", no_uvicorn)
     with pytest.raises(SystemExit, match="open-index\\[serve\\]"):
         serve_http(str(brain.config.root))
+
+
+# -- proxy / load-balancer host validation ------------------------------------
+#
+# The SDK turns on DNS-rebinding protection with a localhost-only allow-list, so
+# every request arriving through a reverse proxy is rejected with
+# "421 Invalid Host header". These pin the allow-list we build instead.
+
+
+def test_public_url_host_is_allowed():
+    from open_index.mcp_server import build_transport_security
+
+    settings = build_transport_security(public_url="http://20.83.97.30/support/mcp")
+    assert settings.enable_dns_rebinding_protection is True
+    assert "20.83.97.30" in settings.allowed_hosts
+
+
+def test_both_with_and_without_port_are_allowed():
+    """A proxy drops the port when it is the scheme default; a direct client
+    sends it. Both must pass or one of the two paths breaks."""
+    from open_index.mcp_server import build_transport_security
+
+    hosts = build_transport_security(public_url="https://brain.acme.com/mcp").allowed_hosts
+    assert "brain.acme.com" in hosts
+    assert "brain.acme.com:*" in hosts
+
+
+def test_explicit_host_and_port_survives():
+    from open_index.mcp_server import build_transport_security
+
+    hosts = build_transport_security(
+        public_url="https://brain.acme.com:8443/mcp").allowed_hosts
+    assert "brain.acme.com:8443" in hosts
+    assert "brain.acme.com" in hosts
+
+
+def test_loopback_is_always_allowed():
+    """Health checks and on-box debugging must keep working."""
+    from open_index.mcp_server import build_transport_security
+
+    hosts = build_transport_security(public_url="https://brain.acme.com/mcp").allowed_hosts
+    assert {"127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*"} <= set(hosts)
+
+
+def test_extra_allowed_hosts_are_honoured():
+    from open_index.mcp_server import build_transport_security
+
+    hosts = build_transport_security(allowed_hosts=["lb.internal", "other:9000"]).allowed_hosts
+    assert "lb.internal" in hosts and "other:9000" in hosts
+
+
+def test_wildcard_disables_the_check():
+    """Explicit opt-out for a trusted proxy that already validates Host."""
+    from open_index.mcp_server import build_transport_security
+
+    assert build_transport_security(
+        allowed_hosts=["*"]).enable_dns_rebinding_protection is False
+
+
+def test_origins_cover_http_and_https():
+    from open_index.mcp_server import build_transport_security
+
+    origins = build_transport_security(public_url="https://brain.acme.com/mcp").allowed_origins
+    assert "https://brain.acme.com" in origins
+    assert "http://brain.acme.com" in origins
+
+
+def test_blank_entries_are_ignored():
+    from open_index.mcp_server import build_transport_security
+
+    settings = build_transport_security(allowed_hosts=["", "  "])
+    assert settings.enable_dns_rebinding_protection is True
+
+
+def test_serve_http_passes_the_allow_list_through(brain, monkeypatch):
+    """The settings must actually reach streamable_http_app."""
+    import uvicorn
+
+    captured = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, host, port: None)
+
+    from open_index import mcp_server
+
+    real = mcp_server.build_server
+
+    def spy(b, read_only=False):
+        server = real(b, read_only=read_only)
+        original = server.streamable_http_app
+
+        def wrapper(**kwargs):
+            captured.update(kwargs)
+            return original(**kwargs)
+
+        server.streamable_http_app = wrapper
+        return server
+
+    monkeypatch.setattr(mcp_server, "build_server", spy)
+    mcp_server.serve_http(str(brain.config.root), host="0.0.0.0",
+                          public_url="https://brain.acme.com/mcp",
+                          warn_unauthenticated=False)
+
+    assert captured["host"] == "0.0.0.0"
+    assert "brain.acme.com" in captured["transport_security"].allowed_hosts

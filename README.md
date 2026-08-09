@@ -243,7 +243,8 @@ building legal, marketing, support, or other specialized agents on Open Index.
 
 ## Using the brain from a cloud agent (production)
 
-📖 **[Full deployment guide → `docs/deployment.md`](./docs/deployment.md)** — local,
+📖 **[Full deployment guide → `docs/deployment.md`](./docs/deployment.md)** ·
+**[Many indexes on one host → `docs/multi-index.md`](./docs/multi-index.md)** — local,
 remote (with and without Docker), TLS/proxying, and exactly what to paste into
 Claude Code, Claude Desktop, or Cursor.
 

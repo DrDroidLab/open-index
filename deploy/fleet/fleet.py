@@ -1,0 +1,549 @@
+#!/usr/bin/env python3
+"""Run several open-index brains on one host, behind one nginx.
+
+Each index gets its own brain container (its own doc_types, entities, token and
+read/write policy) but they all share one OpenSearch cluster, with one cluster
+index per brain. That sharing is the point: the cluster is the expensive part
+(~1GB), so adding an index costs ~250MB rather than another cluster.
+
+nginx maps /<name>/ to that brain's container, so an agent connects to
+    <public_base_url>/<name>/mcp
+
+Commands:
+    ./fleet.py up                 render config, create missing brains, start
+    ./fleet.py add <name>         append an index to indexes.yml, then up
+    ./fleet.py tokens             print connection details for every index
+    ./fleet.py render             write the generated files without starting
+    ./fleet.py status             what is running
+    ./fleet.py logs [name]        tail logs
+
+Everything is regenerated from indexes.yml, so that file is the source of
+truth — edit it rather than the generated compose/nginx config.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent.parent
+CONFIG = HERE / "indexes.yml"
+COMPOSE = HERE / "docker-compose.generated.yml"
+NGINX_DIR = HERE / "nginx"
+NGINX_CONF = NGINX_DIR / "default.conf"
+ENV_FILE = HERE / ".env"
+
+# The uid the container runs as (see Dockerfile). Bind-mounted brain directories
+# must be writable by it or indexing fails on the first write.
+CONTAINER_UID = 10001
+
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$")
+
+
+def die(message: str) -> None:
+    print(f"error: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def load_config() -> dict:
+    try:
+        import yaml
+    except ImportError:
+        die("pyyaml is required:  pip install pyyaml   (or: apt install python3-yaml)")
+    if not CONFIG.exists():
+        die(f"no {CONFIG}")
+    config = yaml.safe_load(CONFIG.read_text()) or {}
+
+    config.setdefault("public_base_url", "http://localhost")
+    config.setdefault("brains_root", str(Path.home() / "brains"))
+    config.setdefault("http_port", 80)
+    config.setdefault("opensearch_heap", "512m")
+    config["public_base_url"] = config["public_base_url"].rstrip("/")
+
+    indexes = config.get("indexes") or []
+    if not indexes:
+        die("indexes.yml lists no indexes")
+
+    seen = set()
+    for entry in indexes:
+        name = entry.get("name", "")
+        # The name becomes a URL path, a container name and an OpenSearch index,
+        # so keep it to the intersection of what all three accept.
+        if not NAME_RE.match(name):
+            die(f"invalid index name {name!r} — use lowercase letters, digits and "
+                "hyphens (2-40 chars, not starting or ending with a hyphen)")
+        if name in seen:
+            die(f"duplicate index name {name!r}")
+        seen.add(name)
+    return config
+
+
+# -- tokens -------------------------------------------------------------------
+
+
+def env_var(name: str) -> str:
+    return "OPEN_INDEX_TOKEN_" + name.upper().replace("-", "_")
+
+
+def ui_pw_var(name: str) -> str:
+    return "OPEN_INDEX_UI_PASSWORD_" + name.upper().replace("-", "_")
+
+
+def htpasswd_hash(password: str) -> str:
+    """An nginx-compatible password hash.
+
+    Uses `openssl passwd -apr1` — the format htpasswd has always produced, and
+    salted, unlike the `{SHA}` scheme nginx also accepts.
+    """
+    result = subprocess.run(["openssl", "passwd", "-apr1", password],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        die("openssl is required to hash the UI passwords (apt install openssl)")
+    return result.stdout.strip()
+
+
+def load_env() -> dict:
+    if not ENV_FILE.exists():
+        return {}
+    values = {}
+    for line in ENV_FILE.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, _, value = line.partition("=")
+            values[key.strip()] = value.strip()
+    return values
+
+
+def ensure_secrets(config: dict) -> dict:
+    """One MCP token and one UI password per index, generated once.
+
+    Both are only created when missing, so re-running `up` never rotates a
+    credential behind your back and invalidates clients.
+    """
+    values = load_env()
+    created = []
+    for entry in config["indexes"]:
+        name = entry["name"]
+        if not values.get(env_var(name)):
+            values[env_var(name)] = secrets.token_hex(32)
+            created.append(f"{name} (token)")
+        # The UI has no auth of its own, so it gets a password whenever it is
+        # exposed — see write_htpasswd_files.
+        if entry.get("ui", True) and not values.get(ui_pw_var(name)):
+            values[ui_pw_var(name)] = secrets.token_urlsafe(18)
+            created.append(f"{name} (ui password)")
+
+    lines = ["# Generated by fleet.py. One bearer token and one UI password per index.",
+             "# Deleting a line regenerates that credential on the next `up`.", ""]
+    lines += [f"{k}={v}" for k, v in sorted(values.items())]
+    ENV_FILE.write_text("\n".join(lines) + "\n")
+    ENV_FILE.chmod(0o600)
+    if created:
+        print(f"  generated: {', '.join(created)}")
+    return values
+
+
+def write_htpasswd_files(config: dict, values: dict) -> None:
+    """One basic-auth file per index, not one shared file.
+
+    The MCP endpoint carries its own bearer token, but Streamlit has no
+    authentication whatsoever — published as-is, anyone who can reach the host
+    could read the whole brain. This is that gate.
+
+    It is per-index on purpose: nginx's `auth_basic_user_file` accepts *any*
+    user in the file it is given, so a single shared file would let the `sales`
+    credentials open the `support` UI. Separate files keep each index's UI to
+    its own credentials, matching how the bearer tokens already behave.
+    """
+    directory = NGINX_DIR / "htpasswd.d"
+    if directory.exists():
+        shutil.rmtree(directory)
+    directory.mkdir(parents=True)
+
+    for entry in config["indexes"]:
+        if not entry.get("ui", True):
+            continue
+        name = entry["name"]
+        path = directory / name
+        path.write_text(f"{name}:{htpasswd_hash(values[ui_pw_var(name)])}\n")
+        path.chmod(0o644)  # nginx runs as its own user inside the container
+
+
+# -- rendering ----------------------------------------------------------------
+
+
+def render_compose(config: dict) -> str:
+    heap = config["opensearch_heap"]
+    root = config["brains_root"].rstrip("/")
+    base = config["public_base_url"]
+
+    services = []
+    for entry in config["indexes"]:
+        name = entry["name"]
+        command = ('["serve", "--host", "0.0.0.0", "--port", "8080"'
+                   + (', "--read-only"' if entry.get("read_only") else "") + "]")
+        note = entry.get("description", "")
+        services.append(f"""
+  # {name}{f' — {note}' if note else ''}
+  brain-{name}:
+    image: open-index:local
+    build:
+      context: ../..
+      args:
+        EXTRAS: serve,opensearch,ui,semantic
+    container_name: oi-brain-{name}
+    command: {command}
+    environment:
+      OPEN_INDEX_TOKEN: ${{{env_var(name)}}}
+      OPEN_INDEX_SEARCH_BACKEND: opensearch
+      OPEN_INDEX_OPENSEARCH_HOSTS: http://opensearch:9200
+      # One cluster index per brain — this is what lets them share a cluster.
+      OPEN_INDEX_OPENSEARCH_INDEX: open_index_{name.replace('-', '_')}
+      # What the startup banner and `mcp-config` advertise, including the path
+      # prefix nginx serves this brain on.
+      OPEN_INDEX_PUBLIC_URL: {base}/{name}/mcp
+      OPEN_INDEX_EMBEDDING_CACHE: /home/openindex/model-cache
+    volumes:
+      - {root}/{name}:/brain
+      - model-cache:/home/openindex/model-cache
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    restart: unless-stopped
+""".rstrip("\n"))
+
+        if entry.get("ui", True):
+            services.append(f"""
+  ui-{name}:
+    image: open-index:local
+    container_name: oi-ui-{name}
+    command: ["ui", "--port", "8501"]
+    environment:
+      OPEN_INDEX_SEARCH_BACKEND: opensearch
+      OPEN_INDEX_OPENSEARCH_HOSTS: http://opensearch:9200
+      OPEN_INDEX_OPENSEARCH_INDEX: open_index_{name.replace('-', '_')}
+      OPEN_INDEX_EMBEDDING_CACHE: /home/openindex/model-cache
+      # Streamlit must know it lives under a path prefix, or every asset and the
+      # websocket resolve to / and the page loads blank behind the proxy.
+      STREAMLIT_SERVER_BASE_URL_PATH: {name}/ui
+      STREAMLIT_SERVER_HEADLESS: "true"
+      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
+      # The browser's Origin is the proxy's, not Streamlit's; its XSRF check
+      # rejects that and the session never connects.
+      STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION: "false"
+      STREAMLIT_SERVER_ENABLE_CORS: "false"
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+    volumes:
+      - {root}/{name}:/brain
+      - model-cache:/home/openindex/model-cache
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    restart: unless-stopped
+""".rstrip("\n"))
+
+    return f"""# GENERATED BY fleet.py — do not edit. Change indexes.yml and re-run `fleet.py up`.
+#
+# One shared OpenSearch cluster, one brain container per index, one nginx in
+# front doing path routing.
+
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.17.0
+    container_name: oi-opensearch
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms{heap} -Xmx{heap}
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - cluster.routing.allocation.disk.threshold_enabled=false
+    ulimits:
+      memlock: {{ soft: -1, hard: -1 }}
+      nofile: {{ soft: 65536, hard: 65536 }}
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    ports:
+      # Loopback only — the brains reach it over the compose network.
+      - "127.0.0.1:9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+{"".join(services)}
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: oi-nginx
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/htpasswd.d:/etc/nginx/htpasswd.d:ro
+    ports:
+      - "{config['http_port']}:80"
+    depends_on:
+{chr(10).join(dep for e in config["indexes"]
+                  for dep in ([f"      - brain-{e['name']}"]
+                              + ([f"      - ui-{e['name']}"] if e.get("ui", True) else [])))}
+    restart: unless-stopped
+
+volumes:
+  opensearch-data:
+  model-cache:
+"""
+
+
+def render_nginx(config: dict) -> str:
+    blocks = []
+    for entry in config["indexes"]:
+        name = entry["name"]
+        blocks.append(f"""
+    # {name} — {entry.get('description', '')}
+    location /{name}/ {{
+        # The trailing slash on proxy_pass strips the /{name} prefix, so
+        # /{name}/mcp reaches the brain as /mcp.
+        proxy_pass http://brain-{name}:8080/;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # Authorization must survive the hop or every request 401s.
+        proxy_set_header Authorization     $http_authorization;
+
+        # Streamable HTTP keeps responses open; buffering would stall them.
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }}
+
+    # Tolerate a missing trailing slash: /{name} -> /{name}/
+    location = /{name} {{ return 308 /{name}/; }}""")
+
+        if entry.get("ui", True):
+            blocks.append(f"""
+    # {name} explorer UI. Basic auth because Streamlit has none of its own.
+    location /{name}/ui {{
+        auth_basic "{name} index";
+        auth_basic_user_file /etc/nginx/htpasswd.d/{name};
+
+        # No trailing slash on proxy_pass: Streamlit is configured with
+        # baseUrlPath={name}/ui and expects to receive the full path.
+        proxy_pass http://ui-{name}:8501;
+
+        proxy_http_version 1.1;
+        # Streamlit talks to the browser over a websocket; without the upgrade
+        # headers the page renders and then hangs "connecting".
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }}""")
+
+    listing = {}
+    for e in config["indexes"]:
+        item = {"mcp": f"{config['public_base_url']}/{e['name']}/mcp",
+                "description": e.get("description", ""),
+                "read_only": bool(e.get("read_only"))}
+        if e.get("ui", True):
+            item["ui"] = f"{config['public_base_url']}/{e['name']}/ui"
+        listing[e["name"]] = item
+
+    return f"""# GENERATED BY fleet.py — do not edit. Change indexes.yml and re-run `fleet.py up`.
+
+server {{
+    listen 80;
+    server_name _;
+
+    # Uploading a knowledge file through an agent can exceed the 1MB default.
+    client_max_body_size 64m;
+{"".join(blocks)}
+
+    # Load-balancer health probe. Deliberately unauthenticated and free of any
+    # brain detail.
+    location = /healthz {{
+        access_log off;
+        return 200 "ok\\n";
+        add_header Content-Type text/plain;
+    }}
+
+    # Directory of what this host serves. Names and URLs only — no tokens.
+    location = / {{
+        default_type application/json;
+        return 200 '{json.dumps(listing, indent=2)}';
+    }}
+}}
+"""
+
+
+# -- brains -------------------------------------------------------------------
+
+
+def ensure_brain(name: str, brains_root: Path) -> bool:
+    """Create and permission a brain directory if it doesn't exist yet."""
+    path = brains_root / name
+    if (path / "brain.yaml").exists():
+        return False
+
+    # Ownership has to be set before the container writes anything: it runs as
+    # uid 10001 and cannot create files in a directory owned by the host user.
+    path.mkdir(parents=True, exist_ok=True)
+    run(["sudo", "chown", "-R", f"{CONTAINER_UID}:{os.getgid()}", str(path)])
+    run(["sudo", "chmod", "-R", "g+rwX", str(path)])
+    run(["sudo", "chmod", "g+s", str(path)])
+    run(docker() + ["run", "--rm", "--entrypoint", "open-index",
+                    "-v", f"{path}:/brain", "open-index:local",
+                    "init", name, "/brain"], quiet=True)
+    print(f"  created brain: {path}")
+    return True
+
+
+# -- docker -------------------------------------------------------------------
+
+
+def docker() -> list[str]:
+    """`docker` if the user can reach the daemon, otherwise `sudo docker`."""
+    probe = subprocess.run(["docker", "info"], capture_output=True)
+    return ["docker"] if probe.returncode == 0 else ["sudo", "docker"]
+
+
+def compose_cmd() -> list[str]:
+    return docker() + ["compose", "-f", str(COMPOSE), "--env-file", str(ENV_FILE)]
+
+
+def run(cmd: list[str], quiet: bool = False, check: bool = True) -> int:
+    result = subprocess.run(cmd, capture_output=quiet)
+    if check and result.returncode != 0:
+        if quiet and result.stderr:
+            sys.stderr.write(result.stderr.decode())
+        die(f"command failed: {' '.join(cmd)}")
+    return result.returncode
+
+
+# -- commands -----------------------------------------------------------------
+
+
+def cmd_render(config: dict, values: dict | None = None) -> None:
+    # Rendering needs the UI passwords to build htpasswd, so generate any that
+    # are missing rather than failing on a half-populated .env.
+    if values is None:
+        values = ensure_secrets(config)
+    NGINX_DIR.mkdir(exist_ok=True)
+    COMPOSE.write_text(render_compose(config))
+    NGINX_CONF.write_text(render_nginx(config))
+    write_htpasswd_files(config, values)
+    print(f"  wrote {COMPOSE.name}, nginx/default.conf and nginx/htpasswd.d/")
+
+
+def cmd_up(config: dict) -> None:
+    names = [e["name"] for e in config["indexes"]]
+    values = ensure_secrets(config)
+    cmd_render(config, values)
+
+    # The image must exist before `init` can run in it.
+    print("  building image ...")
+    run(docker() + ["build", "-q", "-t", "open-index:local", str(REPO)], quiet=True)
+
+    brains_root = Path(config["brains_root"])
+    brains_root.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        ensure_brain(name, brains_root)
+
+    print("  starting ...")
+    run(compose_cmd() + ["up", "-d", "--remove-orphans"])
+    print()
+    cmd_tokens(config)
+
+
+def cmd_add(config: dict, name: str, description: str) -> None:
+    if not NAME_RE.match(name):
+        die(f"invalid index name {name!r}")
+    if any(e["name"] == name for e in config["indexes"]):
+        die(f"index {name!r} already exists")
+    entry = f"\n  - name: {name}\n"
+    if description:
+        entry += f"    description: {description}\n"
+    CONFIG.write_text(CONFIG.read_text().rstrip() + "\n" + entry)
+    print(f"  added {name!r} to indexes.yml")
+    cmd_up(load_config())
+
+
+def cmd_tokens(config: dict) -> None:
+    values = load_env()
+    base = config["public_base_url"]
+    print("Indexes on this host:\n")
+    for entry in config["indexes"]:
+        name = entry["name"]
+        mode = "read-only" if entry.get("read_only") else "read+write"
+        print(f"  {name}  ({mode})")
+        print(f"    url:   {base}/{name}/mcp")
+        print(f"    token: {values.get(env_var(name), '(not generated yet)')}")
+        print()
+    first = config["indexes"][0]["name"]
+    print("Add one to an agent (from this directory):")
+    print(f"  source .env")
+    print(f"  open-index mcp-config --url {base}/{first}/mcp "
+          f"--token ${env_var(first)} > .mcp.json")
+
+
+def cmd_status(config: dict) -> None:
+    run(compose_cmd() + ["ps", "--format",
+                         "  {{.Name}}\t{{.Status}}"], check=False)
+
+
+def cmd_logs(config: dict, name: str | None) -> None:
+    target = [f"brain-{name}"] if name else []
+    run(compose_cmd() + ["logs", "--tail", "60"] + target, check=False)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("up", help="render, create missing brains, start everything")
+    sub.add_parser("render", help="write the generated files only")
+    sub.add_parser("tokens", help="print connection details for every index")
+    sub.add_parser("status", help="what is running")
+    p_add = sub.add_parser("add", help="add an index and start it")
+    p_add.add_argument("name")
+    p_add.add_argument("--description", default="")
+    p_logs = sub.add_parser("logs", help="tail logs")
+    p_logs.add_argument("name", nargs="?")
+
+    args = parser.parse_args()
+    if shutil.which("docker") is None:
+        die("docker is not installed on this host")
+
+    config = load_config()
+    if args.command == "up":
+        cmd_up(config)
+    elif args.command == "render":
+        cmd_render(config)
+    elif args.command == "tokens":
+        cmd_tokens(config)
+    elif args.command == "status":
+        cmd_status(config)
+    elif args.command == "add":
+        cmd_add(config, args.name, args.description)
+    elif args.command == "logs":
+        cmd_logs(config, args.name)
+
+
+if __name__ == "__main__":
+    main()
