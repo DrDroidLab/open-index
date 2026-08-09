@@ -10,7 +10,8 @@ https://<lb-host>/policies/mcp    https://<lb-host>/policies/ui
 ```
 
 Each index is a separate brain — its own doc_types, entities, credentials and
-read/write policy. They share one OpenSearch cluster and one nginx.
+read/write policy. They share one OpenSearch cluster and one Caddy, which
+terminates TLS for all of them.
 
 Isolation is enforced at both doors: an index's bearer token opens only its own
 `/mcp`, and its UI password opens only its own `/ui`.
@@ -32,7 +33,7 @@ Measured on a 2-vCPU / 3.8GB VM running two indexes, each with MCP and UI:
 | Component | Memory | Per what |
 |---|---|---|
 | OpenSearch | 983 MB | once, shared |
-| nginx | 3 MB | once, shared |
+| Caddy | 3 MB | once, shared |
 | brain container (MCP) | ~255 MB | **per index** |
 | ui container | ~71 MB | **per index** |
 
@@ -45,7 +46,7 @@ from every container. Note the UI figure grows once someone runs a semantic
 search there — the model loads lazily.
 
 ```
-            ┌──────────────── nginx :80 ────────────────┐
+            ┌──────────── Caddy :80/:443 ───────────────┐
             │  /support/mcp  →  brain-support  (token)  │──▶ ┐
   LB  ──▶   │  /support/ui   →  ui-support     (basic)  │──▶ │
             │  /sales/mcp    →  brain-sales    (token)  │──▶ ├─▶ OpenSearch
@@ -61,7 +62,7 @@ Everything is generated from one file, `deploy/fleet/indexes.yml`:
 
 ```yaml
 public_base_url: https://brain.acme.com   # what agents will connect to
-brains_root: /home/azureuser/brains       # one subdirectory per index
+brains_root: ./brains                     # one subdirectory per index
 http_port: 80
 opensearch_heap: 512m
 
@@ -80,12 +81,16 @@ Then:
 
 ```bash
 cd deploy/fleet
+cp indexes.example.yml indexes.yml    # then edit it
 ./fleet.py up
 ```
 
+`indexes.yml` is per-deployment and gitignored, like `.env` — hostnames, which
+indexes this host serves, and whether auth is on differ per environment.
+
 That builds the image, creates any missing brain directories (with the
 permissions the container needs), generates a per-index bearer token, renders
-the compose and nginx config, and starts everything. It is idempotent — run it
+the compose and Caddy config, and starts everything. It is idempotent — run it
 again after any edit.
 
 **Adding an index later** is one command:
@@ -94,30 +99,35 @@ again after any edit.
 ./fleet.py add marketing --description "Campaigns and positioning"
 ```
 
-Existing indexes keep running; only the new container starts and nginx reloads.
+Existing indexes keep running; only the new containers start and Caddy reloads.
 
 Other commands: `./fleet.py tokens` (connection details), `status`, `logs
 <name>`, `render` (write config without starting).
 
 > `indexes.yml` is the source of truth. `docker-compose.generated.yml` and
-> `nginx/default.conf` are regenerated on every run — edit the former, never the
-> latter two.
+> `caddy/Caddyfile` are regenerated on every run and gitignored — edit the
+> former, never the latter two.
 
 ---
 
-## 3. Put it behind a load balancer
+## 3. TLS, and putting it behind a load balancer
 
-nginx publishes on `http_port` (80 by default). Point the LB at that.
+Caddy publishes 80 and 443 and **obtains its own Let's Encrypt certificate** for
+whatever `public_base_url` names — no certbot, no renewal cron. The only
+requirement is that the name resolves to this host and port 80 is reachable for
+the ACME challenge.
+
+If you have no DNS record, `nip.io` is the shortcut: `203.0.113.10.nip.io`
+resolves to `203.0.113.10`, and a certificate can be issued for it. A bare IP
+cannot hold one.
+
+Point a load balancer at 443 (or at 80 if it terminates TLS itself).
 
 **Health check:** `GET /healthz` → `200 ok`. Unauthenticated and free of brain
 detail, so it is safe as an LB probe.
 
 **Directory:** `GET /` returns JSON listing every index and its URL. Names only —
 no tokens.
-
-**Terminate TLS at the LB.** The brains speak plain HTTP. Once TLS is on, set
-`public_base_url: https://...` and re-run `./fleet.py up` so each brain
-advertises the right URL.
 
 **Forward the `Host` header.** open-index validates it (DNS-rebinding
 protection) and accepts loopback plus whatever `public_base_url` names. If your
@@ -132,9 +142,9 @@ A `421 Invalid Host header` means exactly this — the Host that arrived is not 
 the list. `--allowed-host '*'` disables the check, which is only reasonable when
 the proxy in front already validates Host.
 
-**Don't buffer responses.** Streamable HTTP keeps responses open; a buffering LB
-will appear to hang. The bundled nginx sets `proxy_buffering off` — configure the
-same on the LB, with an idle timeout of at least a few minutes.
+**Don't buffer responses.** Streamable HTTP keeps responses open and the UI uses
+websockets; a buffering LB will appear to hang. Caddy streams by default —
+configure the same on the LB, with an idle timeout of at least a few minutes.
 
 ---
 
@@ -201,15 +211,20 @@ https://brain.acme.com/support/ui     support / <ui password>
 
 The password exists because **Streamlit has no authentication of its own**.
 Published without a gate, anyone who could reach the host could read the entire
-brain. Each index has its own credential file, so the `sales` password does not
-open the `support` UI.
+brain. Each index has its own credentials, so the `sales` password does not open
+the `support` UI.
+
+Set `auth: false` at the top of `indexes.yml` to drop both the tokens and the UI
+passwords — reasonable when the data is genuinely public, but note it opens the
+write tools too, so pair it with `read_only: true` unless you want strangers
+writing to the index.
 
 The UI is deliberately read-only — writes go through MCP or the CLI so every
 change is validated. Turn it off per index with `ui: false`.
 
 If the page loads but hangs "connecting", the proxy in front is not forwarding
 websockets: the LB needs the `Upgrade`/`Connection` headers and buffering off,
-the same as nginx already does.
+which Caddy already handles on its own hop.
 
 ---
 
@@ -226,7 +241,7 @@ directory is mounted), then:
 cd deploy/fleet
 D="docker compose -f docker-compose.generated.yml --env-file .env"
 
-cp issues.csv /home/azureuser/brains/support/
+cp issues.csv ./brains/support/
 $D exec -T brain-support open-index import /brain/issues.csv \
     --brain /brain --doc-type issue \
     --asserted-by import:2026-08-crm --confidence 0.8

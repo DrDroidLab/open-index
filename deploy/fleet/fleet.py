@@ -59,7 +59,8 @@ def load_config() -> dict:
     except ImportError:
         die("pyyaml is required:  pip install pyyaml   (or: apt install python3-yaml)")
     if not CONFIG.exists():
-        die(f"no {CONFIG}")
+        die(f"no {CONFIG.name} — copy the example and edit it:\n"
+            f"  cp {CONFIG.with_name('indexes.example.yml').name} {CONFIG.name}")
     config = yaml.safe_load(CONFIG.read_text()) or {}
 
     config.setdefault("public_base_url", "http://localhost")

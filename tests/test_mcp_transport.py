@@ -210,9 +210,9 @@ def test_serve_http_reports_a_missing_uvicorn(brain, monkeypatch):
 def test_public_url_host_is_allowed():
     from open_index.mcp_server import build_transport_security
 
-    settings = build_transport_security(public_url="http://20.83.97.30/support/mcp")
+    settings = build_transport_security(public_url="http://203.0.113.10/support/mcp")
     assert settings.enable_dns_rebinding_protection is True
-    assert "20.83.97.30" in settings.allowed_hosts
+    assert "203.0.113.10" in settings.allowed_hosts
 
 
 def test_both_with_and_without_port_are_allowed():
