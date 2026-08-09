@@ -22,7 +22,9 @@ EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "support-brain"
 
 def _run(brain_dir, monkeypatch):
     monkeypatch.setenv("OPEN_INDEX_DIR", str(brain_dir))
-    return AppTest.from_file(str(APP), default_timeout=60).run()
+    # Generous timeout: each of these boots a real Streamlit script run, and on
+    # a loaded machine (the full suite, or a CI runner) 60s flaked once.
+    return AppTest.from_file(str(APP), default_timeout=180).run()
 
 
 @pytest.fixture
