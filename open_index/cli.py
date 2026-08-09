@@ -441,6 +441,12 @@ def mcp_config(
 @app.command()
 def serve(
     brain: str = BrainOpt,
+    brains: Optional[str] = typer.Option(
+        None, "--brains", envvar="OPEN_INDEX_BRAINS_ROOT",
+        help="Serve EVERY brain under this directory from one process, each at "
+             "/<name>/mcp. Cheaper than one process per brain: the embedding "
+             "model is loaded once for all of them.",
+    ),
     host: str = typer.Option("0.0.0.0", help="Bind host."),
     port: int = typer.Option(8080, help="Bind port."),
     token: Optional[str] = typer.Option(
@@ -469,11 +475,42 @@ def serve(
     OpenSearch backend for a shared, multi-writer brain.
     """
     from open_index.mcp_config import advertised_urls, mask_token
-    from open_index.mcp_server import serve_http
+    from open_index.mcp_server import (
+        discover_brains, serve_http, serve_http_multi, token_for,
+    )
+
+    mode = "read-only" if read_only else "read+write"
+
+    if brains:
+        found = discover_brains(brains)
+        if not found:
+            typer.secho(f"no brains under {brains} — a brain is a directory "
+                        "containing brain.yaml", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+
+        typer.secho(f"open-index · {len(found)} brains · {mode}",
+                    fg=typer.colors.GREEN, bold=True)
+        typer.echo(f"  listening on {host}:{port}")
+        urls = advertised_urls(host, port, public_url=public_url)
+        base = urls[-1][1].rsplit("/mcp", 1)[0]
+        typer.echo("")
+        for name in found:
+            gate = "token" if token_for(name, token) else typer.style(
+                "OPEN", fg=typer.colors.YELLOW)
+            typer.secho(f"  {name:<28} {base}/{name}/mcp  ({gate})",
+                        fg=typer.colors.CYAN)
+        typer.echo("")
+        typer.echo("  per-brain tokens come from OPEN_INDEX_TOKEN_<NAME>; "
+                   "--token covers any without one.")
+        typer.echo(f"  directory: {base}/   ·   health: {base}/healthz")
+        typer.echo("")
+        serve_http_multi(brains, host=host, port=port, token=token,
+                         read_only=read_only, public_base_url=base,
+                         allowed_hosts=list(allowed_host or []))
+        return
 
     root = Path(brain).resolve()
     b = _open_brain(str(root))
-    mode = "read-only" if read_only else "read+write"
 
     typer.secho(
         f"open-index · brain '{b.config.name}' · {mode} · "

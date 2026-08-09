@@ -23,6 +23,8 @@ import inspect
 from time import perf_counter
 from typing import Any, Optional
 
+from pathlib import Path
+
 from open_index.brain import Brain
 from open_index.schema import DocType, DocTypeDisplay, FieldSpec, RelationshipSpec
 from open_index.models import Entity, Provenance, Relationship
@@ -488,6 +490,114 @@ def build_transport_security(
     )
 
 
+def discover_brains(root: str) -> dict[str, "Path"]:
+    """Every brain directory directly under `root`, keyed by directory name.
+
+    A "brain" is any subdirectory holding a brain.yaml, so a root can sit
+    alongside unrelated folders without confusing anything.
+    """
+    from pathlib import Path
+
+    base = Path(root).expanduser().resolve()
+    if not base.is_dir():
+        raise SystemExit(f"no such directory: {base}")
+    return {
+        child.name: child
+        for child in sorted(base.iterdir())
+        if (child / "brain.yaml").exists()
+    }
+
+
+def token_for(name: str, default: Optional[str] = None) -> Optional[str]:
+    """Per-brain bearer token from the environment, falling back to a shared one.
+
+    `OPEN_INDEX_TOKEN_SALES_EU` gates the brain in `sales-eu/`. Without one, the
+    shared `--token` applies — which is fine for a private host and wrong for a
+    shared one, hence the per-brain override.
+    """
+    import os as _os
+
+    key = "OPEN_INDEX_TOKEN_" + name.upper().replace("-", "_").replace(".", "_")
+    return _os.environ.get(key) or default
+
+
+def build_multi_app(
+    brains: dict[str, "Path"],
+    *,
+    token: Optional[str] = None,
+    read_only: bool = False,
+    public_base_url: Optional[str] = None,
+    allowed_hosts: Optional[list[str]] = None,
+    host: str = "0.0.0.0",
+):
+    """One ASGI app serving many brains, each mounted at `/<name>/mcp`.
+
+    The point is what is *not* duplicated. A process per brain re-loads the
+    Python runtime and a ~250MB resident embedding model every time, which caps
+    a modest host at a handful of brains. Here the model is loaded once — the
+    provider cache is keyed on model configuration, not on brain — so the
+    marginal cost of a brain is its config and doc_types, and hundreds fit where
+    a handful did.
+
+    Each brain keeps its own token, its own read/write policy and its own
+    storage, so this is a packaging change rather than a shared-tenancy one.
+    """
+    from contextlib import AsyncExitStack, asynccontextmanager
+
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse, PlainTextResponse
+    from starlette.routing import Mount, Route
+
+    base = (public_base_url or "").rstrip("/")
+    mounted: list = []          # the Starlette children, for their lifespans
+    routes: list = []
+    listing: dict[str, dict] = {}
+
+    for name, path in brains.items():
+        brain = Brain.open(path)
+        server = build_server(brain, read_only=read_only)
+        public_url = f"{base}/{name}/mcp" if base else None
+        child = server.streamable_http_app(
+            transport_security=build_transport_security(public_url, allowed_hosts),
+            host=host,
+        )
+        mounted.append(child)
+
+        brain_token = token_for(name, token)
+        app = _bearer_auth_middleware(child, brain_token) if brain_token else child
+        routes.append(Mount(f"/{name}", app=app))
+
+        listing[name] = {
+            "mcp": public_url or f"/{name}/mcp",
+            "description": brain.config.description,
+            "entities": sum(brain.counts().values()),
+            "doc_types": sorted(brain.config.doc_types),
+            "read_only": read_only,
+            "authenticated": bool(brain_token),
+        }
+
+    async def directory(_request):
+        return JSONResponse(listing)
+
+    async def healthz(_request):
+        return PlainTextResponse("ok")
+
+    routes += [Route("/", directory), Route("/healthz", healthz)]
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        # Starlette does not run a mounted app's lifespan, and the MCP transport
+        # needs its session manager started — without this every request to a
+        # mounted brain fails with "Task group is not initialized".
+        async with AsyncExitStack() as stack:
+            for child in mounted:
+                await stack.enter_async_context(
+                    child.router.lifespan_context(child))
+            yield
+
+    return Starlette(routes=routes, lifespan=lifespan)
+
+
 def serve_http(
     brain_dir: str, host: str = "0.0.0.0", port: int = 8080,
     token: Optional[str] = None, read_only: bool = False,
@@ -525,4 +635,31 @@ def serve_http(
             "Set OPEN_INDEX_TOKEN or --token for anything networked.",
             file=sys.stderr,
         )
+    uvicorn.run(app, host=host, port=port)
+
+
+def serve_http_multi(
+    brains_root: str, host: str = "0.0.0.0", port: int = 8080,
+    token: Optional[str] = None, read_only: bool = False,
+    public_base_url: Optional[str] = None,
+    allowed_hosts: Optional[list[str]] = None,
+) -> None:
+    """Serve every brain under `brains_root` from one process."""
+    try:
+        import uvicorn
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise SystemExit(
+            "the HTTP endpoint needs uvicorn: pip install 'open-index[serve]'"
+        ) from exc
+
+    brains = discover_brains(brains_root)
+    if not brains:
+        raise SystemExit(
+            f"no brains found under {brains_root} — a brain is a directory "
+            "containing brain.yaml (create one with `open-index init`)"
+        )
+    app = build_multi_app(
+        brains, token=token, read_only=read_only,
+        public_base_url=public_base_url, allowed_hosts=allowed_hosts, host=host,
+    )
     uvicorn.run(app, host=host, port=port)
