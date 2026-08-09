@@ -201,8 +201,15 @@ def test_row_css_inherits_colour_through_the_label_element():
 # -- How to use ----------------------------------------------------------------
 
 
-def test_how_to_use_is_the_rightmost_tab(populated):
-    assert [t.label for t in populated.tabs][-1] == "How to use"
+def test_help_is_the_first_tab_so_it_opens_on_load(populated):
+    """Streamlit selects the first tab, so a first-time visitor lands on the
+    explanation instead of having to find it."""
+    assert [t.label for t in populated.tabs][0] == view.HELP_TAB == "?"
+
+
+def test_schema_sits_between_help_and_explore(populated):
+    labels = [t.label for t in populated.tabs]
+    assert labels[:3] == ["?", "Schema", "Explore"]
 
 
 def test_tab_guide_matches_the_tabs_actually_rendered(populated):

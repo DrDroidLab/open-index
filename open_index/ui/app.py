@@ -407,6 +407,55 @@ def render_analytics(brain: Brain) -> None:
         } for e in events], hide_index=True, use_container_width=True)
 
 
+def render_schema(brain: Brain) -> None:
+    """Every doc_type and the shape of it — the reference before you write."""
+    summary = view.summarize(brain)
+    if not summary.has_schema:
+        st.info("No doc_types defined yet.")
+        st.caption("A doc_type is a concept this index tracks, plus the fields it "
+                   "stores. Create one with `open-index add-doc-type`, or ask an "
+                   "agent to call `create_doc_type`.")
+        return
+
+    st.caption(
+        f"{len(summary.doc_types)} doc_types · {summary.total_entities:,} entities. "
+        "Every entity id is `<doc_type>:<slug>`, and any entity can link to any "
+        "other through `related_to`."
+    )
+
+    for row in summary.doc_types:
+        doc_type = brain.config.doc_type(row.name)
+        noun = "entity" if row.count == 1 else "entities"
+        with st.expander(f"{row.name} · {row.count:,} {noun}",
+                         expanded=len(summary.doc_types) <= 3):
+            if row.description:
+                st.markdown(row.description)
+            st.caption(
+                f"{_dot(row.color)} source of truth: "
+                + ("**files** — JSON under `entities/`, git-trackable"
+                   if row.storage == "file"
+                   else "**search index** — DB-owned, not written to files"),
+                unsafe_allow_html=True,
+            )
+
+            fields = view.schema_field_rows(doc_type)
+            if fields:
+                st.markdown("**Fields**")
+                st.table(fields)
+            else:
+                st.caption("No fields declared.")
+
+            relationships = view.schema_relationship_rows(brain, row.name)
+            if relationships:
+                st.markdown("**Relationships**")
+                st.table(relationships)
+                st.caption("Declared edges are validated against their target "
+                           "doc_type. Undeclared ones still work — they just "
+                           "aren't checked.")
+            else:
+                st.caption("No relationships declared or in use for this type.")
+
+
 def render_how_to_use(brain: Brain) -> None:
     """Connecting an agent, the tools it gets, and what the other tabs are for.
 
@@ -517,11 +566,15 @@ def main() -> None:
     st.markdown(view.ROW_CSS, unsafe_allow_html=True)
 
     options = render_sidebar(brain)
-    # "How to use" sits rightmost on purpose: it is the reference people return
-    # to, not the page they should land on.
-    tab_explore, tab_map, tab_analytics, tab_jobs, tab_help = st.tabs(
+    # Streamlit opens the first tab, so "?" leftmost means a first-time visitor
+    # lands on the explanation rather than having to find it.
+    tab_help, tab_schema, tab_explore, tab_map, tab_analytics, tab_jobs = st.tabs(
         [name for name, _ in view.TAB_GUIDE]
     )
+    with tab_help:
+        render_how_to_use(brain)
+    with tab_schema:
+        render_schema(brain)
     with tab_explore:
         render_explore(brain, options)
     with tab_map:
@@ -530,8 +583,6 @@ def main() -> None:
         render_analytics(brain)
     with tab_jobs:
         render_jobs(brain)
-    with tab_help:
-        render_how_to_use(brain)
 
 
 main()

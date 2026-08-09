@@ -226,3 +226,66 @@ def test_every_theme_defines_the_full_palette():
     keys = {"node_label", "edge_label", "edge", "stroke_width"}
     for theme in ("dark", "light"):
         assert keys <= set(view.graph_theme(theme))
+
+
+# -- Schema tab ----------------------------------------------------------------
+
+
+def test_schema_field_rows_describe_search_behaviour(brain):
+    dt = brain.config.doc_type("issue")
+    rows = {r["field"]: r for r in view.schema_field_rows(dt)}
+    assert rows["name"]["searched by"] == "keyword match"
+    assert rows["description"]["searched by"] == "meaning (vector)"
+    assert rows["name"]["weight"] == "6×"
+
+
+def test_unsearched_fields_show_no_weight(brain):
+    from open_index.schema import DocType, FieldSpec
+
+    dt = DocType(doc_type="t", fields=[FieldSpec(name="blob", search="none", boost=9)])
+    row = view.schema_field_rows(dt)[0]
+    assert row["searched by"] == "not searched"
+    assert row["weight"] == "—", "a weight on an unsearched field is misleading"
+
+
+def test_required_fields_are_marked(brain):
+    from open_index.schema import DocType, FieldSpec
+
+    dt = DocType(doc_type="t", fields=[FieldSpec(name="owner", required=True)])
+    assert view.schema_field_rows(dt)[0]["required"] == "yes"
+
+
+def test_relationship_rows_merge_declared_and_observed(brain):
+    rows = {r["relationship"]: r for r in view.schema_relationship_rows(brain, "product")}
+    assert "has common issue" in rows
+    assert rows["has common issue"]["declared"] == "yes"
+    assert rows["has common issue"]["points at"] == "issue"
+    assert rows["has common issue"]["in use"] > 0
+
+
+def test_undeclared_relationships_in_use_are_still_listed(brain):
+    """An edge nobody declared but everything uses is worth seeing."""
+    from open_index.models import Entity, Relationship
+
+    brain.put_entity(Entity(
+        id="product:improvised", doc_type="product", name="Improvised",
+        related_to=[Relationship(target="issue:no-results",
+                                 relationship_edge_meaning="totally made up")]))
+    rows = {r["relationship"]: r for r in view.schema_relationship_rows(brain, "product")}
+    assert rows["totally made up"]["declared"] == "no"
+    assert rows["totally made up"]["in use"] == 1
+
+
+def test_declared_but_unused_relationships_show_zero(brain):
+    from open_index.schema import DocType, RelationshipSpec
+
+    brain.create_doc_type(DocType(
+        doc_type="unused_rel",
+        relationships=[RelationshipSpec(name="never used", target_doc_type="issue")]))
+    row = view.schema_relationship_rows(brain, "unused_rel")[0]
+    assert row["declared"] == "yes" and row["in use"] == 0
+
+
+def test_help_tab_is_first_in_the_guide():
+    assert view.TAB_GUIDE[0][0] == view.HELP_TAB
+    assert [n for n, _ in view.TAB_GUIDE][:3] == ["?", "Schema", "Explore"]

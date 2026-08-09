@@ -299,8 +299,20 @@ WRITE_TOOLS = [
      "Define a new concept, when no existing doc_type fits."),
 ]
 
-# What each tab is for. Ordered as they appear.
+# The tab label for the help page. Leftmost, so it is what a first-time visitor
+# lands on, and a bare question mark so it reads as help rather than content.
+HELP_TAB = "?"
+
+# What each tab is for, in the order they appear. This list *is* the tab order —
+# the page builds its tabs from it, so the two cannot drift apart.
 TAB_GUIDE = [
+    (HELP_TAB,
+     "This page: how to connect an agent, what tools it gets, and what "
+     "everything else here does."),
+    ("Schema",
+     "Every doc_type in this index and the shape of it — each field's type, how "
+     "it is searched, its ranking weight, and the relationship vocabulary that "
+     "connects types to each other. Read this before writing to the index."),
     ("Explore",
      "Search the index, or browse by doc_type. Open an entity to see its fields, "
      "its attribution, and every relationship in both directions — click through "
@@ -315,9 +327,62 @@ TAB_GUIDE = [
      "the questions this index cannot yet answer."),
     ("Jobs",
      "Connectors that pull entities in on a schedule, with their last run."),
-    ("How to use",
-     "This page."),
 ]
+
+
+def schema_field_rows(doc_type) -> list[dict]:
+    """One row per field, as the Schema tab tabulates them.
+
+    `search` and `boost` are the two that change behaviour rather than just
+    describing it, so they are spelled out rather than shown as raw enum values.
+    """
+    searchable = {
+        "syntactic": "keyword match",
+        "semantic": "meaning (vector)",
+        "none": "not searched",
+    }
+    rows = []
+    for f in doc_type.fields:
+        rows.append({
+            "field": f.name,
+            "type": f.type,
+            "searched by": searchable.get(f.search, f.search),
+            "weight": f"{f.boost:g}×" if f.search != "none" else "—",
+            "required": "yes" if f.required else "",
+            "notes": f.description or "",
+        })
+    return rows
+
+
+def schema_relationship_rows(brain, doc_type_name: str) -> list[dict]:
+    """Declared and observed edges for one doc_type, merged.
+
+    Declared is the vocabulary the schema intends; observed is what the entities
+    actually use. Showing both together is the point — a declared edge with zero
+    uses and an undeclared edge in heavy use are both worth noticing.
+    """
+    doc_type = brain.config.doc_type(doc_type_name)
+    observed = brain.observed_relationships(doc_type_name)
+    rows = []
+    seen = set()
+
+    for spec in (doc_type.relationships if doc_type else []):
+        seen.add(spec.name)
+        rows.append({
+            "relationship": spec.name,
+            "points at": spec.target_doc_type or "any",
+            "declared": "yes",
+            "in use": observed.get(spec.name, 0),
+        })
+    for meaning, count in sorted(observed.items(), key=lambda kv: -kv[1]):
+        if meaning not in seen:
+            rows.append({
+                "relationship": meaning,
+                "points at": "—",
+                "declared": "no",
+                "in use": count,
+            })
+    return rows
 
 
 def graph_theme(theme_type: Optional[str]) -> dict:
