@@ -171,3 +171,89 @@ def test_serve_fails_cleanly_on_a_missing_brain(tmp_path, served):
     result = run("serve", "--brain", tmp_path / "nope")
     assert result.exit_code == 1
     assert "no brain.yaml" in result.output
+
+
+# -- serving many brains from one process --------------------------------------
+
+
+@pytest.fixture
+def brains_root(tmp_path):
+    from open_index.brain import Brain
+
+    root = tmp_path / "brains"
+    root.mkdir()
+    for name in ("alpha", "beta"):
+        shutil.copytree(EXAMPLE, root / name)
+        Brain.open(root / name).index()
+    return root
+
+
+@pytest.fixture
+def served_multi(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("open_index.mcp_server.serve_http_multi",
+                        lambda root, **kw: captured.update(root=root, **kw))
+    return captured
+
+
+def test_brains_flag_serves_every_brain(brains_root, served_multi):
+    result = run("serve", "--brains", brains_root)
+    assert result.exit_code == 0
+    assert served_multi["root"] == str(brains_root)
+
+
+def test_multi_banner_lists_each_brain_url(brains_root, served_multi):
+    result = run("serve", "--brains", brains_root, "--public-url", "https://x.example.com")
+    assert "2 brains" in result.stdout
+    assert "https://x.example.com/alpha/mcp" in result.stdout
+    assert "https://x.example.com/beta/mcp" in result.stdout
+
+
+def test_multi_banner_flags_ungated_brains(brains_root, served_multi, monkeypatch):
+    monkeypatch.delenv("OPEN_INDEX_TOKEN", raising=False)
+    result = run("serve", "--brains", brains_root)
+    assert "OPEN" in result.stdout, "an unauthenticated brain must be called out"
+
+
+def test_multi_banner_shows_a_gated_brain_as_tokened(brains_root, served_multi, monkeypatch):
+    monkeypatch.setenv("OPEN_INDEX_TOKEN_ALPHA", "t")
+    result = run("serve", "--brains", brains_root)
+    assert "token" in result.stdout
+
+
+def test_multi_banner_points_at_the_directory_and_health(brains_root, served_multi):
+    result = run("serve", "--brains", brains_root)
+    assert "directory:" in result.stdout and "healthz" in result.stdout
+
+
+def test_brains_root_with_no_brains_is_a_clean_error(tmp_path, served_multi):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    result = run("serve", "--brains", empty)
+    assert result.exit_code == 1
+    assert "no brains under" in result.output
+
+
+def test_serve_http_multi_starts_uvicorn(brains_root, monkeypatch):
+    import uvicorn
+
+    from open_index import mcp_server
+
+    captured = {}
+    monkeypatch.setattr(uvicorn, "run",
+                        lambda app, host, port: captured.update(app=app, port=port))
+    mcp_server.serve_http_multi(str(brains_root), port=9001)
+    assert captured["port"] == 9001
+    assert captured["app"] is not None
+
+
+def test_serve_http_multi_refuses_an_empty_root(tmp_path, monkeypatch):
+    import uvicorn
+
+    from open_index import mcp_server
+
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
+    empty = tmp_path / "none"
+    empty.mkdir()
+    with pytest.raises(SystemExit, match="no brains found"):
+        mcp_server.serve_http_multi(str(empty))
