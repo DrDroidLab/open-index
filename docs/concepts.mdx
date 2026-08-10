@@ -1,0 +1,98 @@
+---
+title: Core concepts
+description: The four primitives a brain is built from, and how entities link into a graph.
+---
+
+A brain is built from four primitives. Everything else in Open Index is a way to
+create, store, search, or maintain them.
+
+<CardGroup cols={2}>
+  <Card title="doc_type" icon="shapes">
+    A concept you want to track and maintain — `service`, `customer`, `issue`.
+  </Card>
+  <Card title="doc_schema" icon="table-list">
+    The fields stored for a given doc_type, plus how each is searched and weighted.
+  </Card>
+  <Card title="entity" icon="cube">
+    One instance of a doc_type, stored per its schema and linked to others.
+  </Card>
+  <Card title="connector" icon="plug">
+    An optional source you extract entities from, e.g. an MCP server.
+  </Card>
+</CardGroup>
+
+## doc_type
+
+A **doc_type** is an empirical representation of the kind of object you want to
+store in your brain. Sample doc_types by domain:
+
+- **infra** — `service`, `datastore`, `dashboard`, `runbook`, `alert`
+- **sales** — `lead`, `deal`, `account`
+- **lending** — `loan`, `borrower`, `application`
+- **personal** — `goal`, `project`, `person`, `area`, `note`
+
+Each doc_type is one YAML file in `doc_types/`. It declares a schema, an optional
+display config, and an optional relationship vocabulary.
+
+## doc_schema
+
+The **schema** lists the fields a doc_type stores. Per field you set the data
+`type`, how it's searched (`syntactic`, `semantic`, or `none`), and a ranking
+`boost`. See [Search configuration](/guides/search-configuration) for the full
+field reference.
+
+## entity
+
+An **entity** is one instance of a doc_type. Its `id` must be `<doc_type>:<slug>`
+(e.g. `service:checkout`).
+
+Every entity carries the reserved **`related_to`** field — the correlation field
+present on all entities. It defines the graph edges: each edge is a `target` plus a
+free-text `relationship_edge_meaning`.
+
+```json
+{
+  "doc_type": "service",
+  "id": "service:checkout",
+  "name": "Checkout",
+  "related_to": [
+    { "target": "datastore:postgres-main",   "relationship_edge_meaning": "writes to" },
+    { "target": "dashboard:checkout-latency", "relationship_edge_meaning": "is monitored by" }
+  ]
+}
+```
+
+This is how you say "this ticket is about that service" without any graph database.
+The explorer's **Map** tab renders these edges directly.
+
+## connector
+
+A **connector** is an optional ingestion script in `<brain>/connectors/*.py` that
+pulls from someone else's MCP server on a schedule and turns the results into
+entities. See [Connectors](/agents/connectors).
+
+## Where entities live: `storage: file | index`
+
+Each doc_type declares its source of truth, so curated and machine-generated data
+don't fight over git.
+
+<Tabs>
+  <Tab title="storage: file">
+    JSON files under `entities/<doc_type>/` are the source of truth — git-tracked
+    and PR-reviewable. Right for curated, human- or agent-authored entities.
+    `open-index index` reconciles these from disk on each run.
+  </Tab>
+  <Tab title="storage: index (default)">
+    The search DB owns these entities; they are **not** written to files. Right for
+    connector-pulled, high-volume, or temporal data (hundreds of services, memories,
+    alerts) that would otherwise churn the repo.
+  </Tab>
+</Tabs>
+
+<Warning>
+`open-index index` reconciles **file**-backed types from disk and leaves
+**index**-backed entities untouched. Match how a type is written to how it's
+declared, or the next `index` run will wipe DB-written entities on a `file` type.
+</Warning>
+
+See [Search configuration](/guides/search-configuration) for the decision table.

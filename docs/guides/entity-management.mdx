@@ -1,0 +1,57 @@
+---
+title: Entity management
+description: How often to create entities, how many, and how to keep a brain from filling with noise.
+---
+
+A doc_type is the type of object you store; an entity is an actual instance of it.
+Once you can create entities, the question becomes *how many* and *how often* —
+because a brain's quality depends as much on what you leave out as what you put in.
+
+## Recommendation on cadence
+
+Typically, create doc_types whose new instances are added at a **human pace** (once
+a day, once a week) rather than a real-time pace.
+
+<CardGroup cols={2}>
+  <Card title="Good: Kubernetes deployments" icon="check">
+    Deployments change at a non-real-time pace — a great doc_type to track.
+  </Card>
+  <Card title="Avoid: a pod per entity" icon="xmark">
+    Pods are ephemeral. An entity per pod churns the brain with no lasting value.
+  </Card>
+</CardGroup>
+
+The same logic scales the `customer` doc_type: an entity per customer is a poor fit
+for a B2C company, but reasonable for B2B enterprise sales where the customer count
+is in the thousands.
+
+## Why not create too many entities
+
+<Warning>
+Over-populating a brain has two costs:
+
+1. **Bloat and noise** — more entities means more low-signal hits diluting search.
+2. **Stale-data overhead** — removing entities that no longer matter gets
+   challenging over time.
+</Warning>
+
+## Exception: valuable temporal data
+
+Some temporal data is worth keeping centrally — for example, **alerts and
+deployments** in a brain used for AI troubleshooting.
+
+In those cases, model the data so it **decays exponentially with time**. That way,
+flushing old data doesn't hurt the brain's quality — the recent, relevant slice
+always dominates.
+
+## How entities get created
+
+- Manual entry / upload from the UI.
+- Talking to an agent connected to the brain via CLI / MCP.
+- A webhook or API trigger from a script on your end.
+- A recurring cron defined in the brain configuration.
+
+For each MCP server you add as a source, you define what data to extract and which
+doc_type to store it in, then run it once to generate the entities — optionally on a
+schedule. See [Populating entities](/guides/populating-entities) and
+[Connectors](/agents/connectors).

@@ -1,0 +1,90 @@
+---
+title: Quickstart
+description: Install Open Index, run the bundled example brain, and open the explorer.
+---
+
+## Install
+
+```bash
+pip install -e '.[all]'          # core + UI (Streamlit) + MCP server
+```
+
+The `[all]` extra pulls in the Streamlit explorer and the MCP server. For a
+narrower install, pick the extras you need — `[ui]`, `[mcp]`, `[serve]`,
+`[semantic]`, `[opensearch]`.
+
+## Try the bundled example
+
+The repo ships a **support brain** (products, issues, segments, comments) you can
+run immediately.
+
+```bash
+open-index index --brain examples/support-brain
+open-index ui    --brain examples/support-brain      # open the Map tab, pick an anchor
+```
+
+<Tip>
+Three runnable examples ship in `examples/`: `support-brain`, `infra-brain`, and
+`personal-brain`. Each is a complete brain you can index, search, and explore.
+</Tip>
+
+## Start your own brain
+
+<Steps>
+  <Step title="Scaffold a brain">
+    ```bash
+    open-index init my-brain
+    ```
+    This writes `brain.yaml`, a `doc_types/` folder, an `entities/` folder, and
+    optional Claude Code conveniences (`.mcp.json`, `CLAUDE.md`, an editing skill).
+  </Step>
+  <Step title="Define a concept">
+    ```bash
+    open-index add-doc-type customer --brain my-brain
+    ```
+    Edit the generated `doc_types/customer.yaml` to declare the fields you want to store.
+  </Step>
+  <Step title="Add entities">
+    Author one JSON per entity under `my-brain/entities/**/*.json`, or import in bulk:
+    ```bash
+    open-index import customers.csv --doc-type customer --brain my-brain
+    ```
+  </Step>
+  <Step title="Index and explore">
+    ```bash
+    open-index index --brain my-brain
+    open-index ui    --brain my-brain
+    ```
+  </Step>
+</Steps>
+
+## A brain on disk
+
+```
+my-brain/
+  brain.yaml            # name + storage/search backend
+  doc_types/*.yaml      # one schema per doc_type (fields, boosts, display color)
+  entities/**/*.json    # entities, with related_to edges
+  connectors/*.py       # optional ingestion scripts (MCP → entities)
+```
+
+Storage defaults to **SQLite + FTS5** (zero external services). The backend sits
+behind a pluggable interface with two implementations: SQLite (default, local/dev)
+and **OpenSearch** (select with `search.backend: opensearch`).
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Core concepts" icon="diagram-project" href="/concepts">
+    Understand doc_types, entities, and the relationship graph.
+  </Card>
+  <Card title="Creating a brain" icon="brain" href="/guides/creating-a-brain">
+    Define schemas and author entities step by step.
+  </Card>
+  <Card title="Connect an agent" icon="plug" href="/agents/mcp">
+    Wire the brain into Claude Code, Claude Desktop, or Cursor over MCP.
+  </Card>
+  <Card title="Deploy a shared brain" icon="server" href="/deployment">
+    Run the brain remotely for a team, cloud agents, or CI.
+  </Card>
+</CardGroup>
