@@ -153,3 +153,53 @@ def test_reserved_keys_cover_the_metadata_fields():
     from open_index.storage.opensearch_backend import _RESERVED_KEYS
 
     assert {"provenance", "valid_from", "valid_to"} <= _RESERVED_KEYS
+
+
+# -- fuzzy search must not be handed non-text fields ---------------------------
+#
+# OpenSearch rejects the entire query with "Can only use fuzzy queries on keyword
+# and text fields" if a numeric or date field is listed in multi_match. One
+# `number` field in the schema therefore broke *all* search — found with a real
+# dataset, not caught by the earlier synthetic ones.
+
+
+def test_numeric_fields_are_kept_out_of_the_fuzzy_query():
+    dt = DocType(doc_type="defect", fields=[
+        FieldSpec(name="name", type="string", boost=6),
+        FieldSpec(name="symptom", type="text"),
+        FieldSpec(name="manhours", type="number"),
+    ])
+    fields = _backend_with_types([dt])._search_fields(None)
+    joined = " ".join(fields)
+    assert "fields.symptom" in joined
+    assert "manhours" not in joined, "a numeric field would break the whole query"
+
+
+def test_boolean_and_timestamp_fields_are_excluded_too():
+    dt = DocType(doc_type="t", fields=[
+        FieldSpec(name="name", type="string"),
+        FieldSpec(name="active", type="boolean"),
+        FieldSpec(name="seen_at", type="timestamp"),
+    ])
+    joined = " ".join(_backend_with_types([dt])._search_fields(None))
+    assert "active" not in joined and "seen_at" not in joined
+
+
+def test_text_fields_keep_their_boosts():
+    dt = DocType(doc_type="t", fields=[
+        FieldSpec(name="title", type="string", boost=6),
+        FieldSpec(name="body", type="text", boost=2),
+        FieldSpec(name="count", type="number", boost=9),
+    ])
+    fields = _backend_with_types([dt])._search_fields(None)
+    assert "fields.title^6" in fields
+    assert "fields.body^2" in fields
+    assert not any("count" in f for f in fields)
+
+
+def test_date_detection_is_disabled_in_the_mapping():
+    """A `string` field holding e.g. 2026-04-12 would otherwise be mapped as a
+    date, and then rejected by fuzzy search."""
+    assert OpenSearchBackend.mapping()["mappings"]["date_detection"] is False
+    backend = _backend_with_types([DocType(doc_type="t")])
+    assert backend._base_mapping()["mappings"]["date_detection"] is False

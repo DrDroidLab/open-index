@@ -226,3 +226,248 @@ def test_every_theme_defines_the_full_palette():
     keys = {"node_label", "edge_label", "edge", "stroke_width"}
     for theme in ("dark", "light"):
         assert keys <= set(view.graph_theme(theme))
+
+
+# -- Schema tab ----------------------------------------------------------------
+
+
+def test_schema_field_rows_describe_search_behaviour(brain):
+    dt = brain.config.doc_type("issue")
+    rows = {r["field"]: r for r in view.schema_field_rows(dt)}
+    assert rows["name"]["searched by"] == "keyword match"
+    assert rows["description"]["searched by"] == "meaning (vector)"
+    assert rows["name"]["weight"] == "6×"
+
+
+def test_unsearched_fields_show_no_weight(brain):
+    from open_index.schema import DocType, FieldSpec
+
+    dt = DocType(doc_type="t", fields=[FieldSpec(name="blob", search="none", boost=9)])
+    row = view.schema_field_rows(dt)[0]
+    assert row["searched by"] == "not searched"
+    assert row["weight"] == "—", "a weight on an unsearched field is misleading"
+
+
+def test_required_fields_are_marked(brain):
+    from open_index.schema import DocType, FieldSpec
+
+    dt = DocType(doc_type="t", fields=[FieldSpec(name="owner", required=True)])
+    assert view.schema_field_rows(dt)[0]["required"] == "yes"
+
+
+def test_relationship_rows_merge_declared_and_observed(brain):
+    rows = {r["relationship"]: r for r in view.schema_relationship_rows(brain, "product")}
+    assert "has common issue" in rows
+    assert rows["has common issue"]["declared"] == "yes"
+    assert rows["has common issue"]["points at"] == "issue"
+    assert rows["has common issue"]["in use"] > 0
+
+
+def test_undeclared_relationships_in_use_are_still_listed(brain):
+    """An edge nobody declared but everything uses is worth seeing."""
+    from open_index.models import Entity, Relationship
+
+    brain.put_entity(Entity(
+        id="product:improvised", doc_type="product", name="Improvised",
+        related_to=[Relationship(target="issue:no-results",
+                                 relationship_edge_meaning="totally made up")]))
+    rows = {r["relationship"]: r for r in view.schema_relationship_rows(brain, "product")}
+    assert rows["totally made up"]["declared"] == "no"
+    assert rows["totally made up"]["in use"] == 1
+
+
+def test_declared_but_unused_relationships_show_zero(brain):
+    from open_index.schema import DocType, RelationshipSpec
+
+    brain.create_doc_type(DocType(
+        doc_type="unused_rel",
+        relationships=[RelationshipSpec(name="never used", target_doc_type="issue")]))
+    row = view.schema_relationship_rows(brain, "unused_rel")[0]
+    assert row["declared"] == "yes" and row["in use"] == 0
+
+
+def test_help_tab_is_first_in_the_guide():
+    assert view.TAB_GUIDE[0][0] == view.HELP_TAB
+    assert [n for n, _ in view.TAB_GUIDE][:3] == ["How to use?", "Schema", "Explore"]
+
+
+# -- map readability -----------------------------------------------------------
+#
+# Long entity names drawn next to their dot were the main thing making the map
+# unreadable; the full text moves to the hover tooltip.
+
+
+def test_nodes_carry_no_label(brain):
+    """Entity names are long and arbitrary; drawn beside every dot they overlap
+    each other. Identity comes from the tooltip instead."""
+    from open_index.graph import build_overview_graph
+
+    specs = view.graph_node_specs(build_overview_graph(brain))
+    assert specs
+    assert all(s["label"] == "" for s in specs)
+    # Empty string, not None: None serialises to null and vis draws that.
+    assert all(s["label"] is not None for s in specs)
+
+
+def test_every_node_carries_its_identity_on_hover(brain):
+    from open_index.graph import build_overview_graph
+
+    specs = {s["id"]: s for s in view.graph_node_specs(build_overview_graph(brain))}
+    spec = specs["product:checkout"]
+    assert "Checkout" in spec["title"]
+    assert "product:checkout" in spec["title"]
+
+
+def test_edges_carry_no_label_but_name_the_relationship(brain):
+    from open_index.graph import build_overview_graph
+
+    specs = view.graph_edge_specs(build_overview_graph(brain), "#ccc")
+    assert specs
+    assert all(s["label"] == "" for s in specs)
+    assert any("has common issue" in s["title"] for s in specs)
+
+
+def test_node_colour_comes_from_the_doc_type(brain):
+    from open_index.graph import build_overview_graph
+
+    graph = build_overview_graph(brain)
+    by_id = {n.id: n.color for n in graph.nodes}
+    assert all(s["color"] == by_id[s["id"]] for s in view.graph_node_specs(graph))
+
+
+def test_node_tooltip_carries_the_full_name_and_type():
+    tip = view.node_tooltip("issue:x", "A very long name that got truncated",
+                            "issue", {"severity": "high"})
+    assert "A very long name that got truncated" in tip
+    assert "issue:x" in tip
+    assert "severity: high" in tip
+
+
+def test_node_tooltip_skips_empty_fields_and_caps_length():
+    tip = view.node_tooltip("t:x", "N", "t",
+                            {f"f{i}": "v" for i in range(20)} | {"blank": ""})
+    assert "blank" not in tip
+    assert len(tip.splitlines()) <= 7
+
+
+def test_edge_tooltip_names_the_relationship():
+    tip = view.edge_tooltip("a:1", "b:2", "depends on")
+    assert "depends on" in tip and "a:1" in tip and "b:2" in tip
+
+
+def test_edge_tooltip_handles_an_unlabelled_edge():
+    assert "related" in view.edge_tooltip("a:1", "b:2", "")
+
+
+def test_legend_describes_what_is_on_screen(brain):
+    from open_index.graph import build_overview_graph
+
+    graph = build_overview_graph(brain, ["product", "issue"])
+    rows = view.legend_rows(brain, graph)
+    assert {r["doc_type"] for r in rows} <= {"product", "issue"}
+    assert all(r["color"].startswith("#") for r in rows)
+    assert sum(r["count"] for r in rows) == len(graph.nodes)
+
+
+def test_legend_is_ordered_by_count(brain):
+    from open_index.graph import build_overview_graph
+
+    rows = view.legend_rows(brain, build_overview_graph(brain))
+    assert [r["count"] for r in rows] == sorted([r["count"] for r in rows], reverse=True)
+
+
+def test_graph_width_fits_beside_the_legend():
+    assert view.GRAPH_WIDTH <= 1000
+
+
+# -- the model explanation on the help tab ------------------------------------
+
+
+def test_model_guide_covers_the_three_ideas():
+    terms = " ".join(t for t, _ in view.MODEL_GUIDE).lower()
+    assert "doc_type" in terms
+    assert "entity" in terms and "doc" in terms   # both names for an instance
+    assert "relationship" in terms
+
+
+def test_model_guide_says_relationships_are_optional():
+    text = dict(view.MODEL_GUIDE)["relationship"].lower()
+    assert "optional" in text
+    assert "without any" in text, "should say entities are valid with no edges"
+
+
+def test_model_guide_explains_the_id_convention():
+    """The single most common write failure, so it belongs in the explanation."""
+    text = " ".join(w for _, w in view.MODEL_GUIDE)
+    assert "<doc_type>:<slug>" in text
+
+
+def test_model_guide_distinguishes_schema_from_data():
+    text = dict(view.MODEL_GUIDE)["doc_type"].lower()
+    assert "schema" in text
+
+
+# -- one UI process, many brains: the URL is the selector ----------------------
+
+
+def test_the_url_path_selects_the_brain():
+    assert view.brain_from_url("https://h/sales-index",
+                               ["support-index", "sales-index"]) == "sales-index"
+
+
+def test_a_deeper_path_selects_on_the_first_segment():
+    assert view.brain_from_url("https://h/sales-index/x",
+                               ["alpha", "sales-index"]) == "sales-index"
+
+
+def test_the_root_path_falls_back_to_the_first_brain():
+    assert view.brain_from_url("https://h/", ["alpha", "beta"]) == "alpha"
+
+
+def test_an_unknown_path_falls_back_rather_than_erroring():
+    """A stale link should land somewhere useful."""
+    assert view.brain_from_url("https://h/deleted", ["alpha", "beta"]) == "alpha"
+
+
+def test_a_missing_url_falls_back():
+    assert view.brain_from_url(None, ["alpha", "beta"]) == "alpha"
+
+
+def test_a_query_string_does_not_affect_selection():
+    assert view.brain_from_url("https://h/beta?x=1", ["alpha", "beta"]) == "beta"
+
+
+def test_no_brains_selects_nothing():
+    assert view.brain_from_url("https://h/x", []) is None
+
+
+# -- the endpoint shown on the help tab ----------------------------------------
+#
+# A shared explorer cannot be handed one correct MCP URL as configuration: the
+# answer depends on which index you are looking at. It is derived from the page
+# URL instead, which also keeps it right behind any proxy or hostname.
+
+
+def test_endpoint_is_derived_from_the_page_url():
+    assert view.mcp_url_for("https://brain.acme.com/sales-index", "sales-index") \
+        == "https://brain.acme.com/sales-index/mcp"
+
+
+def test_endpoint_ignores_the_rest_of_the_path_and_query():
+    assert view.mcp_url_for("https://h:8443/sales-index/x?q=1", "sales-index") \
+        == "https://h:8443/sales-index/mcp"
+
+
+def test_endpoint_uses_the_directory_name_not_the_configured_brain_name():
+    """The URL segment is the directory; brain.yaml's name may differ."""
+    assert view.mcp_url_for("https://h/dir-name", "dir-name").endswith("/dir-name/mcp")
+
+
+def test_endpoint_keeps_the_scheme():
+    assert view.mcp_url_for("http://localhost:8501/a", "a").startswith("http://")
+
+
+def test_no_endpoint_without_a_url_or_a_name():
+    assert view.mcp_url_for(None, "a") is None
+    assert view.mcp_url_for("https://h/a", None) is None
+    assert view.mcp_url_for("/relative/path", "a") is None

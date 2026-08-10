@@ -49,7 +49,8 @@ Prefer containers, or need a brain several agents share? →
 | `open-index search <query> [-t doc_type]` | Search from the terminal. |
 | `open-index ui` | Launch the Streamlit explorer (Explore / **Map** / Analytics / Jobs). |
 | `open-index mcp [--read-only]` | Run the MCP context layer over stdio. **Read+write by default**; `--read-only` opts out of writes. |
-| `open-index serve [--port --token --read-only]` | Serve the same read+write MCP context layer over **HTTP** for remote agents (bearer-token auth). |
+| `open-index serve [--port --token --read-only]` | Serve the MCP context layer over **HTTP** for remote agents (bearer-token auth). |
+| `open-index serve --brains <root>` | Serve **every** brain under a directory from one process, each at `/<name>/mcp`. |
 | `open-index mcp-config [--url --token]` | Print the MCP connection block to paste into your agent. |
 
 ### A context layer for domain-specialized agents

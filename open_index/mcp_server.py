@@ -23,6 +23,8 @@ import inspect
 from time import perf_counter
 from typing import Any, Optional
 
+from pathlib import Path
+
 from open_index.brain import Brain
 from open_index.schema import DocType, DocTypeDisplay, FieldSpec, RelationshipSpec
 from open_index.models import Entity, Provenance, Relationship
@@ -432,10 +434,168 @@ def _bearer_auth_middleware(app, token: str):
     return wrapped
 
 
+def _host_of(url: str) -> Optional[str]:
+    """The host[:port] part of a URL, or None if it isn't parseable."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url if "://" in url else f"http://{url}")
+    return parsed.netloc or None
+
+
+def build_transport_security(
+    public_url: Optional[str] = None, allowed_hosts: Optional[list[str]] = None
+):
+    """Host allow-list for the MCP SDK's DNS-rebinding protection.
+
+    The SDK enables that protection whenever the app is built for a localhost
+    bind, with a hardcoded localhost-only allow-list. Anything reaching the
+    server through a reverse proxy or load balancer therefore arrives with a
+    foreign `Host` header and is rejected with `421 Invalid Host header` — the
+    server looks up, and every proxied request fails.
+
+    Rather than switch the protection off (which is what passing a non-localhost
+    bind address to the SDK quietly does), state which hosts are legitimate:
+    loopback, plus whatever `--public-url` and `--allowed-host` name.
+
+    A literal `*` disables the check — for a brain behind a trusted proxy that
+    already validates Host. Returns settings, or None when the SDK's own default
+    is appropriate.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    entries = [e.strip() for e in (allowed_hosts or []) if e.strip()]
+    if "*" in entries:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+    if public_url:
+        derived = _host_of(public_url)
+        if derived:
+            entries.append(derived)
+
+    hosts = {"127.0.0.1:*", "localhost:*", "[::1]:*", "127.0.0.1", "localhost", "[::1]"}
+    origins = {"http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"}
+    for entry in entries:
+        bare = entry.split(":", 1)[0] if not entry.startswith("[") else entry
+        # Both forms: proxies drop the port when it is the scheme default, so
+        # "example.com" and "example.com:8080" must both pass.
+        hosts.update({entry, bare, f"{bare}:*"})
+        for scheme in ("http", "https"):
+            origins.update({f"{scheme}://{entry}", f"{scheme}://{bare}",
+                            f"{scheme}://{bare}:*"})
+
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=sorted(hosts),
+        allowed_origins=sorted(origins),
+    )
+
+
+def discover_brains(root: str) -> dict[str, "Path"]:
+    """Brains under `root`. Re-exported from config for the serve entry points."""
+    from open_index.config import discover_brains as _discover
+
+    try:
+        return _discover(root)
+    except FileNotFoundError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def token_for(name: str, default: Optional[str] = None) -> Optional[str]:
+    """Per-brain bearer token from the environment, falling back to a shared one.
+
+    `OPEN_INDEX_TOKEN_SALES_EU` gates the brain in `sales-eu/`. Without one, the
+    shared `--token` applies — which is fine for a private host and wrong for a
+    shared one, hence the per-brain override.
+    """
+    import os as _os
+
+    key = "OPEN_INDEX_TOKEN_" + name.upper().replace("-", "_").replace(".", "_")
+    return _os.environ.get(key) or default
+
+
+def build_multi_app(
+    brains: dict[str, "Path"],
+    *,
+    token: Optional[str] = None,
+    read_only: bool = False,
+    public_base_url: Optional[str] = None,
+    allowed_hosts: Optional[list[str]] = None,
+    host: str = "0.0.0.0",
+):
+    """One ASGI app serving many brains, each mounted at `/<name>/mcp`.
+
+    The point is what is *not* duplicated. A process per brain re-loads the
+    Python runtime and a ~250MB resident embedding model every time, which caps
+    a modest host at a handful of brains. Here the model is loaded once — the
+    provider cache is keyed on model configuration, not on brain — so the
+    marginal cost of a brain is its config and doc_types, and hundreds fit where
+    a handful did.
+
+    Each brain keeps its own token, its own read/write policy and its own
+    storage, so this is a packaging change rather than a shared-tenancy one.
+    """
+    from contextlib import AsyncExitStack, asynccontextmanager
+
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse, PlainTextResponse
+    from starlette.routing import Mount, Route
+
+    base = (public_base_url or "").rstrip("/")
+    mounted: list = []          # the Starlette children, for their lifespans
+    routes: list = []
+    listing: dict[str, dict] = {}
+
+    for name, path in brains.items():
+        brain = Brain.open(path)
+        server = build_server(brain, read_only=read_only)
+        public_url = f"{base}/{name}/mcp" if base else None
+        child = server.streamable_http_app(
+            transport_security=build_transport_security(public_url, allowed_hosts),
+            host=host,
+        )
+        mounted.append(child)
+
+        brain_token = token_for(name, token)
+        app = _bearer_auth_middleware(child, brain_token) if brain_token else child
+        routes.append(Mount(f"/{name}", app=app))
+
+        listing[name] = {
+            "mcp": public_url or f"/{name}/mcp",
+            "description": brain.config.description,
+            "entities": sum(brain.counts().values()),
+            "doc_types": sorted(brain.config.doc_types),
+            "read_only": read_only,
+            "authenticated": bool(brain_token),
+        }
+
+    async def directory(_request):
+        return JSONResponse(listing)
+
+    async def healthz(_request):
+        return PlainTextResponse("ok")
+
+    routes += [Route("/", directory), Route("/healthz", healthz)]
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        # Starlette does not run a mounted app's lifespan, and the MCP transport
+        # needs its session manager started — without this every request to a
+        # mounted brain fails with "Task group is not initialized".
+        async with AsyncExitStack() as stack:
+            for child in mounted:
+                await stack.enter_async_context(
+                    child.router.lifespan_context(child))
+            yield
+
+    return Starlette(routes=routes, lifespan=lifespan)
+
+
 def serve_http(
     brain_dir: str, host: str = "0.0.0.0", port: int = 8080,
     token: Optional[str] = None, read_only: bool = False,
     warn_unauthenticated: bool = True,
+    public_url: Optional[str] = None,
+    allowed_hosts: Optional[list[str]] = None,
 ) -> None:
     """Run the MCP server over streamable HTTP so remote/cloud agents can connect
     by URL. Register `http://<host>:<port>/mcp` as a remote MCP server in the
@@ -452,7 +612,10 @@ def serve_http(
 
     brain = Brain.open(brain_dir)
     server = build_server(brain, read_only=read_only)
-    app = server.streamable_http_app()
+    app = server.streamable_http_app(
+        transport_security=build_transport_security(public_url, allowed_hosts),
+        host=host,
+    )
     if token:
         app = _bearer_auth_middleware(app, token)
     elif warn_unauthenticated:
@@ -464,4 +627,31 @@ def serve_http(
             "Set OPEN_INDEX_TOKEN or --token for anything networked.",
             file=sys.stderr,
         )
+    uvicorn.run(app, host=host, port=port)
+
+
+def serve_http_multi(
+    brains_root: str, host: str = "0.0.0.0", port: int = 8080,
+    token: Optional[str] = None, read_only: bool = False,
+    public_base_url: Optional[str] = None,
+    allowed_hosts: Optional[list[str]] = None,
+) -> None:
+    """Serve every brain under `brains_root` from one process."""
+    try:
+        import uvicorn
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise SystemExit(
+            "the HTTP endpoint needs uvicorn: pip install 'open-index[serve]'"
+        ) from exc
+
+    brains = discover_brains(brains_root)
+    if not brains:
+        raise SystemExit(
+            f"no brains found under {brains_root} — a brain is a directory "
+            "containing brain.yaml (create one with `open-index init`)"
+        )
+    app = build_multi_app(
+        brains, token=token, read_only=read_only,
+        public_base_url=public_base_url, allowed_hosts=allowed_hosts, host=host,
+    )
     uvicorn.run(app, host=host, port=port)

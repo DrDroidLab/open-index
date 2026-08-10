@@ -67,6 +67,30 @@ class BrainSummary:
         return bool(self.doc_types)
 
 
+def brain_from_url(url: Optional[str], available: list[str]) -> Optional[str]:
+    """Which brain a URL asks for: the first path segment.
+
+    `/support-index` and `/support-index/anything` both select `support-index`, so
+    the index name lives in the path exactly as it does for the MCP endpoint at
+    `/<name>/mcp`.
+
+    Read from the browser's URL rather than left to Streamlit's own page router:
+    that router resolves programmatic pages by an internal identifier, so every
+    path rendered whichever brain sorted first. An unknown or missing segment
+    falls back to the first brain — a stale link should land somewhere useful
+    rather than on an error.
+    """
+    if not available:
+        return None
+    if not url:
+        return available[0]
+
+    from urllib.parse import urlparse
+
+    first = urlparse(url).path.strip("/").split("/")[0]
+    return first if first in available else available[0]
+
+
 def color_for(brain: Brain, doc_type: str) -> str:
     dt = brain.config.doc_type(doc_type)
     return dt.display.color if dt else DEFAULT_COLOR
@@ -207,7 +231,9 @@ def semantic_weight_for(mode: str) -> Optional[float]:
 # does `f"{width}px"`, so a CSS string like "100%" becomes the invalid value
 # "100%px", the canvas fails to size, and the graph is stranded in a corner
 # instead of centred.
-GRAPH_WIDTH = 1200
+# Sized to sit beside the legend column rather than to fill the page: at the
+# old full-page width the canvas overflowed its column once the legend arrived.
+GRAPH_WIDTH = 950
 GRAPH_HEIGHT = 650
 
 # Past this many nodes a force layout keeps drifting, so we slow it down rather
@@ -260,6 +286,256 @@ div[data-testid='stButton'] > button:focus{box-shadow:none;color:inherit}
 div[data-testid='stButton'] > button p{color:inherit;margin:0}
 </style>
 """
+
+
+def mcp_url_for(current_url: Optional[str], name: Optional[str]) -> Optional[str]:
+    """This index's MCP endpoint, derived from the URL the browser is on.
+
+    An explorer serving many brains cannot be handed one correct endpoint as
+    configuration — the answer depends on which index you are looking at. But
+    the page already knows: it is at `/<name>`, so the endpoint is
+    `/<name>/mcp` on the same origin. Deriving it also means it stays right
+    behind any proxy or hostname without anything being configured.
+
+    Returns None when the URL or the index name is unknown, so callers can fall
+    back to explicit configuration.
+    """
+    if not current_url or not name:
+        return None
+
+    from urllib.parse import urlparse
+
+    parsed = urlparse(current_url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}/{name}/mcp"
+
+
+def mcp_client_config(url: str, server_name: str = "open-index") -> str:
+    """The JSON block to paste into an agent, as displayed in the How to use tab."""
+    import json
+
+    from open_index.mcp_config import normalize_mcp_url
+
+    return json.dumps(
+        {"mcpServers": {server_name: {"type": "http", "url": normalize_mcp_url(url)}}},
+        indent=2,
+    )
+
+
+# The three ideas someone needs before anything else on the page makes sense.
+# Spelled out because "doc_type" means nothing to a first-time visitor, and the
+# help tab is what the app opens on.
+MODEL_GUIDE = [
+    ("doc_type",
+     "A **concept** this index tracks, and the fields kept for it — `issue`, "
+     "`carrier`, `aircraft`. It is the schema, not the data: defining one says "
+     "what an issue *is*, not that any exist. The Schema tab lists them all."),
+    ("entity (a doc)",
+     "**One instance** of a doc_type — one issue, one carrier, one aircraft. "
+     "Its id is always `<doc_type>:<slug>`, so `issue:payment-declined` is an "
+     "issue called `payment-declined`. This is the document you search for and "
+     "the agent reads."),
+    ("relationship",
+     "An **optional** link from one entity to another, with free text saying "
+     "what the link means — `product:checkout` → *has common issue* → "
+     "`issue:payment-declined`. Entities work perfectly well without any. Edges "
+     "are what turn a list of documents into something you can traverse, so an "
+     "index with none is a searchable table rather than a graph."),
+]
+
+
+# What each tool does, in the order an agent would reach for them. Kept here
+# rather than in the page so the list can be asserted against the tools the MCP
+# server actually registers — a stale tool list in the docs is worse than none.
+READ_TOOLS = [
+    ("navigation_guidelines()",
+     "The whole guide to this index: every doc_type, its fields, the "
+     "relationship vocabulary in use, and worked examples. Injected into the "
+     "MCP handshake, so an agent starts oriented."),
+    ("search_brain(query, doc_types, limit)",
+     "Free-text search, hybrid keyword + semantic. `doc_types` narrows it."),
+    ("get_entity(entity_id)",
+     "One entity with its outgoing AND incoming edges — the incoming direction "
+     "answers \"what else points at this?\"."),
+]
+
+WRITE_TOOLS = [
+    ("put_entity(doc_type, id, name, fields, related_to)",
+     "Add or update one entity. Upsert — the same id replaces it."),
+    ("put_entities([...])",
+     "A whole batch in one call, with optional shared provenance. Use this "
+     "rather than calling put_entity in a loop."),
+    ("create_doc_type(doc_type, description, fields, relationships, storage)",
+     "Define a new concept, when no existing doc_type fits."),
+]
+
+# The tab label for the help page. Leftmost, so it is what a first-time visitor
+# lands on, and phrased as the question they are actually asking.
+HELP_TAB = "How to use?"
+
+# What each tab is for, in the order they appear. This list *is* the tab order —
+# the page builds its tabs from it, so the two cannot drift apart.
+TAB_GUIDE = [
+    (HELP_TAB,
+     "This page: how to connect an agent, what tools it gets, and what "
+     "everything else here does."),
+    ("Schema",
+     "Every doc_type in this index and the shape of it — each field's type, how "
+     "it is searched, its ranking weight, and the relationship vocabulary that "
+     "connects types to each other. Read this before writing to the index."),
+    ("Explore",
+     "Search the index, or browse by doc_type. Open an entity to see its fields, "
+     "its attribution, and every relationship in both directions — click through "
+     "to walk the graph."),
+    ("Map",
+     "The same relationships drawn. It auto-anchors on the most-connected "
+     "entities so it shows something immediately; click any node to expand it, "
+     "and narrow by doc_type to cut the noise."),
+    ("Analytics",
+     "What has been asked of this index, by which client (CLI, agent, this UI) "
+     "and how often. Zero-result searches are the interesting number: they are "
+     "the questions this index cannot yet answer."),
+    ("Jobs",
+     "Connectors that pull entities in on a schedule, with their last run."),
+]
+
+
+def schema_field_rows(doc_type) -> list[dict]:
+    """One row per field, as the Schema tab tabulates them.
+
+    `search` and `boost` are the two that change behaviour rather than just
+    describing it, so they are spelled out rather than shown as raw enum values.
+    """
+    searchable = {
+        "syntactic": "keyword match",
+        "semantic": "meaning (vector)",
+        "none": "not searched",
+    }
+    rows = []
+    for f in doc_type.fields:
+        rows.append({
+            "field": f.name,
+            "type": f.type,
+            "searched by": searchable.get(f.search, f.search),
+            "weight": f"{f.boost:g}×" if f.search != "none" else "—",
+            "required": "yes" if f.required else "",
+            "notes": f.description or "",
+        })
+    return rows
+
+
+def schema_relationship_rows(brain, doc_type_name: str) -> list[dict]:
+    """Declared and observed edges for one doc_type, merged.
+
+    Declared is the vocabulary the schema intends; observed is what the entities
+    actually use. Showing both together is the point — a declared edge with zero
+    uses and an undeclared edge in heavy use are both worth noticing.
+    """
+    doc_type = brain.config.doc_type(doc_type_name)
+    observed = brain.observed_relationships(doc_type_name)
+    rows = []
+    seen = set()
+
+    for spec in (doc_type.relationships if doc_type else []):
+        seen.add(spec.name)
+        rows.append({
+            "relationship": spec.name,
+            "points at": spec.target_doc_type or "any",
+            "declared": "yes",
+            "in use": observed.get(spec.name, 0),
+        })
+    for meaning, count in sorted(observed.items(), key=lambda kv: -kv[1]):
+        if meaning not in seen:
+            rows.append({
+                "relationship": meaning,
+                "points at": "—",
+                "declared": "no",
+                "in use": count,
+            })
+    return rows
+
+
+# Cap on nodes drawn at once. Past this a force layout stops settling and the
+# picture stops being readable regardless.
+MAX_GRAPH_NODES = 250
+
+
+def node_tooltip(entity_id: str, name: str, doc_type: str,
+                 fields: Optional[dict] = None) -> str:
+    """What hovering a node shows: the full name, its type, and a few fields.
+
+    vis renders this as plain text, so it is newline-separated rather than HTML.
+    """
+    lines = [name, f"{doc_type} · {entity_id}"]
+    for key, value in list((fields or {}).items()):
+        if value in (None, "") or key == "name":
+            continue
+        text = " ".join(str(value).split())
+        lines.append(f"{key}: {text[:90]}{'…' if len(text) > 90 else ''}")
+        if len(lines) >= 7:   # a tooltip taller than the graph helps nobody
+            break
+    return "\n".join(lines)
+
+
+def edge_tooltip(source: str, target: str, meaning: str) -> str:
+    return f"{source}\n  —[{meaning or 'related'}]→\n{target}"
+
+
+def legend_rows(brain, graph) -> list[dict]:
+    """Doc types present in a drawn graph, with their colour and node count.
+
+    Built from the graph rather than the schema so it describes what is on
+    screen: a doc_type filtered out, or cut by the node cap, should not appear.
+    """
+    counts: dict[str, int] = {}
+    for node in graph.nodes:
+        counts[node.doc_type] = counts.get(node.doc_type, 0) + 1
+    return [
+        {"doc_type": name, "count": counts[name], "color": color_for(brain, name)}
+        for name in sorted(counts, key=lambda n: (-counts[n], n))
+    ]
+
+
+def graph_node_specs(graph, anchor_size: int = 20, size: int = 13) -> list[dict]:
+    """Node payloads for the map renderer.
+
+    Nothing is labelled on the canvas. Entity names are long and arbitrary —
+    drawn beside every dot they overlap each other and their own edges, and no
+    amount of truncation fixes a dense graph. The picture carries shape and
+    colour; identity comes from the tooltip, and the legend explains the colours.
+
+    `label` is an empty string rather than None: None serialises to null and vis
+    draws that literally.
+    """
+    specs = []
+    for node in graph.nodes:
+        fields = {k: v for k, v in (node.data or {}).items()
+                  if k not in ("id", "doc_type", "related_to")}
+        specs.append({
+            "id": node.id,
+            "label": "",
+            "color": node.color,
+            "shape": "dot",
+            "size": anchor_size if node.is_anchor else size,
+            "title": node_tooltip(node.id, node.label, node.doc_type, fields),
+        })
+    return specs
+
+
+def graph_edge_specs(graph, color: str) -> list[dict]:
+    """Edge payloads. Unlabelled for the same reason as nodes — the relationship
+    is on the tooltip."""
+    return [
+        {
+            "source": edge.source,
+            "target": edge.target,
+            "label": "",
+            "title": edge_tooltip(edge.source, edge.target, edge.meaning),
+            "color": color,
+        }
+        for edge in graph.edges
+    ]
 
 
 def graph_theme(theme_type: Optional[str]) -> dict:

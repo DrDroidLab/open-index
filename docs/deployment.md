@@ -265,6 +265,47 @@ chmod -R g+rwX /path/to/my-brain
 You can still read and edit the files; writes from inside the container land as
 uid 10001 with your group.
 
+### Many brains from one process
+
+`serve --brain <dir>` runs one brain. For more than a handful, `--brains
+<root>` serves every brain under a directory from a single process, each at
+`/<name>/mcp`:
+
+```bash
+open-index serve --brains /srv/brains --port 8080
+#   /srv/brains/support/  →  /support/mcp
+#   /srv/brains/sales/    →  /sales/mcp
+```
+
+This matters because of what is *not* duplicated. A process per brain re-loads
+the Python runtime and a ~250MB resident embedding model each time, so a modest
+host tops out at a handful. In one process the model is loaded once and a brain
+costs only its config and doc_types.
+
+Measured on the bundled example brain, SQLite-backed:
+
+| Brains | One process | One process per brain |
+|---|---|---|
+| 50 | 345 MB | ~13 GB |
+| 200 | **373 MB** | ~53 GB |
+
+That is **1.8MB of marginal cost per brain**, and 200 mount in ~4 seconds.
+
+Each brain keeps its own storage, its own read/write policy and its own token —
+`OPEN_INDEX_TOKEN_<NAME>` gates one brain (`OPEN_INDEX_TOKEN_SALES_EU` for
+`sales-eu/`), and `--token` covers any without one. Nothing is shared between
+brains except the process and the model.
+
+Two extras come with it: `GET /` lists every brain with its URL, entity count
+and doc_types, and `GET /healthz` is an unauthenticated probe for a load
+balancer.
+
+> **Prefer SQLite here.** With OpenSearch, every brain is a separate cluster
+> index and therefore a shard; the working guidance is ~20 shards per GB of
+> heap, so hundreds of brains would hit that ceiling long before RAM. SQLite
+> gives each brain its own file and no shard cost at all. Use OpenSearch for the
+> few brains that genuinely need concurrent writers or >10k entities.
+
 ### Running one-off commands
 
 ```bash

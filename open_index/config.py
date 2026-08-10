@@ -220,6 +220,22 @@ def write_doc_type(brain_root: Path, dt: DocType) -> Path:
     return path
 
 
+def discover_brains(root: str | Path) -> dict[str, Path]:
+    """Every brain directory directly under `root`, keyed by directory name.
+
+    A "brain" is any subdirectory holding a brain.yaml, so a root can sit
+    alongside unrelated folders without confusing anything.
+    """
+    base = Path(root).expanduser().resolve()
+    if not base.is_dir():
+        raise FileNotFoundError(f"no such directory: {base}")
+    return {
+        child.name: child
+        for child in sorted(base.iterdir())
+        if (child / "brain.yaml").exists()
+    }
+
+
 def iter_entity_files(brain_dir: str | Path):
     """Yield every entities/**/*.json path under the brain directory."""
     root = Path(brain_dir).expanduser().resolve()

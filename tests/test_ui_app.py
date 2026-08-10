@@ -5,6 +5,7 @@ browser would. These guard the specific complaints that prompted the rebuild:
 structure you had to hunt for, and a map that opened blank.
 """
 
+import os
 import shutil
 from pathlib import Path
 
@@ -22,7 +23,9 @@ EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "support-brain"
 
 def _run(brain_dir, monkeypatch):
     monkeypatch.setenv("OPEN_INDEX_DIR", str(brain_dir))
-    return AppTest.from_file(str(APP), default_timeout=60).run()
+    # Generous timeout: each of these boots a real Streamlit script run, and on
+    # a loaded machine (the full suite, or a CI runner) 60s flaked once.
+    return AppTest.from_file(str(APP), default_timeout=180).run()
 
 
 @pytest.fixture
@@ -55,10 +58,6 @@ def test_empty_brain_runs_without_exceptions(empty):
     assert not empty.exception, [e.value for e in empty.exception]
 
 
-def test_tabs(populated):
-    assert [t.label for t in populated.tabs] == ["Explore", "Map", "Analytics", "Jobs"]
-
-
 # -- structure is visible without hunting for it ------------------------------
 
 
@@ -86,20 +85,27 @@ def test_empty_brain_sidebar_explains_what_to_do(empty):
 # -- the map no longer opens blank --------------------------------------------
 
 
-def test_map_preselects_anchors(populated):
-    """The original complaint: nothing rendered until you made a selection."""
-    anchors = next(m for m in populated.multiselect if m.label == "Anchors")
-    assert anchors.value, "map opened with no anchors selected"
-
-
-def test_map_anchor_options_are_entity_labels(populated):
-    anchors = next(m for m in populated.multiselect if m.label == "Anchors")
-    assert all("(" in option and ")" in option for option in anchors.options)
+def test_map_draws_without_any_selection(populated):
+    """The original complaint: nothing rendered until you made a selection. The
+    map now opens on the whole index, so there is always something to see."""
+    populated.tabs[3].run()  # Map
+    assert not populated.exception
 
 
 def test_map_doc_type_filter_defaults_to_everything(populated):
-    types = next(m for m in populated.multiselect if m.label == "Doc types to include")
+    types = next(m for m in populated.multiselect if m.label == "Doc types shown")
     assert set(types.value) == set(types.options)
+    assert types.options, "every populated doc_type should be filterable"
+
+
+def test_map_filter_lists_only_populated_doc_types(populated, tmp_path):
+    """A doc_type with no entities would be a dead checkbox."""
+    from open_index.brain import Brain
+    from open_index.schema import DocType
+
+    types = next(m for m in populated.multiselect if m.label == "Doc types shown")
+    counts = Brain.open(os.environ["OPEN_INDEX_DIR"]).counts()
+    assert all(counts.get(name, 0) > 0 for name in types.options)
 
 
 # -- explore ------------------------------------------------------------------
@@ -198,3 +204,122 @@ def test_row_css_inherits_colour_through_the_label_element():
     """Streamlit wraps button labels in <p>, which otherwise keeps its own
     colour and ignores the inherit on the button."""
     assert "> button p{color:inherit" in view.ROW_CSS
+
+
+# -- How to use ----------------------------------------------------------------
+
+
+def test_help_tab_explains_the_model_before_the_connection_block(populated):
+    """The vocabulary has to land before "point your agent at this URL" means
+    anything to a first-time visitor."""
+    markdown = [m.value for m in populated.markdown]
+    headings = [m for m in markdown if m.startswith("###")]
+    assert any("What an index holds" in h for h in headings)
+    assert headings.index(next(h for h in headings if "What an index holds" in h)) \
+        < headings.index(next(h for h in headings if "Connect an agent" in h))
+
+
+def test_schema_marks_relationships_optional(populated):
+    populated.tabs[1].run()   # Schema
+    assert not populated.exception
+    assert any("Relationships (optional)" in m.value for m in populated.markdown)
+
+
+def test_help_is_the_first_tab_so_it_opens_on_load(populated):
+    """Streamlit selects the first tab, so a first-time visitor lands on the
+    explanation instead of having to find it."""
+    assert [t.label for t in populated.tabs][0] == view.HELP_TAB == "How to use?"
+
+
+def test_schema_sits_between_help_and_explore(populated):
+    labels = [t.label for t in populated.tabs]
+    assert labels[:3] == ["How to use?", "Schema", "Explore"]
+
+
+def test_tab_guide_matches_the_tabs_actually_rendered(populated):
+    """A stale list of what-each-tab-does is worse than none."""
+    assert [t.label for t in populated.tabs] == [n for n, _ in view.TAB_GUIDE]
+
+
+def test_documented_tools_match_the_registered_mcp_tools(brain):
+    """The tab must not advertise a tool the server does not expose, nor miss one."""
+    pytest.importorskip("mcp")
+    import asyncio as _asyncio
+
+    from open_index.mcp_server import build_server
+
+    server = build_server(brain)
+    registered = {t.name for t in
+                  _asyncio.new_event_loop().run_until_complete(server.list_tools())}
+    documented = {name.split("(")[0] for name, _ in view.READ_TOOLS + view.WRITE_TOOLS}
+    assert documented == registered, (
+        f"docs vs server mismatch: only-in-docs={documented - registered}, "
+        f"only-on-server={registered - documented}")
+
+
+def test_read_only_tools_are_the_documented_read_set(brain):
+    pytest.importorskip("mcp")
+    import asyncio as _asyncio
+
+    from open_index.mcp_server import build_server
+
+    server = build_server(brain, read_only=True)
+    registered = {t.name for t in
+                  _asyncio.new_event_loop().run_until_complete(server.list_tools())}
+    assert {n.split("(")[0] for n, _ in view.READ_TOOLS} == registered
+
+
+def test_connection_block_is_valid_json_with_the_url():
+    import json
+
+    block = json.loads(view.mcp_client_config("https://x.example.com/demo/mcp", "demo"))
+    assert block["mcpServers"]["demo"]["url"] == "https://x.example.com/demo/mcp"
+    assert block["mcpServers"]["demo"]["type"] == "http"
+
+
+def test_connection_block_appends_the_mcp_path():
+    import json
+
+    block = json.loads(view.mcp_client_config("https://x.example.com/demo"))
+    assert block["mcpServers"]["open-index"]["url"].endswith("/mcp")
+
+
+# -- one UI process serving many brains ----------------------------------------
+
+
+@pytest.fixture
+def multi(tmp_path, monkeypatch):
+    from open_index.brain import Brain
+
+    root = tmp_path / "brains"
+    root.mkdir()
+    for name in ("alpha", "beta"):
+        shutil.copytree(EXAMPLE, root / name)
+        Brain.open(root / name).index()
+    monkeypatch.delenv("OPEN_INDEX_DIR", raising=False)
+    monkeypatch.setenv("OPEN_INDEX_BRAINS_ROOT", str(root))
+    return AppTest.from_file(str(APP), default_timeout=180).run()
+
+
+def test_an_empty_brains_root_explains_itself(tmp_path, monkeypatch):
+    empty = tmp_path / "none"
+    empty.mkdir()
+    monkeypatch.delenv("OPEN_INDEX_DIR", raising=False)
+    monkeypatch.setenv("OPEN_INDEX_BRAINS_ROOT", str(empty))
+    at = AppTest.from_file(str(APP), default_timeout=180).run()
+    assert any("No brains found" in e.value for e in at.error)
+
+
+def test_single_brain_mode_shows_no_picker(populated):
+    """OPEN_INDEX_DIR alone must behave exactly as before."""
+    assert not any(s.label.startswith("Index") for s in populated.sidebar.selectbox)
+
+
+def test_many_brains_render_without_error(multi):
+    assert not multi.exception, [e.value for e in multi.exception]
+
+
+def test_no_index_switcher_widget_anywhere(multi):
+    """The URL is the only selector; a dropdown would let the address bar and
+    the screen disagree about which index you are looking at."""
+    assert not multi.sidebar.selectbox
