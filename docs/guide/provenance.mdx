@@ -1,0 +1,69 @@
+---
+title: How to ensure provenance in your AI agents
+description: Why users can't trust context they can't trace, and how per-fact attribution and citable retrieval build a proof-of-work agents can defend.
+---
+
+Users don't trust an agent because it sounds confident. They trust it when they can
+**see why it did what it did** — the specific piece of context behind the action.
+Provenance is that trail. Without it, every answer is "trust me," and adoption stalls
+exactly where the stakes are highest: legal, healthcare, finance, infrastructure.
+
+## The problem provenance solves
+
+As you collate more documents, finding *which* reference the agent used gets harder:
+
+- The agent read across several documents; which sentence actually drove the action?
+- Was that fact current, or an old copy from a stale file?
+- Who asserted it, and how confident should we be?
+
+When you can't answer those on demand, you can't put a **proof-of-work** in front of
+the user — and without proof-of-work, they can't trust the output. That single gap
+caps how much you can hand off to the agent.
+
+## Attribution belongs on the fact, not the document
+
+The fix is to attach provenance to each **fact**, so it travels with the fact into
+every answer:
+
+<Steps>
+  <Step title="Address every fact">
+    Each entity has a stable id. An answer can cite `service:checkout` precisely —
+    not "somewhere in the payments folder." → [entities](/concepts)
+  </Step>
+  <Step title="Record who asserted it, and how confidently">
+    Attach the source and confidence when a fact is written — a connector, an import,
+    an agent, a human. In [Open Index](/agents/mcp), writes carry a provenance block
+    (`asserted_by`, `confidence`), and bulk imports attribute a whole batch at once
+    (`--asserted-by import:jira`). → [populating entities](/guides/populating-entities)
+  </Step>
+  <Step title="Make retrieval citable">
+    Because the agent retrieves discrete, addressed records — not a blob of merged
+    text — every retrieved fact can be shown to the user with its id and source. The
+    proof-of-work assembles itself from what was actually fetched. →
+    [Context search accuracy](/guide/context-search-accuracy)
+  </Step>
+</Steps>
+
+## Provenance is also an audit tool for *you*
+
+The same trail that builds user trust lets you debug the agent. Local fetch analytics
+record what context each client retrieved, how often, which queries returned nothing,
+and where latency or failures cluster. When an agent acts wrong, you can see the
+context it pulled — instead of reconstructing what it "must have" used. →
+[MCP analytics](/agents/mcp)
+
+<Note>
+Zero-result searches are a gift: they show precisely what your users asked for that
+your knowledge base couldn't answer — i.e. what to model next.
+</Note>
+
+## Checklist
+
+- [ ] Every fact is individually addressable and citable.
+- [ ] Writes carry source + confidence (who asserted this, how sure).
+- [ ] The agent can produce a proof-of-work listing the exact records it used.
+- [ ] You can audit, after the fact, what context an action was based on.
+
+<Card title="Next: Human steering" icon="hand" href="/guide/human-steering">
+  Reducing the autonomy tax now that context is trustworthy.
+</Card>

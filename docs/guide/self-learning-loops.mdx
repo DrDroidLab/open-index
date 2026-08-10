@@ -1,0 +1,77 @@
+---
+title: How to build self-learning loops in your AI agents
+description: Agents that get better with use by writing what they learn back into a structured, validated knowledge base — without the drift of appending to prompts or markdown.
+---
+
+A **self-learning loop** is an agent that gets better the more it's used — not by
+retraining the model, but by **capturing what it learns and making that learning
+available to its future self** (and to every other agent on the same knowledge base).
+Done well, it's compounding. Done naively, it's how agents poison themselves.
+
+## The naive version (and why it drifts)
+
+The tempting approach is to append learnings to a prompt or a running markdown file:
+"remember that checkout uses the new payment provider." It works for a day, then:
+
+- The file grows unbounded and starts [poisoning](/guide/context-poisoning) context.
+- New learnings [contradict](/guide/conflicts-and-staleness) old ones with no
+  resolution.
+- There's no [provenance](/guide/provenance) — you can't tell what the agent taught
+  itself versus what a human verified.
+
+Unstructured write-back turns your knowledge base into exactly the mess this whole
+guide is about avoiding.
+
+## The structured version
+
+Close the loop through the **same structured, validated store** the agent reads from —
+so learning is a first-class write, not a growing text blob:
+
+<Steps>
+  <Step title="Capture learning as a structured write">
+    When the agent discovers something durable, it writes an **entity** (or updates
+    one) — validated against the schema, addressed by id, carrying provenance. Not a
+    line appended to a doc. → [put_entity](/agents/mcp)
+  </Step>
+  <Step title="Update in place, don't accumulate">
+    A new fact about `service:checkout` **updates** that record. The knowledge base
+    stays correct instead of growing a pile of contradictory notes. →
+    [Conflicts & staleness](/guide/conflicts-and-staleness)
+  </Step>
+  <Step title="Trigger it automatically">
+    Wire the write-back to fire at the end of a session — e.g. a Stop hook that records
+    what was learned via `put_entity`. That's the "continuously improving" part: it
+    happens without anyone remembering to do it. → [populating entities](/guides/populating-entities)
+  </Step>
+  <Step title="Keep human-verified and agent-asserted distinguishable">
+    Provenance (`asserted_by`, `confidence`) marks what the agent taught itself versus
+    what a human confirmed — so you can trust, review, or decay agent-written facts
+    differently. → [Provenance](/guide/provenance)
+  </Step>
+</Steps>
+
+## Why the store matters more than the trigger
+
+The trigger (a hook, a cron, an end-of-task step) is easy. What makes the loop *safe*
+is that it writes into a store that **validates, addresses, and attributes** every
+fact — so more usage makes the knowledge base sharper, not noisier. A learning loop
+over unstructured files amplifies drift; a learning loop over a structured brain
+compounds quality.
+
+<Note>
+Because every agent on the same brain reads the same store, one agent's learning
+becomes every agent's context. The loop isn't just self-improving — it's
+*fleet*-improving. → [connected knowledge layer](/why-open-index)
+</Note>
+
+## Checklist
+
+- [ ] Learnings are written as validated, addressed entities — not appended text.
+- [ ] New facts update existing records instead of accumulating.
+- [ ] Write-back is triggered automatically (hook / end-of-session).
+- [ ] Agent-asserted vs human-verified facts are distinguishable via provenance.
+- [ ] Agent-written facts are subject to review and/or decay.
+
+<Card title="Back to the guide" icon="book" href="/guide/index">
+  See how every piece fits into building an autonomous agent.
+</Card>

@@ -1,0 +1,64 @@
+---
+title: What are autonomous agents?
+description: A working definition of autonomous agents, the human-in-the-loop spectrum, and what it actually takes to remove the human.
+---
+
+An **autonomous agent** is a system that pursues a goal by repeatedly deciding its
+own next action — choosing tools, gathering information, and adapting — rather than
+executing a fixed script. The word doing the work is *deciding*: a workflow follows
+steps you wrote; an agent chooses steps you didn't.
+
+## The autonomy spectrum
+
+"Autonomous" is not binary. Most real systems sit somewhere on a spectrum defined by
+**how often a human has to intervene**:
+
+| Level | The human… | Example |
+|---|---|---|
+| Assisted | drives; the agent suggests | Autocomplete, copilots |
+| Supervised | approves each meaningful action | "Agent proposes, human clicks run" |
+| Steered | is pulled in when the agent gets stuck | Most "agents" in production today |
+| Autonomous | reviews outcomes, not steps | Handles the whole task, reports back |
+
+The jump that creates business value is **Steered → Autonomous** — and the thing
+that blocks it is almost never raw model capability. It's the context layer and the
+harness around the model. See [Human steering](/guide/human-steering).
+
+## Removing the human in the loop
+
+"Remove the human" is a misleading goal if it means *no human ever*. The right goal
+is to **move the human from the inner loop to the outer loop** — from approving every
+step to reviewing outcomes and correcting the system.
+
+Three things have to be true before that's safe:
+
+<Steps>
+  <Step title="The agent can find the right context on its own">
+    No pre-injection, no human deciding what to paste in. The agent searches and
+    discovers. See [Context search accuracy](/guide/context-search-accuracy).
+  </Step>
+  <Step title="Its context is trustworthy and traceable">
+    Facts are current, non-conflicting, and carry provenance, so an outcome can be
+    audited without a human reconstructing what the agent "must have" used. See
+    [Provenance](/guide/provenance) and [Conflicts & staleness](/guide/conflicts-and-staleness).
+  </Step>
+  <Step title="The harness catches its own failures">
+    Soft gates stop early exits; critic sub-agents catch bad reasoning in-session,
+    before it reaches the user. See [The harness](/guide/the-harness).
+  </Step>
+</Steps>
+
+Get those three right and the human's job shifts from *steering* to *supervising the
+system* — which is where autonomy actually pays off.
+
+## Domain agents raise the bar
+
+General agents can lean on the model's world knowledge. **Domain agents** — legal,
+healthcare, sales, infrastructure — can't: the knowledge they need is private,
+structured, and changing. That's exactly why the context layer matters more the more
+specialized the agent is, and why a [structured context engine](/why-open-index)
+tends to be the highest-leverage investment for a domain agent.
+
+<Card title="Next: The harness" icon="gears" href="/guide/the-harness">
+  What sits around the model to make the loop reliable.
+</Card>

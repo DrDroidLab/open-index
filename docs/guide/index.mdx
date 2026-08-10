@@ -1,0 +1,70 @@
+---
+title: Building autonomous agents
+description: A practical guide to the failure modes of autonomous agents and the context-engineering practices that fix them.
+---
+
+Most agent demos work. Most agents in production stall — they drift off task, need a
+human to steer them past the hard step, or confidently act on stale context nobody
+can trace. This guide is about the gap between the two, and specifically about the
+**context layer**, which is where most of that gap lives.
+
+<Info>
+This guide is vendor-neutral on the harness but grounded in a real system. Where a
+practice maps onto a concrete capability, we point at how [Open Index](/why-open-index)
+implements it — Open Index is the open-source context engine we extracted from doing
+this work at scale.
+</Info>
+
+## The two halves of an agent
+
+An autonomous agent is a loop over two things:
+
+1. **A harness** — the control flow, gates, retries, sub-agents, and evals that keep
+   the loop honest. See [The harness](/guide/the-harness).
+2. **A context layer** — how the agent finds the right knowledge, keeps it current,
+   and cites it. This is where the rest of this guide focuses.
+
+Get the harness right and a wrong context layer still produces confident nonsense.
+Get the context layer right and a thin harness suddenly goes a lot further without a
+human in the loop.
+
+## What breaks, and where it's covered
+
+<CardGroup cols={2}>
+  <Card title="Context poisoning" icon="virus" href="/guide/context-poisoning">
+    The agent picks up unrelated instructions and drifts. Fix it at the data model,
+    not with more folders.
+  </Card>
+  <Card title="Context search accuracy" icon="magnifying-glass" href="/guide/context-search-accuracy">
+    Retrieval that returns plausible-but-wrong context. Make discovery the agent's
+    job, with navigation.
+  </Card>
+  <Card title="Conflicts & staleness" icon="code-merge" href="/guide/conflicts-and-staleness">
+    Knowledge that self-contradicts as it grows. Structure updates per concept.
+  </Card>
+  <Card title="Provenance" icon="fingerprint" href="/guide/provenance">
+    Users can't trust what they can't trace. Attach a source to every fact.
+  </Card>
+  <Card title="Human steering" icon="hand" href="/guide/human-steering">
+    The autonomy tax. What steering is, why it happens, and how to reduce it.
+  </Card>
+  <Card title="Determinism" icon="scale-balanced" href="/guide/determinism">
+    Same input, different output. Where to push variance out of the loop.
+  </Card>
+  <Card title="Self-learning loops" icon="rotate" href="/guide/self-learning-loops">
+    Agents that get better with use by writing back what they learn.
+  </Card>
+  <Card title="The harness" icon="gears" href="/guide/the-harness">
+    Soft gates, critic sub-agents, and in-session evals around the context layer.
+  </Card>
+</CardGroup>
+
+## The one idea underneath all of it
+
+If there's a single thread through this guide, it's this:
+
+> **Don't feed your agent context. Give it structured, searchable, attributable
+> context and make discovery its job.**
+
+Everything else — less poisoning, less steering, more determinism, real provenance —
+follows from that shift. The next pages break it down failure mode by failure mode.

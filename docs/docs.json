@@ -9,42 +9,78 @@
   },
   "favicon": "/favicon.svg",
   "navigation": {
-    "groups": [
+    "tabs": [
       {
-        "group": "Get Started",
-        "pages": [
-          "index",
-          "quickstart",
-          "concepts",
-          "use-cases"
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "index",
+              "why-open-index",
+              "quickstart",
+              "concepts",
+              "use-cases"
+            ]
+          },
+          {
+            "group": "Build a Brain",
+            "pages": [
+              "guides/creating-a-brain",
+              "guides/populating-entities",
+              "guides/entity-management",
+              "guides/search-configuration"
+            ]
+          },
+          {
+            "group": "Agents & Connectors",
+            "pages": [
+              "agents/mcp",
+              "agents/connectors"
+            ]
+          },
+          {
+            "group": "Deploy",
+            "pages": [
+              "deployment"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/cli"
+            ]
+          }
         ]
       },
       {
-        "group": "Build a Brain",
-        "pages": [
-          "guides/creating-a-brain",
-          "guides/populating-entities",
-          "guides/entity-management",
-          "guides/search-configuration"
-        ]
-      },
-      {
-        "group": "Agents & Connectors",
-        "pages": [
-          "agents/mcp",
-          "agents/connectors"
-        ]
-      },
-      {
-        "group": "Deploy",
-        "pages": [
-          "deployment"
-        ]
-      },
-      {
-        "group": "Reference",
-        "pages": [
-          "reference/cli"
+        "tab": "Agent Guide",
+        "groups": [
+          {
+            "group": "Foundations",
+            "pages": [
+              "guide/index",
+              "guide/what-are-autonomous-agents",
+              "guide/the-harness"
+            ]
+          },
+          {
+            "group": "Context Engineering",
+            "pages": [
+              "guide/context-poisoning",
+              "guide/context-search-accuracy",
+              "guide/conflicts-and-staleness",
+              "guide/provenance"
+            ]
+          },
+          {
+            "group": "Autonomy",
+            "pages": [
+              "guide/human-steering",
+              "guide/determinism",
+              "guide/self-learning-loops"
+            ]
+          }
         ]
       }
     ]
@@ -62,7 +98,7 @@
     ],
     "primary": {
       "type": "button",
-      "label": "GitHub",
+      "label": "Star on GitHub",
       "href": "https://github.com/DrDroidLab/open-index"
     }
   },

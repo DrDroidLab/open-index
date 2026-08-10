@@ -1,0 +1,85 @@
+---
+title: How to avoid staleness and conflicts in your knowledge window
+description: Why distributed markdown knowledge self-contradicts over time, and how per-concept structured updates and time-decay keep a knowledge base correct.
+---
+
+A knowledge base is only useful while it's *correct*. The failure mode that erodes
+trust fastest isn't missing information — it's **stale or conflicting** information
+the agent treats as current. Two documents disagree; the agent picks one; the user
+can't tell it was wrong until it's too late.
+
+## Why files rot
+
+When context is spread across many markdown files, updates are non-trivial:
+
+- **Related context is duplicated across documents.** The same fact — an owner, a
+  policy, a threshold — appears in several files. Update one, miss the others, and now
+  your knowledge base disagrees with itself.
+- **There's no deterministic link between related facts.** Nothing says "these three
+  paragraphs describe the same thing," so there's no reliable way to find everything
+  that must change together.
+- **Nothing expires.** Old notes sit forever with the same weight as fresh ones. The
+  agent has no signal that a two-year-old runbook is stale.
+
+The result is a knowledge base that gets *less* trustworthy as it grows — the opposite
+of what you want.
+
+## Structure updates around concepts, not documents
+
+The fix is to make the **concept** the unit of truth, not the document:
+
+<Steps>
+  <Step title="One record per fact, addressed by id">
+    Each entity has a stable id (`service:checkout`). A fact about checkout lives in
+    *one* place and is updated in one place — no hunting through documents for
+    duplicated copies. → [entities](/concepts)
+  </Step>
+  <Step title="Incremental update and delete per doc_type">
+    Update or delete a single record without touching a monolithic context document.
+    Writes are validated against the schema, so an update can't silently break shape. →
+    [put_entity](/agents/mcp)
+  </Step>
+  <Step title="Explicit edges instead of implied links">
+    Related facts connect through typed `related_to` edges. When something changes, you
+    can traverse the edges to find exactly what else is affected — deterministically,
+    not by full-text guessing. → [related_to](/concepts)
+  </Step>
+</Steps>
+
+## Handle temporal data with decay, not deletion
+
+Some knowledge is inherently time-bound — alerts, deployments, incidents. Keeping it
+forever is noise; deleting it loses signal. The right pattern is **exponential decay
+with time**: recent records dominate retrieval, old ones fade, and flushing the tail
+doesn't hurt quality.
+
+<Warning>
+Model high-volume temporal data as **index-owned** (generated, DB-resident) rather
+than git-tracked files, so it doesn't churn your repo — and let it decay. Curated,
+long-lived knowledge stays **file-backed** and reviewable. Matching the storage policy
+to the data's lifespan is half the battle. → [storage: file vs index](/guides/search-configuration)
+</Warning>
+
+## Choose the right write cadence
+
+Staleness is often *self-inflicted* by creating entities too fast:
+
+- Track things that change at a **human pace** (a service, a policy, an account), not
+  ephemeral ones (a pod, a single request). An entity per ephemeral object is pure
+  churn.
+- Over-population creates two costs: **noise** in retrieval and **maintenance
+  overhead** removing stale records later.
+
+See [Entity management](/guides/entity-management) for the full cadence guidance.
+
+## Checklist
+
+- [ ] Each fact lives in exactly one addressable record — no duplication across docs.
+- [ ] Updates and deletes are per-concept and schema-validated.
+- [ ] Related facts link through typed edges, so change impact is traceable.
+- [ ] Temporal data decays with time instead of accumulating.
+- [ ] Write cadence matches how fast the underlying thing actually changes.
+
+<Card title="Next: Provenance" icon="fingerprint" href="/guide/provenance">
+  Making every fact traceable to its source.
+</Card>

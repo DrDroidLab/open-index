@@ -1,0 +1,86 @@
+---
+title: How to improve context search accuracy
+description: Why agentic search with navigation beats pre-injected RAG, and how field boosts, hybrid ranking, and schemas make retrieval precise.
+---
+
+An agent is only as good as the context it retrieves. If search returns
+plausible-but-wrong records, the agent reasons confidently over the wrong facts — and
+no amount of prompting fixes bad retrieval. This page is about making the agent's own
+search accurate enough to trust.
+
+## Stop pre-injecting. Let the agent search.
+
+The common pattern is: your system runs RAG or prompt expansion, picks some chunks,
+and injects them into the prompt. This has three problems:
+
+- **You guess wrong.** Your retrieval heuristic decides what's relevant *before* the
+  agent knows what it needs for this specific step.
+- **It poisons.** Injected chunks the agent didn't ask for are exactly the surface for
+  [context poisoning](/guide/context-poisoning).
+- **It's opaque.** Neither you nor the user can tell what actually drove the answer.
+
+The better model: **give the agent a search tool plus navigational meta-information**,
+and make discovery its responsibility. It searches, reads what it got, decides whether
+to search again or drill into a relationship — the same way a good analyst works.
+
+<Info>
+This is agentic search over *all* your structured content, not a bolt-on RAG index.
+In [Open Index](/agents/mcp) the agent gets `navigation_guidelines()` (what doc_types,
+fields, and relationships exist), `search_brain()`, and `get_entity()` — enough to
+navigate a domain it's never seen.
+</Info>
+
+## Give the agent a map before the first query
+
+Retrieval accuracy jumps when the agent knows the *shape* of what it's searching.
+Before its first query, hand it navigational context:
+
+- Which **doc_types** exist (`service`, `runbook`, `incident`…) and what each means.
+- Which **fields** each carries, and which are searchable.
+- Which **relationships** connect them, so it can traverse on purpose.
+
+With that map, the agent scopes searches (`search only incidents`), follows edges
+deliberately, and stops guessing. Without it, every query is a blind shot.
+
+## Tune ranking so the right record wins
+
+Precision is also a ranking problem. Two levers matter most:
+
+<AccordionGroup>
+  <Accordion title="Per-field boosts" icon="sliders">
+    Weight a match in `name` far above a match in a long `description`. A genuine
+    multiplier — a hit in a `boost: 6` title outranks a `boost: 1` body hit
+    6-to-1 — so the record whose *identity* matches the query surfaces first. →
+    [Search configuration](/guides/search-configuration)
+  </Accordion>
+  <Accordion title="Hybrid keyword + semantic" icon="layer-group">
+    Keyword search nails exact names and identifiers; semantic search rescues queries
+    that describe a thing in different words than the record uses ("checkout is slow"
+    → "latency spike at payment"). Blend them — keyword-dominant by default, with a
+    semantic weight you raise when users describe rather than name.
+  </Accordion>
+</AccordionGroup>
+
+## Design schemas for retrieval
+
+Search accuracy starts at the schema, not the query:
+
+- Mark identity fields (`name`, `owner`, `status`) **syntactic** — exact/prefix
+  matching, high boost.
+- Mark prose fields (`description`, `summary`) **semantic** — matched by meaning.
+- Mark opaque blobs and internal ids **`none`** — stored but never searched, so they
+  can't add noise to results.
+
+A field that shouldn't influence ranking simply isn't indexed. That's the cheapest
+precision win there is.
+
+## Checklist
+
+- [ ] The agent searches; you don't pre-inject a guessed context blob.
+- [ ] It gets navigational meta-info (doc_types, fields, relationships) up front.
+- [ ] Identity fields are boosted; noise fields are `search: none`.
+- [ ] Ranking blends keyword + semantic to match both names and descriptions.
+
+<Card title="Next: Conflicts & staleness" icon="code-merge" href="/guide/conflicts-and-staleness">
+  Keeping retrieved context correct as it grows.
+</Card>
