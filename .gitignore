@@ -26,3 +26,11 @@ dist/
 .coverage
 coverage.xml
 htmlcov/
+
+# Generated fleet deployment state (host names, index lists, credentials).
+# `deploy/fleet/fleet.py` renders these for a specific machine; they are not
+# part of the tool. Keep the example file, ignore the rendered output.
+deploy/fleet/indexes.yml
+deploy/fleet/docker-compose.generated.yml
+deploy/fleet/caddy/
+deploy/fleet/secrets/
