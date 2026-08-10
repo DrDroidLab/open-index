@@ -1,0 +1,75 @@
+---
+title: Open Index as your agent's context layer
+description: Expose a brain over MCP so agents can read domain context and keep it current.
+---
+
+`open-index mcp` runs an MCP server (stdio) exposing the brain to any MCP client —
+**read and write by default**.
+
+## The tools
+
+- The server publishes dynamic, brain-specific instructions as part of the agent
+  prompt so supporting hosts can navigate the domain before the first tool call.
+
+<CardGroup cols={2}>
+  <Card title="navigation_guidelines()" icon="compass">
+    Refresh the domain guide after the index or schema changes — reports doc_types,
+    fields, and the relationship vocabulary of *your* brain.
+  </Card>
+  <Card title="search_brain(query, doc_types, limit)" icon="magnifying-glass">
+    Retrieve domain context by query, optionally scoped to doc_types.
+  </Card>
+  <Card title="get_entity(id)" icon="cube">
+    Fetch a single entity by its `<doc_type>:<slug>` id.
+  </Card>
+  <Card title="put_entity(...) / put_entities([...])" icon="pen">
+    Add or update entities — validated, honoring the storage policy. `put_entities`
+    writes a whole batch in one call with a shared `provenance` block.
+  </Card>
+  <Card title="create_doc_type(...)" icon="shapes">
+    Define a new concept from the agent side.
+  </Card>
+</CardGroup>
+
+## Read-only mode
+
+Use `open-index mcp --read-only` (or `open-index serve --read-only`) to opt out when
+an agent should retrieve domain context but never maintain it.
+
+```bash
+open-index mcp --brain ./my-brain                 # read + write (default)
+open-index mcp --brain ./my-brain --read-only     # retrieval only
+```
+
+## Local context-fetch analytics
+
+CLI and MCP searches, entity fetches, and navigation-guide reads are recorded in the
+user's local state directory (`~/.local/state/open-index/`), outside the brain
+checkout. The Analytics tab shows fetch counts by client/operation, frequently
+fetched queries or entity IDs, latency, failures, zero-result searches, and recent
+activity.
+
+<Note>
+This file stays local and is never sent to Open Index's creators.
+</Note>
+
+## Claude Code conveniences
+
+`open-index init` includes optional Claude Code conveniences: `.mcp.json`, a
+`CLAUDE.md` describing durable editing workflows (not runtime navigation), and an
+**`edit-brain` skill**. They are one client integration, not a requirement for
+building legal, marketing, support, or other specialized agents on Open Index.
+
+## Portable agent setup skill
+
+`skills/setup-open-index/SKILL.md` follows the portable Agent Skills `SKILL.md`
+format used by agent runtimes including OpenClaw, Hermes, and Claude Code. Give or
+install this skill in the selected runtime when the agent should set up Open Index
+itself. It covers installation, domain-brain initialization, generic MCP wiring,
+default read/write verification, the `--read-only` opt-out, and production
+guardrails.
+
+## Connecting a client
+
+For the exact config block per client (Claude Code, Claude Desktop, Cursor) and the
+remote HTTP path, see [Deployment → Connecting your agent](/deployment#5-connecting-your-agent).

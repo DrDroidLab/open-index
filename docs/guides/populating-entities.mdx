@@ -1,0 +1,80 @@
+---
+title: Populating entities
+description: Four ways to add entities to a brain, all landing in one validated store.
+---
+
+There are four ways to populate a brain, and they all write through the same
+validated store that honors each doc_type's storage policy.
+
+<Steps>
+  <Step title="Manual / agent">
+    Write JSON directly, or open Claude Code in the folder and let it call
+    `put_entity` / `create_doc_type` over MCP.
+  </Step>
+  <Step title="Bulk import">
+    Import a file directly, or let an agent write a batch in one call with `put_entities`.
+  </Step>
+  <Step title="Connectors">
+    `connectors/*.py` pull from an MCP server on a `schedule`; run with
+    `open-index ingest <name>` or `open-index run`.
+  </Step>
+  <Step title="Agent write-back">
+    A Stop hook that records learnings via `put_entity` — the "continuously
+    improving" loop.
+  </Step>
+</Steps>
+
+## Bulk import
+
+```bash
+open-index import issues.csv --doc-type issue --asserted-by import:jira
+open-index import export.jsonl --dry-run        # validate first, write nothing
+```
+
+JSON arrays, JSONL, and CSV all work:
+
+- Bare slugs are qualified (`checkout` → `product:checkout`).
+- CSV scalars are coerced to their declared types.
+- A `related_to` column takes `target|meaning` pairs separated by `;`.
+- A bad row is reported and skipped — the rest still land.
+- `--asserted-by` / `--confidence` attribute the whole batch once instead of per row.
+
+## Ways to create entities
+
+<AccordionGroup>
+  <Accordion title="Manual entry / upload from the UI">
+    Create a JSON object representing the entity you want to store, and add it from
+    the explorer.
+  </Accordion>
+  <Accordion title="Through an agent over CLI / MCP">
+    Talk to an agent connected to the brain; it validates and writes for you.
+  </Accordion>
+  <Accordion title="Webhook / API trigger">
+    A script on your end pushes entities into the brain.
+  </Accordion>
+  <Accordion title="Recurring cron">
+    A connector defined in the brain configuration runs on a schedule.
+  </Accordion>
+</AccordionGroup>
+
+## Distilling from unstructured documents
+
+To extract or distill information from unstructured documents into entities:
+
+- **Git repo knowledge bases** — connect an agent to the brain via an MCP server and
+  prompt it to extract information from the repo.
+- **Commercial tools** (Notion, Confluence, …) — connect an agent to both the brain
+  (via MCP) and the source tool (via MCP server / CLI).
+- **Scripted** — use a script that connects to the brain via an API and extracts
+  information from documents.
+
+<Tip>
+For distilled knowledge from an existing knowledge base, the recommendation is to
+connect that source's MCP server to a Claude Code instance also connected to the brain.
+</Tip>
+
+## Next
+
+Read [Entity management](/guides/entity-management) for guidance on cadence, scale,
+and decay — the difference between a brain that stays sharp and one that fills with
+noise.

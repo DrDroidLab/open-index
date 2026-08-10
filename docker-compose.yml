@@ -25,7 +25,7 @@ x-brain-service: &brain-service
     # are written back on put_entity.
     #
     # The container runs as uid 10001, so this directory must be writable by
-    # it — otherwise indexing fails on a bind mount. See docs/deployment.md.
+    # it — otherwise indexing fails on a bind mount. See docs/deployment.mdx.
     - ${BRAIN_DIR:-./brain}:/brain
     # The local embedding model (~90MB) is downloaded on first use. fastembed
     # otherwise caches it under a temp directory, which a container throws away

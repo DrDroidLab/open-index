@@ -1,0 +1,62 @@
+---
+title: Connectors
+description: Pull entities from someone else's MCP server into your brain on a schedule.
+---
+
+Everything in [Open Index as a context layer](/agents/mcp) is about exposing **your
+brain** over MCP. A *connector* is the reverse: a script in
+`<brain>/connectors/*.py` that calls **someone else's** MCP server and turns the
+results into entities.
+
+```python
+from open_index.connectors import Connector, EntitySpec
+
+
+class LinearConnector(Connector):
+    name = "linear-issues"
+
+    # Where the source MCP server lives. ${ENV} refs are resolved at run time,
+    # so the URL and token stay out of git.
+    mcp_url = "${LINEAR_MCP_URL}"
+    mcp_auth_headers = {"Authorization": "Bearer ${LINEAR_TOKEN}"}
+
+    schedule = "daily"          # manual | hourly | daily | weekly | 6h | 30m | 1w
+
+    def extract_issues(self):
+        for item in self.paginate("list_issues", result_key="issues"):
+            yield EntitySpec(
+                doc_type="issue",
+                id=f"issue:{item['id']}",
+                name=item["title"],
+                fields={"status": item["state"]},
+                related_to=[(f"product:{item['project']}", "belongs to product")],
+            )
+```
+
+## Where do you get `mcp_url`?
+
+From whoever runs that server:
+
+- A hosted vendor MCP server — from their docs (e.g. `https://mcp.vendor.com/mcp`).
+- Another Open Index brain — its `open-index serve` URL, i.e. `http://host:8080/mcp`.
+- A local stdio-only MCP server — **not supported here.** Connectors speak
+  streamable HTTP/SSE over `httpx` only. It needs an HTTP endpoint.
+
+<Note>
+The URL must be the full endpoint path — the same one an agent would use.
+</Note>
+
+## Running connectors
+
+```bash
+export LINEAR_MCP_URL=https://mcp.linear.app/mcp
+export LINEAR_TOKEN=...
+
+open-index list-connectors                  # what's discovered, and its URL
+open-index ingest linear-issues             # run it now
+open-index run                              # run everything whose schedule is due
+open-index run --loop 3600                  # or wire `open-index run` into cron/CI
+```
+
+`open-index run` tracks last-run times in a gitignored `.open_index_state.json`, so
+it decides *whether* a connector is due — your cron drives the clock.

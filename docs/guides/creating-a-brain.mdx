@@ -1,0 +1,108 @@
+---
+title: Creating a brain
+description: Scaffold a brain, define doc_types, and author entities step by step.
+---
+
+`open-index init <name>` scaffolds a brain directory; then you author two kinds of
+file — **doc_types** (schemas) and **entities** (instances).
+
+```
+my-brain/
+  brain.yaml            # name + storage/search backend
+  doc_types/*.yaml      # one schema per doc_type
+  entities/**/*.json    # entities, with related_to edges
+  connectors/*.py       # optional ingestion scripts
+```
+
+## 1. Define a doc_type
+
+A doc_type is a concept plus its schema — one YAML file in `doc_types/`:
+
+```yaml doc_types/service.yaml
+doc_type: service
+description: A deployed service.
+storage: file                 # file = git source of truth · index = DB-owned (default)
+display:
+  label_field: name
+  color: "#7c3aed"
+schema:
+  fields:
+    - { name: name,        type: string, search: syntactic, boost: 6 }   # weighted 6× in ranking
+    - { name: description, type: text,   search: semantic }
+    - { name: owner,       type: string, search: syntactic }
+relationships:                # the correlations this type uses — optional but recommended
+  - { name: "writes to",       target_doc_type: datastore }
+  - { name: "is monitored by", target_doc_type: dashboard }
+```
+
+- **`boost`** sets per-field search weight — a hit in a `boost: 6` title outranks a
+  `boost: 1` description hit 6-to-1. Optional; defaults to 1.
+- **`relationships`** declares the edge vocabulary so correlations are discoverable
+  (shown in the UI + navigation guide) and lightly validated (right target type).
+  Optional — entities may still use undeclared meanings.
+
+Create one with `open-index add-doc-type service` (writes a stub you edit), or ask
+your agent.
+
+## 2. Add entities
+
+An entity is one instance. For `storage: file` types, write one JSON per entity
+under `entities/<doc_type>/`:
+
+```json entities/service/checkout.json
+{
+  "doc_type": "service",
+  "id": "service:checkout",
+  "name": "Checkout",
+  "owner": "payments-team",
+  "related_to": [
+    { "target": "datastore:postgres-main",     "relationship_edge_meaning": "writes to" },
+    { "target": "dashboard:checkout-latency",   "relationship_edge_meaning": "is monitored by" }
+  ]
+}
+```
+
+- `id` must be `<doc_type>:<slug>`.
+- **`related_to`** is the reserved correlation field present on **every** entity — it
+  defines the graph edges (`target` + `relationship_edge_meaning`). This is how you
+  say "this ticket is about that service" without any graph database.
+
+Then load and validate:
+
+```bash
+open-index index      # loads file-backed entities
+open-index validate   # validates brain.yaml, schemas, and every entity file
+```
+
+## 3. Explore
+
+`open-index ui` opens a read-only explorer. The sidebar always shows every doc_type
+with its count and storage policy, so the structure is visible without navigating
+anywhere. Four tabs:
+
+<AccordionGroup>
+  <Accordion title="Explore" icon="magnifying-glass">
+    Search + browse + drill into an entity's relationships.
+  </Accordion>
+  <Accordion title="Map" icon="diagram-project">
+    Auto-anchored on the most-connected entities — click any node to expand it.
+  </Accordion>
+  <Accordion title="Analytics" icon="chart-line">
+    What context CLI/MCP/UI clients fetched, and how often. Zero-result searches
+    show what to model next.
+  </Accordion>
+  <Accordion title="Jobs" icon="clock">
+    Connectors and their schedules.
+  </Accordion>
+</AccordionGroup>
+
+## Next
+
+<CardGroup cols={2}>
+  <Card title="Populate at scale" icon="layer-group" href="/guides/populating-entities">
+    Manual, bulk import, connectors, and agent write-back.
+  </Card>
+  <Card title="Tune search" icon="sliders" href="/guides/search-configuration">
+    Field search kinds, boosts, and semantic weighting.
+  </Card>
+</CardGroup>

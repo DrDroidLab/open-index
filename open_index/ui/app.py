@@ -590,7 +590,7 @@ def render_jobs(brain: Brain) -> None:
     if not found:
         st.info("No connectors yet.")
         st.caption("Add `connectors/*.py` to pull entities from an MCP server — "
-                   "see docs/deployment.md.")
+                   "see docs/agents/connectors.mdx.")
         return
 
     import inspect

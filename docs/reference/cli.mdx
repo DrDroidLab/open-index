@@ -1,0 +1,52 @@
+---
+title: CLI reference
+description: Every open-index command and what it does.
+---
+
+All commands accept `--brain <dir>` to point at a brain other than the current
+directory.
+
+## Building a brain
+
+| Command | What it does |
+|---|---|
+| `open-index init <name> [dir]` | Scaffold a new brain directory. |
+| `open-index add-doc-type <name>` | Add a doc_type schema stub under `doc_types/`. |
+| `open-index add-entity <file>` | Validate + store an entity JSON file. |
+| `open-index import <file>` | Bulk-import entities from JSON / JSONL / CSV. |
+| `open-index index` | (Re)load `entities/**/*.json` into the search index. |
+| `open-index validate` | Validate `brain.yaml`, schemas, and every entity file (use in CI). |
+
+<Note>
+`open-index index` accepts `--reembed` to rebuild semantic vectors — run it after
+enabling semantic search on a populated brain, switching embedding models, or
+changing dimensions.
+</Note>
+
+## Connectors
+
+| Command | What it does |
+|---|---|
+| `open-index ingest <connector>` | Run a connector now to pull entities from an MCP server. |
+| `open-index run [--force] [--loop N]` | Run every connector whose `schedule` is due (wire into cron/CI). |
+| `open-index list-connectors` | List discovered connectors and their source URLs. |
+
+## Searching & exploring
+
+| Command | What it does |
+|---|---|
+| `open-index search <query> [-t doc_type]` | Search from the terminal. |
+| `open-index ui` | Launch the Streamlit explorer (Explore / **Map** / Analytics / Jobs). |
+
+## Serving over MCP
+
+| Command | What it does |
+|---|---|
+| `open-index mcp [--read-only]` | Run the MCP context layer over stdio. **Read+write by default**; `--read-only` opts out of writes. |
+| `open-index serve [--port --token --read-only]` | Serve the MCP context layer over **HTTP** for remote agents (bearer-token auth). |
+| `open-index serve --brains <root>` | Serve **every** brain under a directory from one process, each at `/<name>/mcp`. |
+| `open-index mcp-config [--url --token]` | Print the MCP connection block to paste into your agent. |
+
+See [Deployment](/deployment) for the full serving guide, and
+[Open Index as a context layer](/agents/mcp) for the MCP tools those commands
+expose.

@@ -32,7 +32,7 @@ open-index ui    --brain my-brain
 ```
 
 Prefer containers, or need a brain several agents share? →
-**[`docs/deployment.md`](./docs/deployment.md)** (`docker compose --profile sqlite up`).
+**[`docs/deployment.mdx`](./docs/deployment.mdx)** (`docker compose --profile sqlite up`).
 
 ### Commands
 
@@ -200,7 +200,7 @@ Then `open-index index` (loads file-backed entities) and `open-index validate`.
 4. **Agent write-back** — a Stop hook that records learnings via `put_entity` (the
    "continuously improving" loop).
 
-See [Entity Management](./entity-management.md) for guidance on cadence and decay.
+See [Entity Management](./docs/guides/entity-management.mdx) for guidance on cadence and decay.
 
 ### 4. Explore
 
@@ -244,7 +244,7 @@ building legal, marketing, support, or other specialized agents on Open Index.
 
 ## Using the brain from a cloud agent (production)
 
-📖 **[Full deployment guide → `docs/deployment.md`](./docs/deployment.md)** — local,
+📖 **[Full deployment guide → `docs/deployment.mdx`](./docs/deployment.mdx)** — local,
 remote (with and without Docker), TLS/proxying, and exactly what to paste into
 Claude Code, Claude Desktop, or Cursor.
 
@@ -324,7 +324,7 @@ cluster (or `brain.db`), so give it a persistent home and a backup. Rule of thum
 
 # Controlling search
 
-📖 **[Full configuration reference → `docs/configuration.md`](./docs/configuration.md)** —
+📖 **[Full configuration reference → `docs/guides/search-configuration.mdx`](./docs/guides/search-configuration.mdx)** —
 decision tables for `storage: file | index`, SQLite vs OpenSearch, and every search knob.
 
 **Schema** (per field): data `type` (string/number/boolean/timestamp), `processing`
@@ -391,7 +391,7 @@ are missing.
 3. Add tests under `tests/` for behaviour changes, and run `pytest`.
 4. If you touched a brain in `examples/`, run `open-index validate --brain examples/<name>`
    so schemas and entities stay consistent.
-5. Update the README / `entity-management.md` when you change user-facing behaviour.
+5. Update the README / the docs under `docs/` when you change user-facing behaviour.
 6. Open a PR describing *what* changed and *why*, and link the issue. CI runs the
    test suite on Python 3.10 and 3.13 and validates every brain in `examples/`.
 

@@ -1,0 +1,60 @@
+---
+title: Open Index
+description: Build domain-specific, structured context that agents can actually operate on — and keep it correct as things change.
+---
+
+**Open Index** is a tool for building domain-specific, accurate, structured data
+that agents can actually operate on — and for keeping that data correct as things
+change.
+
+You use Open Index to build a **brain**: a searchable, continuously-improving
+context graph of your domain. A brain is **domain-agnostic** — model a support org
+(`product → "has common issue" → issue`), a sales pipeline (`customer → order`),
+your infrastructure (`service → runbook`), or anything else. You define the
+concepts; Open Index stores them, searches them, and draws the map.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install, spin up the bundled example brain, and open the explorer in a few minutes.
+  </Card>
+  <Card title="Core concepts" icon="diagram-project" href="/concepts">
+    doc_type, doc_schema, entity, connector — the four primitives a brain is built from.
+  </Card>
+  <Card title="Create a brain" icon="brain" href="/guides/creating-a-brain">
+    Define doc_types, author entities, and load them into the search index.
+  </Card>
+  <Card title="Connect an agent" icon="plug" href="/agents/mcp">
+    Expose the brain over MCP so agents can read context and keep it current.
+  </Card>
+</CardGroup>
+
+## What a brain is built from
+
+A brain is built from four primitives:
+
+- **doc_type** — a concept you want to track and maintain (e.g. `service`, `customer`, `issue`).
+- **doc_schema** — the fields stored for a given doc_type.
+- **entity** — one instance of a doc_type, stored per its schema. Every entity can
+  link to others via `related_to` (the target) + `relationship_edge_meaning` (free-text edge semantics).
+- **connector** — an optional source you extract entities from (e.g. an MCP server).
+
+## A context layer for domain-specialized agents
+
+Open Index is designed to sit behind agents specialized for a domain — legal,
+marketing, customer support, sales, infrastructure, or a domain of your own. The
+MCP server gives those agents structured context and a validated way to keep that
+context current:
+
+- **agent prompt** — dynamic domain navigation is published through MCP server
+  instructions so supporting hosts can inject it before the first turn.
+- **read** — `navigation_guidelines()` refreshes those instructions;
+  `search_brain()` and `get_entity()` retrieve domain context.
+- **write** — `put_entity()` (add/update an entity), `create_doc_type()` (define a concept).
+
+Read and write is the default MCP mode, so a domain agent can both use knowledge
+and maintain it. Add `--read-only` when the agent should consume context without
+mutating it.
+
+<Card title="Join the community" icon="discord" href="https://discord.gg/AQ3tusPtZn" horizontal>
+  Ask questions, share the brains you're modelling, or discuss an idea before you build it.
+</Card>

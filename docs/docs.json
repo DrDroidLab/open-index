@@ -1,0 +1,75 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Open Index",
+  "colors": {
+    "primary": "#7c3aed",
+    "light": "#a78bfa",
+    "dark": "#6d28d9"
+  },
+  "favicon": "/favicon.svg",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Get Started",
+        "pages": [
+          "index",
+          "quickstart",
+          "concepts",
+          "use-cases"
+        ]
+      },
+      {
+        "group": "Build a Brain",
+        "pages": [
+          "guides/creating-a-brain",
+          "guides/populating-entities",
+          "guides/entity-management",
+          "guides/search-configuration"
+        ]
+      },
+      {
+        "group": "Agents & Connectors",
+        "pages": [
+          "agents/mcp",
+          "agents/connectors"
+        ]
+      },
+      {
+        "group": "Deploy",
+        "pages": [
+          "deployment"
+        ]
+      },
+      {
+        "group": "Reference",
+        "pages": [
+          "reference/cli"
+        ]
+      }
+    ]
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Discord",
+        "href": "https://discord.gg/AQ3tusPtZn"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "GitHub",
+      "href": "https://github.com/DrDroidLab/open-index"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/DrDroidLab/open-index",
+      "discord": "https://discord.gg/AQ3tusPtZn"
+    }
+  }
+}
