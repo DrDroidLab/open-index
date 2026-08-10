@@ -1,0 +1,70 @@
+---
+title: What is human steering, and how to reduce it
+description: Human steering is the hidden tax on agent autonomy. What causes it, why it caps value, and the context and harness changes that reduce it.
+---
+
+**Human steering** is every moment a person has to step in mid-task to redirect an
+agent — clarifying an ambiguous instruction, pointing it at the right document,
+approving a step it should have taken itself, or nudging it past a point where it
+stalled. A little is fine. A lot is the difference between an agent that saves time
+and one that just relocates the work.
+
+## Why steering is the real bottleneck
+
+When human steering is required for a task, it caps the **autonomy, speed, and value**
+the agent delivers inside the workflow the human was trying to hand off. You wanted to
+delegate the task; instead you're babysitting it. Three costs stack up:
+
+- **Throughput** — the agent runs only as fast as a human can attend to it.
+- **Scale** — one operator can supervise a handful of agents, not hundreds.
+- **Trust** — a system that needs constant correction never earns the autonomy to run
+  unattended, so it stays stuck at "supervised."
+
+The value of agents shows up specifically when you cross from *steered* to
+*autonomous*. See the [autonomy spectrum](/guide/what-are-autonomous-agents).
+
+## Where steering comes from
+
+Most steering traces back to a handful of root causes — and notably, most are
+**context and harness** problems, not model problems:
+
+| The human steps in because… | Root cause | Fix |
+|---|---|---|
+| "That's the wrong document / not what I meant" | Bad retrieval; guessed context | [Context search accuracy](/guide/context-search-accuracy) |
+| The agent drifted onto an unrelated instruction | [Context poisoning](/guide/context-poisoning) | Structured, narrow retrieval |
+| It stalled on a fuzzy multi-step decision | Weak harness; no drill-down | [The harness](/guide/the-harness) |
+| "I don't trust this — show me why" | No [provenance](/guide/provenance) | Per-fact attribution |
+| It acted on stale/contradictory info | [Conflicts & staleness](/guide/conflicts-and-staleness) | Per-concept updates + decay |
+
+## How to reduce it
+
+<Steps>
+  <Step title="Make discovery the agent's job">
+    The most common steering — "you're looking at the wrong thing" — disappears when
+    the agent searches structured context itself instead of relying on a human (or a
+    guessed pre-injection) to hand it the right document.
+  </Step>
+  <Step title="Contain drift at the data model">
+    Structured records and typed edges stop the agent wandering into unrelated
+    instructions, which removes a whole class of "why did it do that?" interventions.
+  </Step>
+  <Step title="Let the harness handle the hard step">
+    Soft gates keep it from exiting early on fuzzy tasks; critic sub-agents catch bad
+    reasoning before a human has to. The agent recovers on its own instead of waiting
+    for a nudge.
+  </Step>
+  <Step title="Give the human a reason not to intervene">
+    Provenance lets the human verify *after* the fact instead of supervising *during*
+    it — moving them from the inner loop to the outer loop.
+  </Step>
+</Steps>
+
+<Note>
+Reducing steering isn't about a smarter model. It's about removing the reasons a human
+*has* to intervene — most of which live in the context layer and the harness around
+the model.
+</Note>
+
+<Card title="Next: Determinism" icon="scale-balanced" href="/guide/determinism">
+  Making the agent's behavior repeatable enough to trust unattended.
+</Card>

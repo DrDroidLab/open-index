@@ -1,0 +1,71 @@
+---
+title: How to increase determinism in your AI agents
+description: You can't make an LLM deterministic, but you can push variance out of everything around it — retrieval, control flow, and grounding — so behavior becomes repeatable.
+---
+
+**Determinism** is: same input, same output. LLMs are probabilistic, so you'll never
+get bit-for-bit determinism from the model itself — and that's fine. The goal isn't a
+deterministic *model*, it's a **repeatable system**: given the same situation, the
+agent reliably does the same reasonable thing. Most of the variance you actually feel
+comes from *around* the model, and that part you can control.
+
+## Where non-determinism actually comes from
+
+<AccordionGroup>
+  <Accordion title="Retrieval variance (the big one)" icon="magnifying-glass">
+    If the agent sees different context on different runs, it behaves differently —
+    even at temperature 0. Fuzzy, wide, or ranked-by-vibes retrieval is the largest
+    source of "why did it do something different this time?"
+  </Accordion>
+  <Accordion title="Control-flow variance" icon="code-branch">
+    When the harness lets the model decide *everything* — including steps that should
+    be fixed — you get a different path each run. Some decisions belong in code, not
+    in the prompt.
+  </Accordion>
+  <Accordion title="Grounding variance" icon="anchor">
+    Ungrounded reasoning fills gaps by guessing, and guesses vary. Grounded reasoning
+    over retrieved facts converges.
+  </Accordion>
+  <Accordion title="Sampling variance" icon="dice">
+    Temperature and sampling. Real, but usually the *smallest* contributor — and the
+    one people reach for first while ignoring the larger three.
+  </Accordion>
+</AccordionGroup>
+
+## Push variance out of the loop
+
+<Steps>
+  <Step title="Make retrieval stable and precise">
+    Deterministic ranking (explicit [field boosts](/guides/search-configuration), not
+    opaque relevance), narrow result sets, and addressed records mean the agent tends
+    to see the *same* context for the same query. Stable inputs → stable behavior. →
+    [Context search accuracy](/guide/context-search-accuracy)
+  </Step>
+  <Step title="Fix what should be fixed in the harness">
+    Encode the parts of the workflow that are genuinely fixed as **control flow**, and
+    let the model decide only the genuinely open parts. Determinism where you can
+    afford it buys you reliability where you can't. → [The harness](/guide/the-harness)
+  </Step>
+  <Step title="Ground every decision in retrieved facts">
+    An agent reasoning over specific, cited entities converges far more than one
+    improvising from a vague prompt. Grounding is a determinism lever, not just an
+    accuracy one. → [Provenance](/guide/provenance)
+  </Step>
+  <Step title="Verify with a critic">
+    A critic sub-agent that rejects outputs unsupported by context collapses the tail
+    of weird one-off behaviors into a consistent "checked" band.
+  </Step>
+</Steps>
+
+## A useful reframing
+
+> You don't make the model deterministic. You shrink the space it's allowed to be
+> non-deterministic in — by stabilizing its inputs (retrieval), fixing its scaffolding
+> (harness), and grounding its reasoning (context).
+
+The more of the surrounding system is structured and repeatable, the more the model's
+residual randomness stops mattering.
+
+<Card title="Next: Self-learning loops" icon="rotate" href="/guide/self-learning-loops">
+  Agents that improve with use without drifting.
+</Card>

@@ -1,0 +1,93 @@
+---
+title: The harness for autonomous agents
+description: The control-flow scaffolding around the model — soft gates, critic sub-agents, in-session evals — and where the context layer fits.
+---
+
+The model is the engine. The **harness** is everything around it that turns a
+capable-but-erratic engine into a reliable system: the control flow, the guardrails,
+the retries, the sub-agents, and the evals. A strong harness is often the difference
+between an agent that demos and one that ships.
+
+<Info>
+The [context layer](/why-open-index) is *one component* of the harness — a critical
+one, but not the whole thing. This page covers the rest, and how it wraps the context
+layer.
+</Info>
+
+## Components that earn their keep
+
+### Soft gates against early exits
+
+Agents love to declare victory early — returning a partial answer, skipping a
+verification step, or stopping before the task is actually done. A **soft gate** is a
+checkpoint that asks "are the exit conditions genuinely met?" before the agent is
+allowed to finish, and sends it back if not.
+
+Unlike a hard rule, a soft gate is itself a judgment step — it can reason about
+whether the work is complete for *this* task, which is what makes it robust to fuzzy,
+non-repeated workflows (the same ones where agents otherwise stall — see
+[Drill-down limitations](/why-open-index)).
+
+### Critic sub-agents for in-session evals
+
+A second agent whose only job is to **attack the first agent's output** before it
+reaches the user: does the reasoning follow from the retrieved context? Is any claim
+unsupported? Did it use stale or conflicting knowledge?
+
+Running evals *in-session* — not just offline on a benchmark — catches failures at
+the moment they happen, when they're still cheap to fix. Independent critics also
+counter the single-model failure mode where the agent is confidently wrong and has no
+mechanism to notice.
+
+### Retrieval as a tool, not a preamble
+
+The harness should give the agent a **search tool** and let it discover context,
+rather than pre-computing context and stuffing it into the prompt. This is both a
+harness decision and a context-layer decision — covered in
+[Context search accuracy](/guide/context-search-accuracy).
+
+## How the pieces compose
+
+```
+        ┌─────────────────────────────────────────────┐
+        │                  Harness                     │
+        │                                              │
+        │   soft gates ─┐        ┌─ critic sub-agents  │
+        │               ▼        ▼                     │
+        │            ┌────────────────┐                │
+        │  task ───▶ │  agent loop    │ ───▶ output    │
+        │            └────────────────┘                │
+        │                   │  ▲                        │
+        │          search   │  │  facts + provenance    │
+        │                   ▼  │                        │
+        │            ┌────────────────┐                │
+        │            │ context layer  │  ◀── the brain  │
+        │            └────────────────┘                │
+        └─────────────────────────────────────────────┘
+```
+
+The context layer is the agent's memory and knowledge; the harness is its judgment
+and self-control. You need both — a perfect harness over a poisoned context layer
+still ships confident nonsense, and a perfect context layer under a naive harness
+still exits early and never checks its work.
+
+## Where to start
+
+If you're building a domain agent from scratch, the highest-leverage order is usually:
+
+<Steps>
+  <Step title="Fix the context layer first">
+    Structured, searchable, attributable context removes the largest class of
+    failures. Start at [Why Open Index](/why-open-index).
+  </Step>
+  <Step title="Add a critic pass">
+    One sub-agent reviewing outputs against retrieved context catches most of what
+    slips through.
+  </Step>
+  <Step title="Add soft gates on the exit">
+    Stop early exits on the fuzzy, multi-step tasks where autonomy matters most.
+  </Step>
+  <Step title="Close the learning loop">
+    Let the agent write back what it learns. See [Self-learning loops](/guide/self-learning-loops).
+  </Step>
+</Steps>

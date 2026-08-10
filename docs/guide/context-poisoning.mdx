@@ -1,0 +1,90 @@
+---
+title: How to reduce context poisoning in your agents
+description: Why markdown/file-based context makes agents drift, and how a structured, discoverable context model contains the blast radius.
+---
+
+**Context poisoning** is when irrelevant or unintended context leaks into the agent's
+working set and pulls it off task — a stray instruction in a document, a
+tangentially-related file, an old note that contradicts a new one. The agent picks it
+up, treats it as relevant, and drifts.
+
+It's the single most common reason "autonomous" agents need a human watching them.
+
+## Why it happens with files
+
+Teams usually start with markdown files, organized by folder. It works at 5 files. At
+50+, it doesn't — and adding structure the *file* way makes it worse:
+
+- **Co-location leaks.** Two unrelated instructions in the same document both enter
+  context together. The folder boundary doesn't help once a file is open.
+- **Navigation invites wandering.** Build an Obsidian-style web of interlinks and the
+  agent follows links into documents it didn't need, accumulating unrelated
+  instructions on the way.
+- **Prose hides intent.** Markdown is written for humans. An agent can't cheaply tell
+  which paragraph is a hard rule, which is background, and which is stale.
+
+<Warning>
+The instinct to fix poisoning with *more structure in the same medium* — more folders,
+more interlinks, more navigational paths — usually increases surface area for drift.
+The medium is the problem, not the organization.
+</Warning>
+
+## The fix: structure the model, shrink the surface
+
+Three shifts move context poisoning from "constant" to "rare":
+
+<Steps>
+  <Step title="Structured documents, not prose">
+    Store context as **JSON / structured records** with named fields, not markdown.
+    Agents navigate structured data far more reliably — it looks like code, and the
+    boundaries between facts are explicit. → [doc_types & schemas](/concepts)
+  </Step>
+  <Step title="Retrieve narrow, not broad">
+    Instead of loading files, the agent **searches** for exactly the records it needs
+    and gets those back — nothing co-located, nothing adjacent. A search that returns
+    three entities can't poison the way a folder of thirty documents can. →
+    [Context search accuracy](/guide/context-search-accuracy)
+  </Step>
+  <Step title="Make correlations explicit and typed">
+    Related facts link through **declared edges** (a target plus a stated meaning),
+    not through "these files are near each other." The agent traverses a relationship
+    on purpose, not by proximity. → [related_to edges](/concepts)
+  </Step>
+</Steps>
+
+## What this looks like in practice
+
+Instead of a `payments/` folder the agent browses, each service is a record it
+retrieves by name, with typed edges to exactly the things it relates to:
+
+```json
+{
+  "doc_type": "service",
+  "id": "service:checkout",
+  "name": "Checkout",
+  "owner": "payments-team",
+  "related_to": [
+    { "target": "runbook:checkout-oncall", "relationship_edge_meaning": "has runbook" }
+  ]
+}
+```
+
+When the agent needs the checkout runbook, it follows *that edge* — it never has to
+open a folder where an unrelated "always escalate to legal" note happens to live.
+
+<Note>
+This is one of the three moves behind [Open Index](/why-open-index): structured
+entities, agentic search instead of pre-injection, and per-concept updates. Each
+independently reduces the poisoning surface.
+</Note>
+
+## Checklist
+
+- [ ] Context lives in structured records, not free-form markdown.
+- [ ] The agent retrieves narrow result sets by search, not whole files/folders.
+- [ ] Relationships are explicit, typed edges — not folder co-location.
+- [ ] Instructions and reference data are separated, so reference can't read as a command.
+
+<Card title="Next: Context search accuracy" icon="magnifying-glass" href="/guide/context-search-accuracy">
+  Making the agent's own retrieval reliable.
+</Card>

@@ -1,0 +1,110 @@
+---
+title: Why Open Index
+description: Why file- and markdown-based context management breaks down for autonomous agents — and what structured context management solves.
+---
+
+While building domain-specific agents — legal, healthcare, sales, infrastructure —
+dependency on humans to steer your agents becomes the bottleneck on autonomy and
+accuracy. If you're still using a markdown / file-system context layer, or
+pre-injected context, it's only a matter of time before you hit these walls.
+
+## The four walls of file-based context
+
+<AccordionGroup>
+  <Accordion title="Context poisoning & digression" icon="virus">
+    When you operate with 50+ markdown files in your context space — even neatly
+    distributed by folder — the agent tends to wander between documents, pick up
+    unrelated instructions, and drift off task.
+
+    The obvious reaction is to build a navigational path for every use case and an
+    Obsidian-style document structure with interlinks and references. But unrelated
+    instructions sitting in the *same* document still pull the agent in a different
+    direction. The structure doesn't contain the blast radius.
+  </Accordion>
+  <Accordion title="Drill-down limitations" icon="diagram-subtask">
+    When the task isn't a repeated workflow but a slightly fuzzy decision-tree
+    navigation that requires a chain of thought, the agent often can't navigate
+    past a certain point without steering.
+
+    And once human steering is required, it caps the autonomy, speed, and value your
+    agent delivers inside the workflow the human was trying to hand off.
+  </Accordion>
+  <Accordion title="Provenance & version control" icon="fingerprint">
+    Finding *which* reference the agent used to take an action gets harder as you
+    collate more documents. When you can't show the user the specific piece of
+    context behind a proof-of-work, they can't trust the agent's responses.
+  </Accordion>
+  <Accordion title="Conflict resolution" icon="code-merge">
+    When context is spread across many markdown files, updates become non-trivial:
+    multiple documents hold related context and there's no deterministic way to link
+    them or update them accurately. Knowledge goes stale and self-contradicts.
+  </Accordion>
+</AccordionGroup>
+
+## The unlock: structured context management
+
+If those problems sound familiar, the biggest unlock is changing how you think
+about context:
+
+<Steps>
+  <Step title="Structure over prose">
+    Context should live in **JSON / structured documents**, not markdown. Agents
+    navigate better when things look like code.
+  </Step>
+  <Step title="Discovery over injection">
+    Your agent shouldn't be *fed* context. It should be given **meta-information
+    about the available context** and take on the responsibility of searching and
+    discovering the right context itself.
+  </Step>
+  <Step title="Explicit correlations">
+    Optional connections and correlations between data points should be a
+    **deliberate part of your context design**, not an accident of which files sit
+    in the same folder.
+  </Step>
+</Steps>
+
+## How we got here
+
+We solved this at large enterprises for infrastructure debugging. Beyond the work on
+the overall harness, the context handling came down to three moves — each of which
+is now a primitive in Open Index:
+
+- **Designed entity models for the use case.** These became document schemas in an
+  OpenSearch-backed index. → [doc_types & schemas](/concepts)
+- **Gave the agent a search tool with pre-injected navigational context** instead of
+  running RAG or prompt expansion ourselves and shipping the result into the prompt
+  (think agentic search that spans every category of content). →
+  [search_brain & navigation_guidelines](/agents/mcp)
+- **Incremental update and deletion per doc_type** instead of stuffing context into
+  one document and driving updates from it. → [storage: file vs index](/guides/search-configuration)
+
+It took multiple iterations to find the right form factor — so we open-sourced the
+standard so anyone building on similar lines doesn't have to rediscover it.
+
+<Card title="Open Index on GitHub" icon="github" href="https://github.com/DrDroidLab/open-index" horizontal>
+  The open-source context engine for autonomous agents.
+</Card>
+
+<Note>
+This is **not the whole harness** — it's one piece of it. Around this context layer,
+a production agent still needs work like soft gates to avoid early exits and critic
+sub-agents for in-session evals. See the [Agent Guide](/guide/index) for how the
+pieces fit together.
+</Note>
+
+## Keep reading
+
+<CardGroup cols={2}>
+  <Card title="Core concepts" icon="diagram-project" href="/concepts">
+    The four primitives — doc_type, doc_schema, entity, connector.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first brain in a few minutes.
+  </Card>
+  <Card title="Reducing context poisoning" icon="virus" href="/guide/context-poisoning">
+    The structured-context playbook, in depth.
+  </Card>
+  <Card title="The agent harness" icon="gears" href="/guide/the-harness">
+    Where the context layer sits in a full autonomous-agent harness.
+  </Card>
+</CardGroup>
