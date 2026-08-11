@@ -6,6 +6,7 @@ success message on failure is a real bug.
 """
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -366,29 +367,38 @@ def test_run_loop_repeats_until_interrupted(brain_dir, monkeypatch):
 # -- ui / mcp (subprocess + server entry points are stubbed) ------------------
 
 
-def test_ui_invokes_streamlit(brain_dir, monkeypatch):
+def test_ui_serves_the_explorer(brain_dir, monkeypatch):
     captured = {}
-
-    def fake_run(cmd, env=None, check=None):
-        captured["cmd"] = cmd
-        captured["dir"] = env["OPEN_INDEX_DIR"]
-
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("open_index.ui.web.serve",
+                        lambda host, port: captured.update(host=host, port=port))
     result = run("ui", "--brain", brain_dir, "--port", "9999")
     assert result.exit_code == 0
-    assert "streamlit" in captured["cmd"]
-    assert "9999" in captured["cmd"]
-    assert captured["dir"] == str(brain_dir.resolve())
+    assert captured["port"] == 9999
+    assert os.environ["OPEN_INDEX_DIR"] == str(brain_dir.resolve())
 
 
-def test_ui_reports_missing_streamlit(brain_dir, monkeypatch):
-    def boom(*a, **k):
-        raise FileNotFoundError
+def test_ui_never_advertises_the_bind_address(brain_dir, monkeypatch):
+    """0.0.0.0 is not connectable; printing it is the same bug `serve` had."""
+    monkeypatch.setattr("open_index.ui.web.serve", lambda host, port: None)
+    result = run("ui", "--brain", brain_dir)
+    assert "0.0.0.0" not in result.stdout
+    assert "http://127.0.0.1:8501" in result.stdout
 
-    monkeypatch.setattr("subprocess.run", boom)
+
+def test_ui_reports_missing_extras(brain_dir, monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_starlette(name, *a, **k):
+        if name.startswith("open_index.ui.web"):
+            raise ImportError("no starlette")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", no_starlette)
     result = run("ui", "--brain", brain_dir)
     assert result.exit_code == 1
-    assert "Streamlit not installed" in result.output
+    assert "open-index[ui]" in result.output
 
 
 def test_mcp_stdio_entry_point(brain_dir, monkeypatch):

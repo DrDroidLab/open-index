@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ summary.name }}{% endblock %} · Open Index</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+<script>
+  /* Applied before first paint: reading the stored choice in the body would
+     flash the wrong theme on every navigation. */
+  (function () {
+    try {
+      var t = localStorage.getItem("oi-theme");
+      if (t) document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+<div class="shell">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div class="brand-name">{{ summary.name }}</div>
+    </div>
+    {% if summary.description %}
+      <div class="muted" style="margin-bottom:10px">{{ summary.description }}</div>
+    {% endif %}
+    <div class="dim" style="font-size:.8rem">
+      {{ summary.total_entities | comma }} entities · {{ summary.doc_types | length }} doc types
+    </div>
+
+    <div class="side-section">
+      <div class="side-label">Doc types</div>
+      {% if not summary.has_schema %}
+        <div class="muted">None yet — define one with
+          <code>open-index add-doc-type</code>, or ask your agent.</div>
+      {% endif %}
+      {% for row in summary.doc_types %}
+        <a class="dt-row" href="{{ base }}/explore?t={{ row.name | urlencode }}"
+           title="{{ row.description or row.name }}">
+          <span class="dot" style="background:{{ row.color }}"></span>
+          <span class="name">{{ row.name }}</span>
+          <span class="count">{{ row.count | comma }}</span>
+        </a>
+      {% endfor %}
+    </div>
+
+    <div class="side-section">
+      <div class="side-label">Appearance</div>
+      <button class="btn" id="theme-toggle" style="width:100%">Toggle theme</button>
+    </div>
+
+    {% if multi %}
+      <div class="side-section">
+        <div class="side-label">Other indexes</div>
+        <a class="dt-row" href="/"><span class="name">← all indexes</span></a>
+      </div>
+    {% endif %}
+  </aside>
+
+  <div class="main">
+    <nav class="topbar">
+      {% for slug, label, _tpl in tabs %}
+        <a class="tab {% if active == slug %}active{% endif %}"
+           href="{{ base }}/{{ slug }}">{{ label }}</a>
+      {% endfor %}
+    </nav>
+
+    <main class="content {% block wide %}{% endblock %}">
+      {% block body %}{% endblock %}
+    </main>
+  </div>
+
+</div>
+
+<div id="tip"></div>
+<script src="/static/app.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

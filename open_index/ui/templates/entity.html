@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}{{ entity.name if entity else entity_id }} · {{ summary.name }}{% endblock %}
+
+{% block body %}
+<p><a class="muted" href="{{ base }}/explore">← back to explore</a></p>
+
+{% if entity is none %}
+  <div class="note warn">No entity <code>{{ entity_id }}</code> in this index.</div>
+{% else %}
+
+<div class="page-head">
+  <h1>
+    <span class="dot" style="display:inline-block;background:{{ color }};margin-right:9px"></span>
+    {{ entity.name }}
+  </h1>
+  <p class="mono">{{ entity.id }}</p>
+</div>
+
+{% if fields %}
+  <div class="table-wrap" style="margin-bottom:14px">
+    <table>
+      <thead><tr><th>field</th><th>value</th></tr></thead>
+      <tbody>
+        {% for row in fields %}
+          <tr><td class="mono">{{ row.field }}</td><td>{{ row.value }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}
+
+{% if provenance %}
+  <details class="block">
+    <summary>Provenance</summary>
+    <div class="body">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>asserted by</th><th>asserted at</th><th>confidence</th><th>evidence</th></tr></thead>
+          <tbody><tr>
+            <td>{{ provenance.asserted_by }}</td>
+            <td>{{ provenance.asserted_at }}</td>
+            <td>{{ provenance.confidence }}</td>
+            <td>{{ provenance.evidence }}</td>
+          </tr></tbody>
+        </table>
+      </div>
+    </div>
+  </details>
+{% endif %}
+
+{% if entity.valid_from or entity.valid_to %}
+  <p class="muted">valid: {{ entity.valid_from or "—" }} → {{ entity.valid_to or "now" }}</p>
+{% endif %}
+
+<h2 style="margin:22px 0 9px">Relationships ({{ links | length }})</h2>
+{% if links %}
+  <div class="rows">
+    {% for link in links %}
+      <a class="row" href="{{ base }}/entity/{{ link.other_id | urlencode }}">
+        <span class="dim" style="font-family:var(--mono)">{{ link.direction }}</span>
+        <span class="dot" style="background:{{ link.color }}"></span>
+        <span class="title">
+          <span class="dim">{{ link.meaning or "(related)" }}</span> · {{ link.other_name }}
+        </span>
+        {% if not link.exists %}<span class="badge warn">missing</span>{% endif %}
+        <span class="meta">{{ link.other_id }}</span>
+      </a>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="note plain">
+    None yet. Edges are what make this a graph — ask your agent to link this
+    entity to related ones.
+  </div>
+{% endif %}
+
+<p style="margin-top:18px">
+  <a class="btn" href="{{ base }}/map?focus={{ entity.id | urlencode }}">Show on the map →</a>
+</p>
+
+{% endif %}
+{% endblock %}

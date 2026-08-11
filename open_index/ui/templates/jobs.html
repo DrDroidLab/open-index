@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Jobs · {{ summary.name }}{% endblock %}
+
+{% block body %}
+<div class="page-head">
+  <h1>Jobs</h1>
+  <p>Ingestion scripts in <code>connectors/*.py</code> that pull entities from an
+     MCP server on a schedule.</p>
+</div>
+
+{% if not jobs %}
+  <div class="note">
+    No connectors yet. Add <code>connectors/*.py</code> to pull entities from an
+    MCP server.
+  </div>
+{% endif %}
+
+{% for job in jobs %}
+  <div class="card">
+    <h2>⚙️ {{ job.name }} <span class="dim" style="font-weight:400">· schedule <code>{{ job.schedule }}</code></span></h2>
+    <div class="grid cols-4" style="margin:12px 0">
+      <div class="stat"><div class="n" style="font-size:1rem">{{ "live MCP" if job.mcp_url else "offline/demo" }}</div><div class="k">source</div></div>
+      <div class="stat"><div class="n" style="font-size:1rem">{{ job.last_run }}</div><div class="k">last run</div></div>
+      <div class="stat"><div class="n" style="font-size:1rem">{{ job.last_count }}</div><div class="k">entities</div></div>
+      <div class="stat"><div class="n" style="font-size:1rem">{{ job.last_status }}</div><div class="k">last status</div></div>
+    </div>
+    <p class="muted">endpoint: <code>{{ job.mcp_url or "offline/demo" }}</code></p>
+    {% if job.source %}
+      <details class="block" style="margin:10px 0 0">
+        <summary>View script</summary>
+        <div class="body"><pre><code>{{ job.source }}</code></pre></div>
+      </details>
+    {% endif %}
+    <p class="muted" style="margin-top:10px">Run now:
+      <code>open-index ingest {{ job.name }}</code> ·
+      <code>open-index run</code> for everything due.</p>
+  </div>
+{% endfor %}
+{% endblock %}

@@ -134,8 +134,6 @@ services:
       <<: *brain-env
       OPEN_INDEX_SEARCH_BACKEND: ${OPEN_INDEX_SEARCH_BACKEND:-sqlite}
       OPEN_INDEX_OPENSEARCH_HOSTS: ${OPEN_INDEX_OPENSEARCH_HOSTS:-http://opensearch:9200}
-      STREAMLIT_SERVER_HEADLESS: "true"
-      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
     ports:
       - "${UI_PORT:-8501}:8501"
 

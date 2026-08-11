@@ -17,7 +17,7 @@ A brain is built from four primitives:
 ## Quickstart
 
 ```bash
-pip install -e '.[all]'          # core + UI (Streamlit) + MCP server
+pip install -e '.[all]'          # core + explorer UI + MCP server
 
 # Try the bundled example (support brain: products, issues, segments, comments)
 open-index index --brain examples/support-brain
@@ -47,7 +47,7 @@ Prefer containers, or need a brain several agents share? →
 | `open-index ingest <connector>` | Run a connector now to pull entities from an MCP server. |
 | `open-index run [--force] [--loop N]` | Run every connector whose `schedule` is due (wire into cron/CI). |
 | `open-index search <query> [-t doc_type]` | Search from the terminal. |
-| `open-index ui` | Launch the Streamlit explorer (Explore / **Map** / Analytics / Jobs). |
+| `open-index ui` | Launch the explorer (How to use / Schema / Explore / **Map** / Analytics / Jobs). |
 | `open-index mcp [--read-only]` | Run the MCP context layer over stdio. **Read+write by default**; `--read-only` opts out of writes. |
 | `open-index serve [--port --token --read-only]` | Serve the MCP context layer over **HTTP** for remote agents (bearer-token auth). |
 | `open-index serve --brains <root>` | Serve **every** brain under a directory from one process, each at `/<name>/mcp`. |
@@ -374,7 +374,7 @@ fastest way to get an answer and the best place to sanity-check a bigger change.
 ```bash
 git clone https://github.com/DrDroidLab/open-index
 cd open-index
-pip install -e '.[all]'          # core + UI (Streamlit) + MCP server
+pip install -e '.[all]'          # core + explorer UI + MCP server
 pytest                            # run the test suite
 ```
 

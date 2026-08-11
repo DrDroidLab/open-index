@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Schema · {{ summary.name }}{% endblock %}
+
+{% block body %}
+<div class="page-head">
+  <h1>Schema</h1>
+  <p>{{ summary.doc_types | length }} doc types · {{ summary.total_entities | comma }} entities.
+     Every entity id is <code>&lt;doc_type&gt;:&lt;slug&gt;</code>, and any entity can link
+     to any other through <code>related_to</code>.</p>
+</div>
+
+{% if not summary.has_schema %}
+  <div class="note">
+    No doc types defined yet. A doc type is a concept this index tracks, plus the
+    fields it stores. Create one with <code>open-index add-doc-type</code>, or ask
+    an agent to call <code>create_doc_type</code>.
+  </div>
+{% endif %}
+
+{% for block in blocks %}
+  <details class="block" {% if blocks | length <= 3 %}open{% endif %}>
+    <summary>
+      <span class="dot" style="background:{{ block.row.color }}"></span>
+      <span class="mono">{{ block.row.name }}</span>
+      <span class="dim" style="font-weight:400">
+        · {{ block.row.count | comma }} {{ "entity" if block.row.count == 1 else "entities" }}
+      </span>
+    </summary>
+    <div class="body">
+      {% if block.row.description %}<p>{{ block.row.description }}</p>{% endif %}
+      <p class="muted">Source of truth:
+        {% if block.row.storage == "file" %}
+          <strong>files</strong> — JSON under <code>entities/</code>, git-trackable
+        {% else %}
+          <strong>search index</strong> — DB-owned, not written to files
+        {% endif %}
+      </p>
+
+      <h3 style="margin:16px 0 7px">Fields</h3>
+      {% if block.fields %}
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              {% for key in block.fields[0].keys() %}<th>{{ key }}</th>{% endfor %}
+            </tr></thead>
+            <tbody>
+              {% for row in block.fields %}
+                <tr>{% for key, val in row.items() %}
+                  <td {% if key == "field" %}class="mono"{% endif %}>{{ val }}</td>
+                {% endfor %}</tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="muted">No fields declared.</p>
+      {% endif %}
+
+      <h3 style="margin:18px 0 7px">Relationships (optional)</h3>
+      {% if block.relationships %}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>relationship</th><th>points at</th><th>declared</th><th>in use</th></tr></thead>
+            <tbody>
+              {% for row in block.relationships %}
+                <tr>
+                  <td class="mono">{{ row["relationship"] }}</td>
+                  <td class="mono">{{ row["points at"] }}</td>
+                  <td>{{ row["declared"] }}</td>
+                  <td>{{ row["in use"] }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <p class="muted" style="margin-top:9px">Declared edges are validated against
+          their target doc type. Undeclared ones still work — they just aren't checked.</p>
+      {% else %}
+        <p class="muted">None declared or in use. Entities of this type are valid
+          without any; edges are what make the index traversable rather than just
+          searchable.</p>
+      {% endif %}
+    </div>
+  </details>
+{% endfor %}
+{% endblock %}

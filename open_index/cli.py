@@ -6,7 +6,7 @@
     open-index index                  (re)load entities/ into the search index
     open-index ingest <connector>     run a connector to pull entities from MCP
     open-index search <query>         search from the terminal
-    open-index ui                     launch the Streamlit map explorer
+    open-index ui                     launch the explorer in a browser
     open-index mcp                    run the MCP server (stdio)
 
 `--brain <dir>` selects the brain directory (default: current directory).
@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -357,24 +356,28 @@ def list_connectors(brain: str = BrainOpt):
 @app.command()
 def ui(
     brain: str = BrainOpt,
-    port: int = typer.Option(8501, help="Streamlit port."),
+    host: str = typer.Option("0.0.0.0", help="Address to bind."),
+    port: int = typer.Option(8501, help="Port to serve the explorer on."),
 ):
-    """Launch the Streamlit map explorer."""
+    """Launch the explorer: schema, search, and the relationship map."""
     import os
-    import subprocess
 
-    app_path = Path(__file__).parent / "ui" / "app.py"
-    env = dict(os.environ, OPEN_INDEX_DIR=str(Path(brain).resolve()))
-    cmd = [
-        sys.executable, "-m", "streamlit", "run", str(app_path),
-        "--server.port", str(port),
-    ]
+    os.environ.setdefault("OPEN_INDEX_DIR", str(Path(brain).resolve()))
+
     try:
-        subprocess.run(cmd, env=env, check=True)
-    except FileNotFoundError:
-        typer.secho("Streamlit not installed: pip install 'open-index[ui]'",
+        from open_index.ui.web import serve as serve_ui
+    except ImportError:
+        typer.secho("The explorer needs its extras: pip install 'open-index[ui]'",
                     fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
+
+    root = os.environ.get("OPEN_INDEX_BRAINS_ROOT")
+    where = f"every brain under {root}" if root else os.environ["OPEN_INDEX_DIR"]
+    typer.echo(f"open-index explorer · {where}")
+    # The bind address is not necessarily reachable, so print a URL that is.
+    shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    typer.echo(f"  http://{shown}:{port}")
+    serve_ui(host=host, port=port)
 
 
 @app.command()

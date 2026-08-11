@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}How to use {{ summary.name }}{% endblock %}
+
+{% block body %}
+<div class="page-head">
+  <h1>What an index holds</h1>
+  <p>Three ideas, and the whole thing follows from them.</p>
+</div>
+
+<div class="card">
+  <dl class="deflist" style="margin:0">
+    {% for term, what in model_guide %}
+      <dt>{{ term }}</dt>
+      <dd>{{ what | md }}</dd>
+    {% endfor %}
+  </dl>
+</div>
+
+<hr class="hr">
+
+<div class="page-head">
+  <h1>Connect an agent to <code>{{ summary.name }}</code></h1>
+  <p>This index speaks MCP, so any MCP-capable agent can query it{% if not read_only %} — and keep it current{% endif %}.</p>
+</div>
+
+{% if mcp_url %}
+  <div class="card">
+    <h2>1. Point your agent at this URL</h2>
+    <p class="muted">Paste into <code>.mcp.json</code> (Claude Code),
+      <code>.cursor/mcp.json</code> (Cursor), or any MCP client's server config.</p>
+    <button class="btn copy" data-copy-target="cfg">copy</button>
+    <pre id="cfg"><code>{{ client_config }}</code></pre>
+    <p class="muted" style="margin-top:12px">Or generate it:</p>
+    <pre><code>open-index mcp-config --url {{ mcp_url }} --name {{ summary.name }} &gt; .mcp.json</code></pre>
+  </div>
+{% else %}
+  <div class="note warn">
+    This explorer isn't configured with a public MCP URL, so the connection
+    block can't be shown.
+    <pre style="margin-top:10px"><code>open-index mcp-config --brain &lt;brain-dir&gt; &gt; .mcp.json</code></pre>
+  </div>
+{% endif %}
+
+<div class="card">
+  <h2>2. Ask it something</h2>
+  <p class="muted" style="margin:0">No briefing needed — the navigation guide is injected
+    into the MCP handshake, so the agent knows this index's doc types and
+    relationship vocabulary before its first turn.</p>
+</div>
+
+<hr class="hr">
+
+<h1 style="margin-bottom:14px">Tools the agent gets</h1>
+
+<div class="card">
+  <h2>Reading</h2>
+  <dl class="deflist" style="margin:6px 0 0">
+    {% for name, what in read_tools %}
+      <dt><code>{{ name }}</code></dt>
+      <dd>{{ what | md }}</dd>
+    {% endfor %}
+  </dl>
+</div>
+
+<div class="card">
+  <h2>Writing</h2>
+  {% if read_only %}
+    <div class="note warn" style="margin:10px 0">
+      This endpoint is <strong>read-only</strong> — the tools below are not
+      registered on it. Serve without <code>--read-only</code> to enable them.
+    </div>
+  {% endif %}
+  <dl class="deflist" style="margin:6px 0 0">
+    {% for name, what in write_tools %}
+      <dt><code>{{ name }}</code></dt>
+      <dd>{{ what | md }}</dd>
+    {% endfor %}
+  </dl>
+  <p class="muted" style="margin-top:14px">Entity ids are always
+    <code>&lt;doc_type&gt;:&lt;slug&gt;</code>. Writes are validated against the
+    doc_type schema, and land in the search index (and on disk, for
+    <code>storage: file</code> types).</p>
+</div>
+
+<hr class="hr">
+
+<h1 style="margin-bottom:14px">What each tab does</h1>
+<div class="card">
+  <dl class="deflist" style="margin:0">
+    {% for name, what in tab_guide %}
+      <dt>{{ name }}</dt>
+      <dd>{{ what | md }}</dd>
+    {% endfor %}
+  </dl>
+</div>
+
+<hr class="hr">
+
+<h1 style="margin-bottom:6px">What's in this index right now</h1>
+<p class="muted">{{ summary.total_entities | comma }} entities across
+  {{ summary.doc_types | length }} doc types.</p>
+
+{% if summary.doc_types %}
+<div class="table-wrap" style="margin-bottom:14px">
+  <table>
+    <thead><tr><th>doc type</th><th>entities</th><th>source of truth</th><th>what it holds</th></tr></thead>
+    <tbody>
+      {% for r in summary.doc_types %}
+        <tr>
+          <td class="mono">
+            <span class="dot" style="display:inline-block;background:{{ r.color }};margin-right:7px"></span>{{ r.name }}
+          </td>
+          <td>{{ r.count | comma }}</td>
+          <td>{{ "files (git)" if r.storage == "file" else "search index" }}</td>
+          <td>{{ r.description or "—" }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<details class="block">
+  <summary>The full navigation guide the agent receives</summary>
+  <div class="body"><pre><code>{{ guide }}</code></pre></div>
+</details>
+{% endblock %}

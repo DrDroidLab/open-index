@@ -1,9 +1,9 @@
 """View-model for the explorer: everything the UI shows, minus the rendering.
 
-Kept free of Streamlit so the decisions that actually matter — which doc_types
+Kept free of any rendering library so the decisions that actually matter — which doc_types
 to list, what to anchor the map on when the user hasn't chosen, how to describe
-an entity's neighbours — are plain functions that can be tested. `app.py` is
-then a thin layer of widgets over these.
+an entity's neighbours — are plain functions that can be tested. `web.py` and the
+templates are then a thin rendering layer over these.
 """
 
 from __future__ import annotations
@@ -66,29 +66,6 @@ class BrainSummary:
     def has_schema(self) -> bool:
         return bool(self.doc_types)
 
-
-def brain_from_url(url: Optional[str], available: list[str]) -> Optional[str]:
-    """Which brain a URL asks for: the first path segment.
-
-    `/support-index` and `/support-index/anything` both select `support-index`, so
-    the index name lives in the path exactly as it does for the MCP endpoint at
-    `/<name>/mcp`.
-
-    Read from the browser's URL rather than left to Streamlit's own page router:
-    that router resolves programmatic pages by an internal identifier, so every
-    path rendered whichever brain sorted first. An unknown or missing segment
-    falls back to the first brain — a stale link should land somewhere useful
-    rather than on an error.
-    """
-    if not available:
-        return None
-    if not url:
-        return available[0]
-
-    from urllib.parse import urlparse
-
-    first = urlparse(url).path.strip("/").split("/")[0]
-    return first if first in available else available[0]
 
 
 def color_for(brain: Brain, doc_type: str) -> str:
@@ -227,88 +204,7 @@ def semantic_weight_for(mode: str) -> Optional[float]:
 
 # -- map rendering ------------------------------------------------------------
 
-# The canvas width handed to streamlit-agraph. It MUST be an int: the library
-# does `f"{width}px"`, so a CSS string like "100%" becomes the invalid value
-# "100%px", the canvas fails to size, and the graph is stranded in a corner
-# instead of centred.
-# Sized to sit beside the legend column rather than to fill the page: at the
-# old full-page width the canvas overflowed its column once the legend arrived.
-GRAPH_WIDTH = 950
-GRAPH_HEIGHT = 650
 
-# Past this many nodes a force layout keeps drifting, so we slow it down rather
-# than switching physics off — vis only auto-fits the viewport as part of
-# stabilisation, and without stabilisation the graph never centres.
-BUSY_GRAPH_NODES = 150
-
-_GRAPH_THEMES = {
-    "dark": {
-        # vis defaults to near-black labels with a white halo, which on a dark
-        # canvas is both unreadable and visually noisy.
-        "node_label": "#e8eaed",
-        "edge_label": "#aab2bd",
-        "edge": "#6b7280",
-        "stroke_width": 0,
-    },
-    "light": {
-        "node_label": "#1f2328",
-        "edge_label": "#57606a",
-        "edge": "#c8ccd2",
-        "stroke_width": 0,
-    },
-}
-
-
-# Buttons styled as full-width list rows, so results and neighbours read as a
-# list rather than a wall of chrome.
-#
-# Every value is theme-agnostic on purpose. Hardcoding `background:#fff` painted
-# white rows under Streamlit's dark theme, which keeps its light text — white on
-# white, and the entity list became invisible. So: transparent background,
-# inherited text colour, and translucent grey borders that read correctly
-# against either a light or a dark surface.
-ROW_CSS = """
-<style>
-div[data-testid='stButton'] > button{
-  width:100%; text-align:left; justify-content:flex-start;
-  border:1px solid rgba(128,128,128,0.35); border-radius:6px;
-  background:transparent; color:inherit;
-  padding:7px 12px; font-weight:400; font-size:0.92rem; margin-bottom:-1px;
-}
-div[data-testid='stButton'] > button:hover{
-  background:rgba(128,128,128,0.12);
-  border-color:rgba(128,128,128,0.6);
-  color:inherit;
-}
-div[data-testid='stButton'] > button:focus{box-shadow:none;color:inherit}
-/* Streamlit wraps button labels in <p>; without this the label keeps its own
-   colour and ignores the inherit above. */
-div[data-testid='stButton'] > button p{color:inherit;margin:0}
-</style>
-"""
-
-
-def mcp_url_for(current_url: Optional[str], name: Optional[str]) -> Optional[str]:
-    """This index's MCP endpoint, derived from the URL the browser is on.
-
-    An explorer serving many brains cannot be handed one correct endpoint as
-    configuration — the answer depends on which index you are looking at. But
-    the page already knows: it is at `/<name>`, so the endpoint is
-    `/<name>/mcp` on the same origin. Deriving it also means it stays right
-    behind any proxy or hostname without anything being configured.
-
-    Returns None when the URL or the index name is unknown, so callers can fall
-    back to explicit configuration.
-    """
-    if not current_url or not name:
-        return None
-
-    from urllib.parse import urlparse
-
-    parsed = urlparse(current_url)
-    if not parsed.scheme or not parsed.netloc:
-        return None
-    return f"{parsed.scheme}://{parsed.netloc}/{name}/mcp"
 
 
 def mcp_client_config(url: str, server_name: str = "open-index") -> str:
@@ -465,7 +361,8 @@ def node_tooltip(entity_id: str, name: str, doc_type: str,
                  fields: Optional[dict] = None) -> str:
     """What hovering a node shows: the full name, its type, and a few fields.
 
-    vis renders this as plain text, so it is newline-separated rather than HTML.
+    Newline-separated plain text: the tooltip element sets `white-space:
+    pre-line` and takes it via textContent, so no markup is involved.
     """
     lines = [name, f"{doc_type} · {entity_id}"]
     for key, value in list((fields or {}).items()):
@@ -497,52 +394,5 @@ def legend_rows(brain, graph) -> list[dict]:
     ]
 
 
-def graph_node_specs(graph, anchor_size: int = 20, size: int = 13) -> list[dict]:
-    """Node payloads for the map renderer.
-
-    Nothing is labelled on the canvas. Entity names are long and arbitrary —
-    drawn beside every dot they overlap each other and their own edges, and no
-    amount of truncation fixes a dense graph. The picture carries shape and
-    colour; identity comes from the tooltip, and the legend explains the colours.
-
-    `label` is an empty string rather than None: None serialises to null and vis
-    draws that literally.
-    """
-    specs = []
-    for node in graph.nodes:
-        fields = {k: v for k, v in (node.data or {}).items()
-                  if k not in ("id", "doc_type", "related_to")}
-        specs.append({
-            "id": node.id,
-            "label": "",
-            "color": node.color,
-            "shape": "dot",
-            "size": anchor_size if node.is_anchor else size,
-            "title": node_tooltip(node.id, node.label, node.doc_type, fields),
-        })
-    return specs
 
 
-def graph_edge_specs(graph, color: str) -> list[dict]:
-    """Edge payloads. Unlabelled for the same reason as nodes — the relationship
-    is on the tooltip."""
-    return [
-        {
-            "source": edge.source,
-            "target": edge.target,
-            "label": "",
-            "title": edge_tooltip(edge.source, edge.target, edge.meaning),
-            "color": color,
-        }
-        for edge in graph.edges
-    ]
-
-
-def graph_theme(theme_type: Optional[str]) -> dict:
-    """Label and edge colours for the map, given Streamlit's active theme.
-
-    Anything unrecognised (including None, which is what Streamlit reports when
-    the user is following their browser preference and the server was never
-    told) falls back to the light palette.
-    """
-    return _GRAPH_THEMES.get((theme_type or "").lower(), _GRAPH_THEMES["light"])

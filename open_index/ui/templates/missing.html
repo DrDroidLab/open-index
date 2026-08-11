@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Not found · Open Index</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main class="content" style="margin:0 auto; padding-top:56px">
+  <h1>No index called <code>{{ wanted }}</code></h1>
+  {% if brains %}
+    <p class="muted">This host serves:</p>
+    <div class="rows" style="max-width:420px">
+      {% for name in brains %}
+        <a class="row" href="/{{ name }}"><span class="title">{{ name }}</span></a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted">This host serves no indexes. A brain is a directory
+      containing <code>brain.yaml</code>.</p>
+  {% endif %}
+</main>
+</body>
+</html>
