@@ -58,9 +58,10 @@ class SQLiteBackend:
     def __init__(self, db_path: str | Path, config=None):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        # check_same_thread=False: the Streamlit UI caches one Brain (and thus one
-        # connection) but reruns it across worker threads. Access is serialized
-        # through _lock so the shared connection stays safe.
+        # check_same_thread=False: the explorer caches one Brain (and so one
+        # connection) while Starlette runs its sync endpoints on a threadpool, so
+        # the connection is reached from several threads. Access is serialized
+        # through _lock, which is what actually keeps it safe.
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")

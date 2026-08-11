@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Map · {{ summary.name }}{% endblock %}
+{% block wide %}wide{% endblock %}
+
+{% block body %}
+<div class="page-head">
+  <h1>Map</h1>
+  <p>Relationships drawn. Nodes carry colour and shape only — names are long and
+     overlap badly at any real size, so identity is on hover. Click a node to
+     focus on it and its immediate neighbours.</p>
+</div>
+
+{% if not populated %}
+  <div class="note">No entities to map yet. Add some and run <code>open-index index</code>.</div>
+{% else %}
+
+<div class="card" style="padding:14px 16px">
+  <div class="chips">
+    {% for name in populated %}
+      <a class="chip {% if name in selected %}on{% endif %}"
+         href="{{ base }}/map?{% if focus %}focus={{ focus | urlencode }}&{% endif %}
+               {%- for t in selected if t != name %}t={{ t | urlencode }}&{% endfor %}
+               {%- if name not in selected %}t={{ name | urlencode }}{% endif %}">
+        {{ name }}
+      </a>
+    {% endfor %}
+    {% if selected | length != populated | length %}
+      <a class="chip" href="{{ base }}/map">all types</a>
+    {% endif %}
+  </div>
+  {% if focus %}
+    <p class="muted" style="margin:11px 0 0">
+      Focused on <code>{{ focus }}</code> and its immediate neighbours.
+      <a href="{{ base }}/map">↩ show the whole index</a>
+    </p>
+  {% endif %}
+</div>
+
+<div id="cap" class="note warn" style="display:none"></div>
+
+<div class="map-layout">
+  <div id="cy"></div>
+  <div class="legend">
+    <div class="card" style="padding:14px 16px">
+      <div class="side-label">Legend</div>
+      <div id="legend-rows"></div>
+      <p class="muted" id="edge-note" style="margin:12px 0 0; display:none">
+        Edges are <code>related_to</code> links. Hover one to see which
+        relationship it is.
+      </p>
+    </div>
+    <div class="card" style="padding:14px 16px">
+      <div class="side-label">Counts</div>
+      <div class="muted"><span id="n-nodes">0</span> nodes · <span id="n-edges">0</span> edges</div>
+    </div>
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{# In the scripts block, not the body: the body renders above #tip, so map.js
+   loading there found no tooltip element and every hover threw. #}
+{% block scripts %}
+{% if populated %}
+<script src="/static/vendor/cytoscape.min.js"></script>
+<script>
+window.OI_MAP = {
+  url: {{ (base ~ "/api/graph") | tojson }},
+  params: {{ (selected if selected | length != populated | length else []) | tojson }},
+  focus: {{ (focus or "") | tojson }},
+  base: {{ base | tojson }}
+};
+</script>
+<script src="/static/map.js"></script>
+{% endif %}
+{% endblock %}

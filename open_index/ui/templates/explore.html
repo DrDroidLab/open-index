@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Explore · {{ summary.name }}{% endblock %}
+
+{% block body %}
+<div class="page-head">
+  <h1>Explore</h1>
+  <p>Search the index, or browse by doc type. Open an entity to see its fields
+     and every relationship in both directions.</p>
+</div>
+
+{% if summary.is_empty %}
+  <div class="note">
+    This index has no entities yet. Add some with <code>open-index import &lt;file&gt;</code>,
+    a connector, or by asking your agent — then run <code>open-index index</code>.
+  </div>
+{% else %}
+
+<form class="card" method="get" action="{{ base }}/explore">
+  <div style="display:flex; gap:10px; flex-wrap:wrap">
+    <input type="search" name="q" value="{{ query }}" style="flex:1; min-width:220px"
+           placeholder="Search this index…  e.g. payment, checkout, redis" autofocus>
+    <select name="mode" style="width:auto">
+      {% for m in modes %}
+        <option value="{{ m }}" {% if m == mode %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn primary" type="submit">Search</button>
+  </div>
+
+  <div class="chips" style="margin-top:12px">
+    {% for row in summary.doc_types %}
+      {% if row.count %}
+        {# Each chip is a link that toggles itself in the query string, so the
+           filter is in the URL and therefore shareable and back-buttonable. #}
+        <a class="chip {% if row.name in selected %}on{% endif %}"
+           href="{{ base }}/explore?q={{ query | urlencode }}&mode={{ mode | urlencode }}
+                 {%- for t in selected if t != row.name %}&t={{ t | urlencode }}{% endfor %}
+                 {%- if row.name not in selected %}&t={{ row.name | urlencode }}{% endif %}">
+          <span class="dot" style="background:{{ row.color }}"></span>{{ row.name }}
+        </a>
+      {% endif %}
+    {% endfor %}
+    {% if selected %}
+      <a class="chip" href="{{ base }}/explore?q={{ query | urlencode }}&mode={{ mode | urlencode }}">clear</a>
+    {% endif %}
+  </div>
+</form>
+
+{% if error %}
+  <div class="note warn">Search failed: {{ error }}</div>
+{% endif %}
+
+{% if results is not none %}
+  <p class="muted">{{ results.total }} result{{ "" if results.total == 1 else "s" }}</p>
+  {% if results.rows %}
+    <div class="rows">
+      {% for r in results.rows %}
+        <a class="row" href="{{ base }}/entity/{{ r.id | urlencode }}">
+          <span class="dot" style="background:{{ r.color }}"></span>
+          <span class="title">{{ r.name }}</span>
+          <span class="meta">{{ r.doc_type }}</span>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="note">No matches. Try fewer words, or switch the mode to Semantic.</div>
+  {% endif %}
+
+{% elif browse is not none %}
+  {% if not browse %}
+    <div class="note">No entities in the selected doc types.</div>
+  {% endif %}
+  {% for group in browse %}
+    <details class="block" {% if browse | length == 1 %}open{% endif %}>
+      <summary>
+        <span class="dot" style="background:{{ group.row.color }}"></span>
+        <span class="mono">{{ group.row.name }}</span>
+        <span class="dim" style="font-weight:400">· {{ group.row.count | comma }}</span>
+      </summary>
+      <div class="body">
+        {% if group.row.description %}<p class="muted">{{ group.row.description }}</p>{% endif %}
+        <div class="rows">
+          {% for e in group.entities %}
+            <a class="row" href="{{ base }}/entity/{{ e.id | urlencode }}">
+              <span class="title">{{ e.name }}{% if e.description %}
+                <span class="dim"> · {{ e.description }}</span>{% endif %}</span>
+              <span class="meta">{{ e.id }}</span>
+            </a>
+          {% endfor %}
+        </div>
+        {% if group.truncated %}
+          <p class="muted" style="margin-top:9px">Showing the first 200 of
+            {{ group.row.count | comma }} — search to narrow.</p>
+        {% endif %}
+      </div>
+    </details>
+  {% endfor %}
+{% endif %}
+
+{% endif %}
+{% endblock %}

@@ -40,10 +40,10 @@ jobs:
         run: pip install -e '.[ui,mcp,opensearch,serve,dev]' numpy
 
       - name: Check the optional deps are importable
-        # Four test modules call pytest.importorskip("mcp") / ("streamlit"). If
-        # the install above ever breaks, those ~60 tests would skip and the job
-        # would still go green — so fail here instead.
-        run: python -c "import mcp, streamlit, streamlit_agraph, opensearchpy, numpy"
+        # Several test modules call pytest.importorskip(...). If the install
+        # above ever breaks, those tests would skip and the job would still go
+        # green — so fail here instead.
+        run: python -c "import mcp, starlette, jinja2, opensearchpy, numpy"
 
       - name: Run tests
         # -rs lists skip reasons, so a suite that stops running is visible in

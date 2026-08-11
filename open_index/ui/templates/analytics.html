@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Analytics · {{ summary.name }}{% endblock %}
+
+{% block body %}
+<div class="page-head">
+  <h1>Analytics</h1>
+  <p>What has been asked of this index, by which client. Zero-result searches are
+     the interesting number — they are the questions it cannot yet answer.</p>
+</div>
+
+{% if not stats.get("available", True) %}
+  <div class="note warn">
+    Analytics are unavailable — the local state directory is not writable.
+  </div>
+{% else %}
+
+<p class="muted">Stored in <code>~/.local/state/open-index/</code>, outside the
+  brain checkout. Search text and entity ids stay on that machine.</p>
+
+<div class="grid cols-4" style="margin:14px 0 18px">
+  <div class="stat"><div class="n">{{ stats.total_fetches | comma }}</div><div class="k">fetches</div></div>
+  <div class="stat"><div class="n">{{ stats.failed_fetches | comma }}</div><div class="k">failed</div></div>
+  <div class="stat"><div class="n">{{ stats.zero_result_searches | comma }}</div><div class="k">zero-result searches</div></div>
+  <div class="stat"><div class="n">{{ "%.0f" | format(stats.average_duration_ms) }} ms</div><div class="k">avg latency</div></div>
+</div>
+
+{% if not stats.total_fetches %}
+  <div class="note">
+    Nothing recorded yet. Search here, or query this index from the CLI or your
+    agent, and the usage shows up on this tab.
+  </div>
+{% else %}
+
+<div class="grid cols-2">
+  <div class="card">
+    <h2>By client</h2>
+    {% set top = stats.by_source.values() | max %}
+    {% for key, n in stats.by_source.items() %}
+      <div style="margin-top:9px">
+        <div style="display:flex; justify-content:space-between; font-size:.85rem">
+          <span class="mono">{{ key }}</span><span class="dim">{{ n | comma }}</span>
+        </div>
+        <div style="height:6px; background:var(--surface-2); border-radius:4px; margin-top:3px">
+          <div style="height:6px; border-radius:4px; background:var(--accent);
+                      width:{{ (n / top * 100) | round(1) }}%"></div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <div class="card">
+    <h2>By operation</h2>
+    {% set top2 = stats.by_operation.values() | max %}
+    {% for key, n in stats.by_operation.items() %}
+      <div style="margin-top:9px">
+        <div style="display:flex; justify-content:space-between; font-size:.85rem">
+          <span class="mono">{{ key }}</span><span class="dim">{{ n | comma }}</span>
+        </div>
+        <div style="height:6px; background:var(--surface-2); border-radius:4px; margin-top:3px">
+          <div style="height:6px; border-radius:4px; background:var(--accent);
+                      width:{{ (n / top2 * 100) | round(1) }}%"></div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+
+<h2 style="margin:22px 0 9px">Most requested context</h2>
+{% if stats.by_context %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>context</th><th>fetches</th></tr></thead>
+      <tbody>
+        {% for context, n in stats.by_context.items() %}
+          <tr><td class="mono">{{ context }}</td><td>{{ n | comma }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <p class="muted">No named context fetched yet.</p>
+{% endif %}
+
+<details class="block" style="margin-top:18px">
+  <summary>Recent fetches</summary>
+  <div class="body">
+    {% if events %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>time</th><th>client</th><th>operation</th><th>context</th>
+                     <th>results</th><th>ms</th><th>ok</th></tr></thead>
+          <tbody>
+            {% for e in events %}
+              <tr>
+                <td class="mono">{{ e.fetched_at }}</td>
+                <td>{{ e.source }}</td>
+                <td class="mono">{{ e.operation }}</td>
+                <td>{{ e.query or e.entity_id or "navigation guide" }}</td>
+                <td>{{ e.result_count }}</td>
+                <td>{{ e.duration_ms }}</td>
+                <td>{{ "yes" if e.success else "no" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">No events yet.</p>
+    {% endif %}
+  </div>
+</details>
+
+{% endif %}
+{% endif %}
+{% endblock %}

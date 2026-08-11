@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Indexes · Open Index</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+<script>(function(){try{var t=localStorage.getItem("oi-theme");if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
+</head>
+<body>
+<main class="content" style="margin:0 auto; padding-top:56px">
+  <div class="page-head">
+    <h1>Indexes on this host</h1>
+    <p>{{ brains | length }} available. Each has its own explorer and its own MCP
+       endpoint at <code>/&lt;name&gt;/mcp</code>.</p>
+  </div>
+  <div class="grid cols-2">
+    {% for name in brains %}
+      {% set s = summaries[name] %}
+      <a class="card" href="/{{ name }}" style="display:block">
+        <h2>{{ s.name }}</h2>
+        <p class="muted" style="min-height:2.6em">{{ s.description or "—" }}</p>
+        <div class="dim" style="font-size:.8rem">
+          {{ s.total_entities | comma }} entities · {{ s.doc_types | length }} doc types
+        </div>
+        <div class="chips" style="margin-top:10px">
+          {% for r in s.doc_types[:6] %}
+            <span class="chip"><span class="dot" style="background:{{ r.color }}"></span>{{ r.name }}</span>
+          {% endfor %}
+        </div>
+      </a>
+    {% endfor %}
+  </div>
+</main>
+</body>
+</html>

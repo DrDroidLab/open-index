@@ -17,9 +17,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The explorer: ordinary server-rendered pages. Starlette and uvicorn are
+# already pulled in by `serve`, so on a deployment that runs both this adds
+# only the template engine.
 ui = [
-    "streamlit>=1.36",
-    "streamlit-agraph>=0.0.45",
+    "starlette>=0.37",
+    "jinja2>=3.1",
+    "uvicorn>=0.30",
 ]
 mcp = [
     "mcp>=1.2",
@@ -32,7 +36,7 @@ opensearch = [
 serve = [
     "mcp>=1.2",
     "uvicorn>=0.30",
-    "starlette>=1.0",
+    "starlette>=0.37",
 ]
 # Semantic/vector search (local ONNX model + OpenAI-compatible API support).
 semantic = [
@@ -43,12 +47,11 @@ dev = [
     "pytest>=8.0",
 ]
 all = [
-    "streamlit>=1.36",
-    "streamlit-agraph>=0.0.45",
+    "jinja2>=3.1",
     "mcp>=1.2",
     "opensearch-py>=2.4",
     "uvicorn>=0.30",
-    "starlette>=1.0",
+    "starlette>=0.37",
     "fastembed>=0.3",
     "numpy>=1.26",
     "pytest>=8.0",
@@ -59,6 +62,11 @@ open-index = "open_index.cli:app"
 
 [tool.setuptools.packages.find]
 include = ["open_index*"]
+
+# Templates and static assets are part of the package, not just the checkout —
+# without this the wheel installs a UI that 500s on every page.
+[tool.setuptools.package-data]
+open_index = ["ui/templates/*.html", "ui/static/*", "ui/static/vendor/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

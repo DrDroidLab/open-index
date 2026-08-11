@@ -185,49 +185,6 @@ def test_color_for_unknown_doc_type_is_the_default(brain):
 # centred because the canvas width was an invalid CSS value.
 
 
-def test_graph_width_is_an_int_not_a_css_string():
-    """streamlit-agraph does f"{width}px", so "100%" becomes "100%px" and the
-    canvas never sizes — the cause of the off-centre map."""
-    assert isinstance(view.GRAPH_WIDTH, int)
-    assert isinstance(view.GRAPH_HEIGHT, int)
-    # Reproduce the library's formatting and check it yields valid CSS.
-    for value in (view.GRAPH_WIDTH, view.GRAPH_HEIGHT):
-        rendered = f"{value}px"
-        assert re.fullmatch(r"\d+px", rendered), f"invalid CSS length: {rendered}"
-
-
-def test_dark_theme_labels_are_light():
-    dark = view.graph_theme("dark")
-    light = view.graph_theme("light")
-    assert dark["node_label"] != light["node_label"]
-    # A light label on a dark canvas: high channel values.
-    assert int(dark["node_label"].lstrip("#")[:2], 16) > 0x80
-    assert int(light["node_label"].lstrip("#")[:2], 16) < 0x80
-
-
-def test_label_halo_is_disabled_in_both_themes():
-    """vis's default white stroke turns every label into outlined text."""
-    for theme in ("dark", "light"):
-        assert view.graph_theme(theme)["stroke_width"] == 0
-
-
-def test_unknown_or_missing_theme_falls_back_to_light():
-    """Streamlit reports None when the viewer follows their browser setting."""
-    assert view.graph_theme(None) == view.graph_theme("light")
-    assert view.graph_theme("") == view.graph_theme("light")
-    assert view.graph_theme("solarized") == view.graph_theme("light")
-
-
-def test_theme_lookup_is_case_insensitive():
-    assert view.graph_theme("Dark") == view.graph_theme("dark")
-
-
-def test_every_theme_defines_the_full_palette():
-    keys = {"node_label", "edge_label", "edge", "stroke_width"}
-    for theme in ("dark", "light"):
-        assert keys <= set(view.graph_theme(theme))
-
-
 # -- Schema tab ----------------------------------------------------------------
 
 
@@ -297,44 +254,6 @@ def test_help_tab_is_first_in_the_guide():
 # unreadable; the full text moves to the hover tooltip.
 
 
-def test_nodes_carry_no_label(brain):
-    """Entity names are long and arbitrary; drawn beside every dot they overlap
-    each other. Identity comes from the tooltip instead."""
-    from open_index.graph import build_overview_graph
-
-    specs = view.graph_node_specs(build_overview_graph(brain))
-    assert specs
-    assert all(s["label"] == "" for s in specs)
-    # Empty string, not None: None serialises to null and vis draws that.
-    assert all(s["label"] is not None for s in specs)
-
-
-def test_every_node_carries_its_identity_on_hover(brain):
-    from open_index.graph import build_overview_graph
-
-    specs = {s["id"]: s for s in view.graph_node_specs(build_overview_graph(brain))}
-    spec = specs["product:checkout"]
-    assert "Checkout" in spec["title"]
-    assert "product:checkout" in spec["title"]
-
-
-def test_edges_carry_no_label_but_name_the_relationship(brain):
-    from open_index.graph import build_overview_graph
-
-    specs = view.graph_edge_specs(build_overview_graph(brain), "#ccc")
-    assert specs
-    assert all(s["label"] == "" for s in specs)
-    assert any("has common issue" in s["title"] for s in specs)
-
-
-def test_node_colour_comes_from_the_doc_type(brain):
-    from open_index.graph import build_overview_graph
-
-    graph = build_overview_graph(brain)
-    by_id = {n.id: n.color for n in graph.nodes}
-    assert all(s["color"] == by_id[s["id"]] for s in view.graph_node_specs(graph))
-
-
 def test_node_tooltip_carries_the_full_name_and_type():
     tip = view.node_tooltip("issue:x", "A very long name that got truncated",
                             "issue", {"severity": "high"})
@@ -376,10 +295,6 @@ def test_legend_is_ordered_by_count(brain):
     assert [r["count"] for r in rows] == sorted([r["count"] for r in rows], reverse=True)
 
 
-def test_graph_width_fits_beside_the_legend():
-    assert view.GRAPH_WIDTH <= 1000
-
-
 # -- the model explanation on the help tab ------------------------------------
 
 
@@ -407,67 +322,3 @@ def test_model_guide_distinguishes_schema_from_data():
     assert "schema" in text
 
 
-# -- one UI process, many brains: the URL is the selector ----------------------
-
-
-def test_the_url_path_selects_the_brain():
-    assert view.brain_from_url("https://h/sales-index",
-                               ["support-index", "sales-index"]) == "sales-index"
-
-
-def test_a_deeper_path_selects_on_the_first_segment():
-    assert view.brain_from_url("https://h/sales-index/x",
-                               ["alpha", "sales-index"]) == "sales-index"
-
-
-def test_the_root_path_falls_back_to_the_first_brain():
-    assert view.brain_from_url("https://h/", ["alpha", "beta"]) == "alpha"
-
-
-def test_an_unknown_path_falls_back_rather_than_erroring():
-    """A stale link should land somewhere useful."""
-    assert view.brain_from_url("https://h/deleted", ["alpha", "beta"]) == "alpha"
-
-
-def test_a_missing_url_falls_back():
-    assert view.brain_from_url(None, ["alpha", "beta"]) == "alpha"
-
-
-def test_a_query_string_does_not_affect_selection():
-    assert view.brain_from_url("https://h/beta?x=1", ["alpha", "beta"]) == "beta"
-
-
-def test_no_brains_selects_nothing():
-    assert view.brain_from_url("https://h/x", []) is None
-
-
-# -- the endpoint shown on the help tab ----------------------------------------
-#
-# A shared explorer cannot be handed one correct MCP URL as configuration: the
-# answer depends on which index you are looking at. It is derived from the page
-# URL instead, which also keeps it right behind any proxy or hostname.
-
-
-def test_endpoint_is_derived_from_the_page_url():
-    assert view.mcp_url_for("https://brain.acme.com/sales-index", "sales-index") \
-        == "https://brain.acme.com/sales-index/mcp"
-
-
-def test_endpoint_ignores_the_rest_of_the_path_and_query():
-    assert view.mcp_url_for("https://h:8443/sales-index/x?q=1", "sales-index") \
-        == "https://h:8443/sales-index/mcp"
-
-
-def test_endpoint_uses_the_directory_name_not_the_configured_brain_name():
-    """The URL segment is the directory; brain.yaml's name may differ."""
-    assert view.mcp_url_for("https://h/dir-name", "dir-name").endswith("/dir-name/mcp")
-
-
-def test_endpoint_keeps_the_scheme():
-    assert view.mcp_url_for("http://localhost:8501/a", "a").startswith("http://")
-
-
-def test_no_endpoint_without_a_url_or_a_name():
-    assert view.mcp_url_for(None, "a") is None
-    assert view.mcp_url_for("https://h/a", None) is None
-    assert view.mcp_url_for("/relative/path", "a") is None
