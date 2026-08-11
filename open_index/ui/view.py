@@ -283,6 +283,12 @@ READ_TOOLS = [
     ("get_entity(entity_id)",
      "One entity with its outgoing AND incoming edges — the incoming direction "
      "answers \"what else points at this?\"."),
+    ("get_entities([ids])",
+     "Several entities in one call. One round trip instead of N, which matters "
+     "on a remote endpoint."),
+    ("lookup_by_external_id(external_id)",
+     "Find an entity by the id its source system knows it by — a ticket key, a "
+     "CRM record id — when you don't know this index's `<doc_type>:<slug>` id."),
 ]
 
 WRITE_TOOLS = [
@@ -293,6 +299,10 @@ WRITE_TOOLS = [
      "rather than calling put_entity in a loop."),
     ("create_doc_type(doc_type, description, fields, relationships, storage)",
      "Define a new concept, when no existing doc_type fits."),
+    ("delete_entity(entity_id)",
+     "Remove one entity, its edges in both directions, and its file. "
+     "Irreversible — prefer correcting an entity over deleting it, since an id "
+     "that once resolved and now 404s breaks anything holding a reference."),
 ]
 
 # The tab label for the help page. Leftmost, so it is what a first-time visitor

@@ -36,7 +36,9 @@ def srv(brain):
 
 def test_default_server_exposes_read_and_write_tools(srv):
     assert {"navigation_guidelines", "search_brain", "get_entity",
-            "put_entity", "put_entities", "create_doc_type"} == srv.tools()
+            "get_entities", "lookup_by_external_id",
+            "put_entity", "put_entities", "create_doc_type",
+            "delete_entity"} == srv.tools()
 
 
 def test_default_prompt_positions_brain_as_read_write_domain_context(srv):

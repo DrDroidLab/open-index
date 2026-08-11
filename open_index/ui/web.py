@@ -470,6 +470,14 @@ def build_app():
     routes.append(Route("/entity/{entity_id:path}", entity))
     routes.append(Route("/api/graph", graph_json))
 
+    # The JSON API, mounted beside the explorer so one process and one port
+    # serve the UI, the API and MCP for every brain. Registered before the
+    # /{name} page routes: /api/... must not be read as an index named "api".
+    from open_index.api import build_routes as api_routes
+
+    routes += api_routes(resolve, prefix="/api/v1")
+    routes += api_routes(resolve, prefix="/{name}/api/v1")
+
     routes.append(Route("/{name}", make(page_help, "help.html")))
     for slug, fn, tpl in pages:
         routes.append(Route(f"/{{name}}/{slug}", make(fn, tpl)))

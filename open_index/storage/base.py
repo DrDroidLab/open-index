@@ -239,6 +239,29 @@ class SearchBackend(Protocol):
         """Total entity count per doc_type."""
         ...
 
+    def get_by_external_id(self, external_id: str) -> Optional[Entity]:
+        """The entity carrying this caller-supplied id, or None.
+
+        `external_id` is free-form and its uniqueness is the caller's business,
+        not something the store enforces. Implementations return the single
+        match, or the first by id when a caller has reused one — deterministic
+        rather than arbitrary, so the same lookup gives the same answer twice.
+        """
+        ...
+
+    def delete_entity(self, entity_id: str) -> bool:
+        """Remove one entity and everything derived from it. True if it existed.
+
+        Implementations must also drop its search-index row, its embedding, and
+        every edge naming it in *either* direction. An edge left pointing at a
+        deleted entity is a dangling reference that still renders on the map and
+        in neighbour lists, which reads as data corruption rather than as a
+        deletion.
+
+        Idempotent: deleting an absent id returns False, it does not raise.
+        """
+        ...
+
     def delete_by_doc_type(self, doc_types: list[str]) -> None:
         """Remove all entities (and their edges) of the given doc_types.
 

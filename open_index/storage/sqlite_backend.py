@@ -49,7 +49,7 @@ _MAX_SEMANTIC_SCAN = 10_000
 # Reserved top-level keys in an entity's flat JSON; everything else is a field.
 # `embedding` is reserved so user schema fields can never collide with the vector
 # payload stored in the OpenSearch doc / SQLite entity_embeddings table.
-_RESERVED_KEYS = {"id", "doc_type", "name", "related_to", "embedding"}
+_RESERVED_KEYS = {"id", "doc_type", "name", "external_id", "related_to", "embedding"}
 
 
 def _fields_of(data: dict) -> dict:
@@ -114,6 +114,11 @@ class SQLiteBackend:
                 search_text,
                 tokenize = 'unicode61'
             );
+
+            -- Expression index: external_id lives inside the JSON blob, and
+            -- without this every lookup by it scans the table.
+            CREATE INDEX IF NOT EXISTS idx_entities_external
+                ON entities(json_extract(data, '$.external_id'));
 
             CREATE TABLE IF NOT EXISTS entity_embeddings (
                 entity_id  TEXT PRIMARY KEY,
@@ -364,6 +369,38 @@ class SQLiteBackend:
                 rows,
             )
             self._conn.commit()
+
+    def get_by_external_id(self, external_id: str) -> Optional[Entity]:
+        if not external_id:
+            return None
+        row = self._conn.execute(
+            "SELECT data FROM entities WHERE json_extract(data, '$.external_id') = ? "
+            "ORDER BY id LIMIT 1",
+            (external_id,),
+        ).fetchone()
+        return Entity.from_dict(json.loads(row["data"])) if row else None
+
+    def delete_entity(self, entity_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.cursor()
+            row = cur.execute(
+                "SELECT rowid FROM entities WHERE id = ?", (entity_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            # FTS is an external-content-free table keyed by rowid, so it does
+            # not follow the delete on its own.
+            cur.execute("DELETE FROM entities_fts WHERE rowid = ?", (row["rowid"],))
+            cur.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
+            cur.execute("DELETE FROM entity_embeddings WHERE entity_id = ?", (entity_id,))
+            # Both directions: an edge that still points at a deleted entity
+            # renders as a dangling node on the map and a "(missing)" neighbour.
+            cur.execute(
+                "DELETE FROM relationships WHERE source_id = ? OR target_id = ?",
+                (entity_id, entity_id),
+            )
+            self._conn.commit()
+            return True
 
     def delete_by_doc_type(self, doc_types: list[str]) -> None:
         if not doc_types:

@@ -381,6 +381,57 @@ def ui(
 
 
 @app.command()
+def delete(
+    entity_id: str = typer.Argument(..., help='Entity id, e.g. "issue:payment-declined".'),
+    brain: str = BrainOpt,
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation."),
+):
+    """Delete one entity, its edges in both directions, and its file.
+
+    Irreversible. For a `storage: file` doc_type the JSON file goes too —
+    removing only the index row would resurrect it on the next `index`.
+    """
+    b = _open_brain(brain)
+    entity = b.get_entity(entity_id)
+    if entity is None:
+        typer.secho(f"no entity '{entity_id}'", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    inbound = b.backend.relationships_to(entity_id)
+    if not yes:
+        typer.echo(f"{entity.id}  ({entity.doc_type})  {entity.name}")
+        if inbound:
+            # Worth seeing before deleting: these edges disappear with it, and
+            # the entities holding them are not otherwise mentioned.
+            typer.secho(f"  {len(inbound)} entity(ies) point at this and will "
+                        "lose that edge:", fg=typer.colors.YELLOW)
+            for src, _t, meaning in inbound[:10]:
+                typer.echo(f"    {src}  —[{meaning or 'related'}]→")
+        typer.confirm("delete it?", abort=True)
+
+    if b.delete_entity(entity_id, source="cli"):
+        typer.secho(f"✓ deleted {entity_id}", fg=typer.colors.GREEN)
+    else:
+        typer.secho(f"no entity '{entity_id}'", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def lookup(
+    external_id: str = typer.Argument(..., help="The source system's id."),
+    brain: str = BrainOpt,
+):
+    """Find an entity by the id its source system knows it by."""
+    b = _open_brain(brain)
+    entity = b.get_by_external_id(external_id, source="cli")
+    if entity is None:
+        typer.secho(f"no entity with external_id '{external_id}'",
+                    fg=typer.colors.YELLOW)
+        raise typer.Exit(1)
+    typer.echo(json.dumps(entity.to_json(), indent=2))
+
+
+@app.command()
 def trace(
     trace_id: str = typer.Argument(..., help="The trace id to look up."),
     brain: str = BrainOpt,

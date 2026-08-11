@@ -89,6 +89,12 @@ class Entity(BaseModel):
     id: str
     doc_type: str
     name: str = ""
+    # Your identifier for this thing, if it already has one — a CRM record id, a
+    # ticket key, a UUID. Free-form, unlike `id`, which stays `<doc_type>:<slug>`
+    # so an agent can tell an entity's type by looking at it. Set it at write
+    # time and `lookup_by_external_id` finds the entity without you having to
+    # know or construct the open-index id.
+    external_id: Optional[str] = None
     related_to: list[Relationship] = Field(default_factory=list)
     # Arbitrary schema-defined fields (description, owner, status, ...).
     fields: dict[str, Any] = Field(default_factory=dict)
@@ -130,8 +136,8 @@ class Entity(BaseModel):
         """Build an Entity from a loose JSON/dict, folding unknown keys into
         `fields` and coercing `related_to` shorthand into Relationships."""
         data = dict(data)
-        reserved = {"id", "doc_type", "name", "related_to", "fields",
-                    "provenance", "valid_from", "valid_to"}
+        reserved = {"id", "doc_type", "name", "external_id", "related_to",
+                    "fields", "provenance", "valid_from", "valid_to"}
         explicit_fields = dict(data.pop("fields", {}) or {})
         related = data.pop("related_to", []) or []
 
@@ -151,6 +157,7 @@ class Entity(BaseModel):
                 "id": core.get("id"),
                 "doc_type": core.get("doc_type"),
                 "name": core.get("name", ""),
+                "external_id": core.get("external_id"),
                 "related_to": norm_related,
                 "fields": explicit_fields,
                 "provenance": core.get("provenance"),
@@ -177,6 +184,10 @@ class Entity(BaseModel):
     def to_json(self) -> dict:
         """Flat, file-friendly JSON (fields hoisted to the top level)."""
         out: dict[str, Any] = {"id": self.id, "doc_type": self.doc_type, "name": self.name}
+        # Only when set: writing `"external_id": null` onto every entity would
+        # add noise to every file diff for a feature most brains never use.
+        if self.external_id:
+            out["external_id"] = self.external_id
         out.update(self.fields)
         if self.related_to:
             # Drop empty provenance rather than writing `"provenance": null` onto

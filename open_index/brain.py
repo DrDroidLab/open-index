@@ -212,6 +212,88 @@ class Brain:
         path.write_text(json.dumps(entity.to_json(), indent=2, ensure_ascii=False) + "\n")
         return path
 
+    def get_by_external_id(
+        self, external_id: str, source: Optional[str] = None
+    ) -> Optional[Entity]:
+        """Find an entity by the id its source system knows it by."""
+        started = perf_counter()
+        entity = self.backend.get_by_external_id(external_id)
+        if source:
+            self._record_fetch(
+                source=source, operation="lookup_by_external_id", started=started,
+                entity_id=external_id, result_count=int(entity is not None),
+                result_doc_types=({entity.doc_type: 1} if entity else {}),
+                results=([{"id": entity.id, "doc_type": entity.doc_type,
+                           "score": None,
+                           "match": {"type": "lookup", "keyword_score": None,
+                                     "semantic_score": None}}]
+                         if entity else []),
+            )
+        return entity
+
+    def get_entities(
+        self, entity_ids: list[str], source: Optional[str] = None
+    ) -> list[Entity]:
+        """Several entities in one call. Missing ids are skipped, not None-padded.
+
+        Exists because agents were emulating it with N round trips, which on a
+        remote endpoint is N times the latency for the same answer.
+        """
+        started = perf_counter()
+        found = [e for e in (self.backend.get_entity(i) for i in entity_ids)
+                 if e is not None]
+        if source:
+            counts: dict[str, int] = {}
+            for e in found:
+                counts[e.doc_type] = counts.get(e.doc_type, 0) + 1
+            self._record_fetch(
+                source=source, operation="get_entities", started=started,
+                entity_id=",".join(entity_ids[:10]), result_count=len(found),
+                result_doc_types=counts,
+                results=[{"id": e.id, "doc_type": e.doc_type, "score": None,
+                          "match": {"type": "lookup", "keyword_score": None,
+                                    "semantic_score": None}}
+                         for e in found],
+            )
+        return found
+
+    def delete_entity(self, entity_id: str, source: Optional[str] = None) -> bool:
+        """Remove one entity everywhere it exists. True if it was there.
+
+        For a `storage: file` doc_type the JSON file is the source of truth, so
+        deleting only the index row would resurrect the entity on the next
+        `open-index index` — the delete has to reach the file or it is not a
+        delete, it is a pause.
+
+        The file goes first. If the index delete fails after the file is gone,
+        a reconcile removes the row; the other order leaves a file that silently
+        restores a deleted entity.
+        """
+        started = perf_counter()
+        entity = self.backend.get_entity(entity_id)
+        if entity is None:
+            return False
+
+        path = None
+        if entity.doc_type in self._file_backed_types() and self.config.root is not None:
+            path = self.entity_path(entity)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                raise RuntimeError(
+                    f"could not remove {path}: {exc}. The entity is still indexed; "
+                    "nothing was deleted."
+                ) from exc
+
+        deleted = self.backend.delete_entity(entity_id)
+        if source:
+            self._record_fetch(
+                source=source, operation="delete_entity", started=started,
+                entity_id=entity_id, result_count=int(deleted),
+                result_doc_types={entity.doc_type: 1} if deleted else {},
+            )
+        return deleted
+
     def _file_backed_types(self) -> set[str]:
         return {n for n, dt in self.config.doc_types.items() if dt.storage == "file"}
 
@@ -545,6 +627,14 @@ class Brain:
             "Only fields declared `filterable` can be filtered, and filtering on any other\n"
             "field is an error rather than being ignored — so a filter never silently\n"
             "returns everything. The error names the fields you *can* filter.",
+            "\n## Identifiers",
+            "An entity id is always `<doc_type>:<slug>` — that is how you can tell a\n"
+            "document's type by looking at its id.\n\n"
+            "If the thing already has an id in your system — a ticket key, a CRM record\n"
+            "id, a UUID — pass it as `external_id` when writing, and\n"
+            "`lookup_by_external_id(...)` finds the entity without you having to know or\n"
+            "construct the open-index id. Use `get_entities([...])` to fetch several at\n"
+            "once rather than calling `get_entity` in a loop.",
             "\n## Making a retrieval debuggable",
             "Pass `trace_id=\"<your turn or request id>\"` to `search_brain` and\n"
             "`get_entity`. Every document returned is then recoverable by that id later,\n"
@@ -580,6 +670,10 @@ class Brain:
             "\n## How to write",
             "Read and write access is the default. Write back durable, validated domain\n"
             "knowledge whenever work reveals something worth retaining.",
+            "Deleting is possible (`delete_entity`) but rarely right: prefer correcting\n"
+            "an entity, because an id that once resolved and now 404s breaks anything\n"
+            "still holding a reference to it. Delete removes the entity, its file, and\n"
+            "every edge naming it in either direction.",
             "\n### Add or update an entity — `put_entity`",
             "```python\n"
             "put_entity(\n"
