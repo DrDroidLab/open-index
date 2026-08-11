@@ -20,7 +20,10 @@ import pytest
 import yaml
 
 from open_index.brain import Brain
+from open_index.config import load_brain_config
+from open_index.embeddings import FakeEmbedProvider
 from open_index.models import Entity
+from open_index.storage import get_backend
 from open_index.storage.base import resolve_filters
 
 EXAMPLE = "examples/support-brain"
@@ -28,7 +31,14 @@ EXAMPLE = "examples/support-brain"
 
 @pytest.fixture
 def brain(tmp_path):
-    """The example brain plus a filterable `tenant_id` on `issue`."""
+    """The example brain plus a filterable `tenant_id` on `issue`.
+
+    Uses FakeEmbedProvider rather than the real model: these tests are about
+    which arm retrieved a document, not about embedding quality, and CI does not
+    install the `semantic` extra. Without it the semantic arm silently falls
+    back to keyword — which is exactly the behaviour these tests exist to tell
+    apart, so they would pass locally and fail in CI. Which they did.
+    """
     d = tmp_path / "b"
     shutil.copytree(EXAMPLE, d)
     spec_path = d / "doc_types" / "issue.yaml"
@@ -39,7 +49,11 @@ def brain(tmp_path):
     })
     spec_path.write_text(yaml.safe_dump(spec, sort_keys=False))
 
-    b = Brain.open(d)
+    config = load_brain_config(d)
+    backend = get_backend(config)
+    backend._embedding_provider = FakeEmbedProvider(dim=32)
+    backend._embedding_provider_initialized = True
+    b = Brain(config, backend=backend)
     b.index()
     for i, tenant in [(1, "acme"), (2, "globex")]:
         b.put_entity(Entity(
