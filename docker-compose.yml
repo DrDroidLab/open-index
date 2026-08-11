@@ -32,6 +32,11 @@ x-brain-service: &brain-service
     # on every recreate — turning each restart into a fresh download.
     # OPEN_INDEX_EMBEDDING_CACHE (below) points it here.
     - model-cache:/home/openindex/model-cache
+    # The retrieval audit trail (which query returned which document, and the
+    # trace id it ran under). It lives in the user's state directory, which is
+    # inside the container — so without this volume every redeploy silently
+    # discards the history you would want precisely when debugging one.
+    - analytics-state:/home/openindex/.local/state/open-index
   environment: &brain-env
     OPEN_INDEX_TOKEN: ${OPEN_INDEX_TOKEN:-}
     # What the startup banner advertises. Defaulted because auto-detection is
@@ -140,3 +145,4 @@ services:
 volumes:
   opensearch-data:
   model-cache:
+  analytics-state:

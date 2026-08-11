@@ -234,6 +234,9 @@ def page_entity(request, name: str, brain: Brain, entity_id: str) -> dict[str, A
         fields=view.field_rows(entity),
         provenance=view.provenance_row(entity),
         links=view.neighbours(brain, entity_id),
+        # "What keeps retrieving this?" — the question when a document turns up
+        # in an agent's context where it should not.
+        retrievals=brain.retrievals_of(entity_id, limit=25),
     )
     return ctx
 
@@ -289,6 +292,12 @@ def page_analytics(request, name: str, brain: Brain) -> dict[str, Any]:
     ctx["stats"] = summary
     ctx["events"] = brain.analytics_events(limit=100) if summary.get(
         "total_fetches") else []
+
+    # Trace lookup: the whole point of recording the id is being able to ask
+    # "what did this turn actually retrieve?" afterwards.
+    wanted = (request.query_params.get("trace") or "").strip()
+    ctx["trace_query"] = wanted
+    ctx["trace_events"] = brain.analytics_by_trace(wanted) if wanted else None
     return ctx
 
 
@@ -328,10 +337,33 @@ def page_jobs(request, name: str, brain: Brain) -> dict[str, Any]:
 def build_app():
     """The Starlette app serving the explorer."""
     from starlette.applications import Starlette
+    from starlette.middleware import Middleware
+    from starlette.middleware.base import BaseHTTPMiddleware
     from starlette.responses import JSONResponse, RedirectResponse
     from starlette.routing import Mount, Route
     from starlette.staticfiles import StaticFiles
     from starlette.templating import Jinja2Templates
+
+    from open_index.tracing import TRACE_HEADER, trace, trace_from_headers
+
+    class TraceMiddleware(BaseHTTPMiddleware):
+        """Bind X-Trace-Id for the life of the request.
+
+        Set here rather than in each handler so every read a page performs —
+        including ones several calls deep — is attributed to the same turn. The
+        context manager restores the previous value on the way out: a worker
+        outlives its request, and a leaked id would credit the next caller's
+        retrievals to the previous one.
+        """
+
+        async def dispatch(self, request, call_next):
+            with trace(trace_from_headers(request.headers)) as tid:
+                response = await call_next(request)
+            if tid:
+                # Echoed so a caller can confirm the id actually took, rather
+                # than discovering weeks later that a malformed one was dropped.
+                response.headers[TRACE_HEADER] = tid
+            return response
 
     templates = Jinja2Templates(directory=str(TEMPLATES))
     templates.env.filters["comma"] = lambda n: f"{n:,}"
@@ -444,7 +476,7 @@ def build_app():
     routes.append(Route("/{name}/entity/{entity_id:path}", entity))
     routes.append(Route("/{name}/api/graph", graph_json))
 
-    return Starlette(routes=routes)
+    return Starlette(routes=routes, middleware=[Middleware(TraceMiddleware)])
 
 
 def serve(host: str = "0.0.0.0", port: int = 8501) -> None:

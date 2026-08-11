@@ -381,6 +381,39 @@ def ui(
 
 
 @app.command()
+def trace(
+    trace_id: str = typer.Argument(..., help="The trace id to look up."),
+    brain: str = BrainOpt,
+):
+    """Show what one turn retrieved: each query, and the documents it returned.
+
+    The debugging path when an agent behaved oddly — not "what does this index
+    contain" but "what did it actually hand over, ranked how, and why".
+    """
+    b = _open_brain(brain)
+    events = b.analytics_by_trace(trace_id)
+    if not events:
+        typer.secho(f"nothing recorded under trace '{trace_id}'",
+                    fg=typer.colors.YELLOW)
+        typer.echo("  Either that turn made no reads, or it did not send the id "
+                   "(X-Trace-Id header, or the trace_id tool argument).")
+        raise typer.Exit(1)
+
+    typer.secho(f"{len(events)} read(s) under {trace_id}", fg=typer.colors.GREEN)
+    for ev in events:
+        context = ev["query"] or ev["entity_id"] or "—"
+        typer.echo(f"\n  {ev['operation']}  {context}"
+                   f"  ({ev['duration_ms']} ms, via {ev['source']})")
+        if not ev["results"]:
+            typer.echo("      returned nothing")
+            continue
+        for r in ev["results"]:
+            score = "—" if r["score"] is None else f"{r['score']:g}"
+            typer.echo(f"      {r['rank']:>2}. {r['entity_id']:<38} "
+                       f"{(r['match_type'] or '—'):<9} score={score}")
+
+
+@app.command()
 def mcp(
     brain: str = BrainOpt,
     read_only: bool = typer.Option(

@@ -43,8 +43,11 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # already exists. Without this the volume is created owned by root, the
 # embedding model download fails with EACCES, and semantic search silently
 # degrades to keyword-only — a working server that quietly answers worse.
+# The state directory gets the same treatment, and for the same reason: it is a
+# named volume mount point, so it must exist and be owned by openindex or the
+# volume lands root-owned and the audit trail silently records nothing.
 RUN useradd --create-home --uid 10001 openindex \
-    && mkdir -p /home/openindex/model-cache \
+    && mkdir -p /home/openindex/model-cache /home/openindex/.local/state/open-index \
     && chown -R openindex /brain /home/openindex
 USER openindex
 
