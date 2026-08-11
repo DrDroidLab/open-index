@@ -31,8 +31,11 @@ from open_index.models import Entity
 from open_index.schema import DocType
 from open_index.storage.base import (
     NO_EMBEDDING_PROVIDER_WARNING,
+    SEARCH_MODES,
     SearchResults,
+    _match_info,
     iter_semantic_entities,
+    resolve_filters,
     semantic_doc_types,
     semantic_fields_in_scope,
     semantic_text_for,
@@ -283,11 +286,28 @@ class OpenSearchBackend:
         fields += [f"fields.{name}^{b:g}" for name, b in boosts.items()]
         return fields
 
+    @staticmethod
+    def _term_filters(pairs: list[tuple[str, Any]]) -> list[dict]:
+        """Exact-match clauses for a strict filter.
+
+        `.keyword` because the dynamic mapping gives a string field a text arm
+        for search and a keyword subfield for exact matching; a `term` against
+        the analysed arm would match tokens rather than the whole value, which
+        for a tenant id is a wrong answer that looks like a right one.
+        Non-strings are matched on the field itself, which is already exact.
+        """
+        clauses = []
+        for name, value in pairs:
+            field = f"fields.{name}.keyword" if isinstance(value, str) else f"fields.{name}"
+            clauses.append({"term": {field: value}})
+        return clauses
+
     def build_search_body(
         self, query: Optional[str], doc_types: Optional[list[str]], limit: int,
-        counts_only: bool,
+        counts_only: bool, filter_pairs: Optional[list[tuple[str, Any]]] = None,
     ) -> dict:
         filters = [{"terms": {"doc_type": doc_types}}] if doc_types else []
+        filters += self._term_filters(filter_pairs or [])
         if query:
             must: dict = {
                 "multi_match": {
@@ -542,14 +562,21 @@ class OpenSearchBackend:
                     logger.warning("clear_scroll failed: %s", exc)
 
     def _build_knn_body(
-        self, vector: list[float], doc_types: Optional[list[str]], k: int
+        self, vector: list[float], doc_types: Optional[list[str]], k: int,
+        filter_pairs: Optional[list[tuple[str, Any]]] = None,
     ) -> dict:
         knn_clause: dict[str, Any] = {
             "vector": vector,
             "k": k,
         }
-        if doc_types:
-            knn_clause["filter"] = {"terms": {"doc_type": doc_types}}
+        # The strict filter applies to the vector arm too. Filtering only the
+        # keyword arm would let a semantic search return exactly the documents
+        # the filter exists to exclude.
+        clauses = ([{"terms": {"doc_type": doc_types}}] if doc_types else [])
+        clauses += self._term_filters(filter_pairs or [])
+        if clauses:
+            knn_clause["filter"] = ({"bool": {"filter": clauses}}
+                                    if len(clauses) > 1 else clauses[0])
         return {
             "size": k,
             "query": {"knn": {"embedding": knn_clause}},
@@ -563,8 +590,10 @@ class OpenSearchBackend:
     def _run_keyword_search(
         self, query: Optional[str], doc_types: Optional[list[str]],
         limit: int, counts_only: bool,
+        filter_pairs: Optional[list[tuple[str, Any]]] = None,
     ) -> SearchResults:
-        body = self.build_search_body(query, doc_types, limit, counts_only)
+        body = self.build_search_body(query, doc_types, limit, counts_only,
+                                      filter_pairs)
         res = self._client.search(index=self.index, body=body)
         total = res["hits"]["total"]["value"]
         doc_type_counts = {
@@ -574,15 +603,23 @@ class OpenSearchBackend:
         if counts_only:
             return SearchResults(total=total, results=[], doc_type_counts=doc_type_counts)
 
+        hits = res["hits"]["hits"]
+        top = max((float(h["_score"] or 0.0) for h in hits), default=0.0)
         results = []
-        for h in res["hits"]["hits"]:
+        for h in hits:
             src = h["_source"]
+            raw = float(h["_score"]) if h.get("_score") is not None else 0.0
             results.append({
                 "id": src["id"],
                 "doc_type": src["doc_type"],
                 "name": src.get("name", ""),
-                "score": float(h["_score"]) if h.get("_score") is not None else 0.0,
+                "score": raw,
                 "entity": self.doc_to_entity(src).to_json(),
+                # No query means nothing was ranked: this is a listing or a
+                # pure filter, and saying "keyword" would misreport it.
+                "match": _match_info(bool(query), False,
+                                     raw / top if top else 0.0, 0.0,
+                                     filtered=bool(filter_pairs)),
             })
         return SearchResults(
             total=total, results=results, doc_type_counts=doc_type_counts, limited=total > limit,
@@ -592,37 +629,57 @@ class OpenSearchBackend:
         self, query: Optional[str] = None, doc_types: Optional[list[str]] = None,
         limit: int = 20, counts_only: bool = False,
         semantic_weight: Optional[float] = None,
+        mode: str = "hybrid", filters: Optional[dict[str, Any]] = None,
     ) -> SearchResults:
-        if counts_only or not query:
-            return self._run_keyword_search(query, doc_types, limit, counts_only)
+        if mode not in SEARCH_MODES:
+            raise ValueError(f"unknown search mode {mode!r} — expected one of "
+                             + ", ".join(SEARCH_MODES))
+        # Raises on an undeclared field rather than filtering nothing.
+        filter_pairs = resolve_filters(self._doc_types, filters, doc_types)
+
+        if counts_only or not query or mode == "keyword":
+            return self._run_keyword_search(query, doc_types, limit, counts_only,
+                                            filter_pairs)
 
         w = semantic_weight if semantic_weight is not None else (
             self._config.search.semantic_weight if self._config else 0.3)
-        semantic_scope = w > 0 and semantic_fields_in_scope(self._doc_types, doc_types)
+        # In semantic mode the vector arm runs whatever the weight says; the
+        # weight only blends the arms in hybrid.
+        wants_semantic = mode == "semantic" or w > 0
+        semantic_scope = wants_semantic and semantic_fields_in_scope(
+            self._doc_types, doc_types)
         provider = self._get_embedding_provider() if semantic_scope else None
         if provider is None:
             if semantic_scope:
                 self._warn_no_embedding_provider()
-            return self._run_keyword_search(query, doc_types, limit, counts_only)
+            # Semantic was asked for and cannot be served. Falling back to
+            # keyword is the established behaviour, and the results say
+            # "keyword" so the caller can see what actually happened.
+            return self._run_keyword_search(query, doc_types, limit, counts_only,
+                                            filter_pairs)
 
         # Hybrid search: run the keyword and k-NN queries in parallel, merge by id,
         # normalize each source by its own max _score, and combine with
         # search.semantic_weight. The k-NN filter uses doc_types so the merged
         # candidate set and doc_type_counts stay consistent with the keyword arm.
         k = max(limit, 50)
-        kw_body = self.build_search_body(query, doc_types, k, counts_only=False)
-        kw_res = self._client.search(index=self.index, body=kw_body)
-
-        vector = provider.encode([query])[0]
-        knn_body = self._build_knn_body(vector, doc_types, k)
-        knn_res = self._client.search(index=self.index, body=knn_body)
-
         candidates: dict[str, dict] = {}
         kw_scores: dict[str, float] = {}
         sem_scores: dict[str, float] = {}
-        for h in kw_res["hits"]["hits"]:
-            candidates[h["_id"]] = h["_source"]
-            kw_scores[h["_id"]] = float(h["_score"]) if h.get("_score") is not None else 0.0
+
+        # Only hybrid runs the keyword arm; in semantic mode a keyword hit that
+        # is not near the query has no business in the candidate set.
+        if mode == "hybrid":
+            kw_body = self.build_search_body(query, doc_types, k, counts_only=False,
+                                             filter_pairs=filter_pairs)
+            kw_res = self._client.search(index=self.index, body=kw_body)
+            for h in kw_res["hits"]["hits"]:
+                candidates[h["_id"]] = h["_source"]
+                kw_scores[h["_id"]] = float(h["_score"]) if h.get("_score") is not None else 0.0
+
+        vector = provider.encode([query])[0]
+        knn_body = self._build_knn_body(vector, doc_types, k, filter_pairs)
+        knn_res = self._client.search(index=self.index, body=knn_body)
         for h in knn_res["hits"]["hits"]:
             candidates[h["_id"]] = h["_source"]
             sem_scores[h["_id"]] = float(h["_score"]) if h.get("_score") is not None else 0.0
@@ -634,8 +691,10 @@ class OpenSearchBackend:
         for eid, src in candidates.items():
             kw_norm = kw_scores.get(eid, 0.0) / kw_max if kw_max else 0.0
             sem_norm = sem_scores.get(eid, 0.0) / sem_max if sem_max else 0.0
-            score = (1 - w) * kw_norm + w * sem_norm
-            merged.append((score, src))
+            score = sem_norm if mode == "semantic" else (1 - w) * kw_norm + w * sem_norm
+            # Membership, not score: which arm actually retrieved it.
+            merged.append((score, src, eid in kw_scores, eid in sem_scores,
+                           kw_norm, sem_norm))
         merged.sort(key=lambda s: (-s[0], s[1].get("name", "")))
         picked = merged[:limit]
         results = [
@@ -645,8 +704,9 @@ class OpenSearchBackend:
                 "name": src.get("name", ""),
                 "score": round(score, 3),
                 "entity": self.doc_to_entity(src).to_json(),
+                "match": _match_info(kw_hit, sem_hit, kw_norm, sem_norm),
             }
-            for score, src in picked
+            for score, src, kw_hit, sem_hit, kw_norm, sem_norm in picked
         ]
         doc_type_counts = {}
         for src in candidates.values():

@@ -187,6 +187,11 @@ def doc_type_to_yaml_dict(dt: DocType) -> dict:
         }
         if f.required:
             entry["required"] = True
+        # Emitted only when set, like `required` — but it must be emitted, or a
+        # doc_type written back loses the flag and every filter on that field is
+        # then refused as undeclared.
+        if f.filterable:
+            entry["filterable"] = True
         if f.description:
             entry["description"] = f.description
         fields.append(entry)

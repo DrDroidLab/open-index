@@ -190,16 +190,45 @@ def provenance_row(entity) -> Optional[dict[str, Any]]:
     }
 
 
-# Search modes offered in the UI, mapped to a semantic_weight override.
+# Search modes offered in the UI, mapped to the backend's mode.
+#
+# These used to map to a semantic_weight instead, which was subtly wrong: a
+# weight of 0.0 still let semantically-matched documents into the candidate set
+# at score 0, so "Keyword" returned things that matched no keyword. Mode decides
+# membership, so the label now means what it says.
 SEARCH_MODES = {
-    "Hybrid": None,     # the brain's configured blend
-    "Keyword": 0.0,
-    "Semantic": 1.0,
+    "Hybrid": "hybrid",
+    "Keyword": "keyword",
+    "Semantic": "semantic",
 }
 
 
-def semantic_weight_for(mode: str) -> Optional[float]:
-    return SEARCH_MODES.get(mode)
+def backend_mode_for(label: str) -> str:
+    """The backend mode for a UI label, defaulting to hybrid for anything odd."""
+    return SEARCH_MODES.get(label, "hybrid")
+
+
+# How a result's `match.type` reads on the page, and the colour it carries.
+MATCH_LABELS = {
+    "both": ("keyword + meaning", "#7c3aed"),
+    "keyword": ("keyword", "#2563eb"),
+    "semantic": ("meaning", "#0d9488"),
+    "filter": ("filtered", "#6b7280"),
+    "none": ("listed", "#6b7280"),
+}
+
+
+def match_badge(match: Optional[dict]) -> Optional[dict]:
+    """Label, colour and scores for one result's match, or None if absent."""
+    if not match:
+        return None
+    label, color = MATCH_LABELS.get(match.get("type", ""), (match.get("type", ""), "#6b7280"))
+    return {
+        "label": label,
+        "color": color,
+        "keyword_score": match.get("keyword_score", 0.0),
+        "semantic_score": match.get("semantic_score", 0.0),
+    }
 
 
 # -- map rendering ------------------------------------------------------------
