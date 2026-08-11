@@ -91,6 +91,22 @@ def is_read_only() -> bool:
     return os.environ.get("OPEN_INDEX_READ_ONLY", "").lower() in ("1", "true", "yes")
 
 
+def directory_hidden() -> bool:
+    """Whether this host refuses to enumerate the indexes it serves.
+
+    Default off: a self-hosted instance wants a home page listing its indexes.
+    Set OPEN_INDEX_HIDE_DIRECTORY=1 when the index names are themselves
+    sensitive — several unrelated tenants or prospects on one host, where
+    knowing that /acme-index exists is the leak, not its contents. Then only
+    someone already holding a name can reach it: / is a 404, an unknown name is
+    a 404 that names nothing, and no page links to a sibling.
+
+    This closes the UI only. A reverse proxy that publishes its own directory
+    (a generated /indexes.json, say) has to be dealt with there too.
+    """
+    return os.environ.get("OPEN_INDEX_HIDE_DIRECTORY", "").lower() in ("1", "true", "yes")
+
+
 def mcp_url_for_request(request, name: str) -> str:
     """This index's MCP endpoint, from the URL the browser actually used.
 
@@ -120,7 +136,9 @@ def _base_context(request, name: str, brain: Brain, active: str) -> dict[str, An
         "active": active,
         "tabs": TABS,
         "base": f"/{name}" if name else "",
-        "multi": len(available_brains()) > 1 or bool(name),
+        # Drives the "all indexes" link, which must not appear on a host that
+        # refuses to enumerate them.
+        "multi": (not directory_hidden()) and (len(available_brains()) > 1 or bool(name)),
         "read_only": is_read_only(),
     }
 
@@ -338,10 +356,13 @@ def build_app():
         return templates.TemplateResponse(request, template, ctx)
 
     def not_found(request, wanted: str):
-        brains = available_brains()
+        # The listing is the whole point of hiding the directory: a 404 that
+        # helpfully names every other index would hand over exactly what the
+        # flag exists to withhold.
+        brains = [] if directory_hidden() else sorted(
+            n for n in available_brains() if n)
         return templates.TemplateResponse(
-            request, "missing.html",
-            {"wanted": wanted, "brains": sorted(n for n in brains if n)},
+            request, "missing.html", {"wanted": wanted, "brains": brains},
             status_code=404,
         )
 
@@ -357,6 +378,10 @@ def build_app():
         brains = available_brains()
         if "" in brains:                        # single brain: serve it here
             return make(page_help, "help.html")(request)
+        if directory_hidden():
+            # Not a redirect even when there is only one: on a hidden host the
+            # root must not reveal which index that is.
+            return not_found(request, "")
         if len(brains) == 1:
             return RedirectResponse(f"/{next(iter(brains))}")
         return templates.TemplateResponse(

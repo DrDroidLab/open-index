@@ -268,3 +268,57 @@ def test_entity_content_is_escaped(single, tmp_path):
     body = single.get("/entity/issue:xss").text
     assert "<img src=x" not in body
     assert "&lt;img" in body
+
+
+# -- hiding the directory -----------------------------------------------------
+#
+# On a host serving several unrelated indexes, the *names* are the sensitive
+# part: knowing that /acme-index exists is the leak, whatever it contains.
+
+
+@pytest.fixture
+def hidden(tmp_path, monkeypatch):
+    root = tmp_path / "brains"
+    root.mkdir()
+    for name in ("alpha", "beta"):
+        shutil.copytree(EXAMPLE, root / name)
+        Brain.open(root / name).index()
+    monkeypatch.setenv("OPEN_INDEX_BRAINS_ROOT", str(root))
+    monkeypatch.delenv("OPEN_INDEX_DIR", raising=False)
+    monkeypatch.setenv("OPEN_INDEX_HIDE_DIRECTORY", "1")
+    return TestClient(_fresh_app())
+
+
+def test_hidden_root_is_a_404(hidden):
+    assert hidden.get("/").status_code == 404
+
+
+def test_hidden_root_names_no_index(hidden):
+    body = hidden.get("/").text
+    assert "alpha" not in body and "beta" not in body
+
+
+def test_a_known_index_still_works_when_hidden(hidden):
+    r = hidden.get("/alpha")
+    assert r.status_code == 200
+    assert "/alpha/mcp" in r.text
+
+
+def test_a_hidden_host_does_not_name_siblings_on_a_404(hidden):
+    """A 404 that helpfully lists the alternatives hands over the thing the
+    flag exists to withhold."""
+    body = hidden.get("/nope").text
+    assert "alpha" not in body and "beta" not in body
+
+
+def test_a_hidden_page_links_to_no_sibling(hidden):
+    """The sidebar's 'all indexes' link would walk a visitor straight to the
+    listing the root refuses to serve."""
+    body = hidden.get("/alpha").text
+    assert "all indexes" not in body
+    assert "beta" not in body
+
+
+def test_the_directory_is_shown_by_default(many):
+    """Hiding is opt-in: a self-hosted instance wants its home page."""
+    assert many.get("/").status_code == 200

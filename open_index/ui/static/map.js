@@ -14,7 +14,15 @@
   var cfg = window.OI_MAP;
   if (!cfg || typeof cytoscape === "undefined") return;
 
+  // Created if absent rather than assumed: when this script loaded above the
+  // tooltip element, every hover threw on a null and the map looked inert while
+  // drawing perfectly. A missing container should cost nothing.
   var tip = document.getElementById("tip");
+  if (!tip) {
+    tip = document.createElement("div");
+    tip.id = "tip";
+    document.body.appendChild(tip);
+  }
   var el = document.getElementById("cy");
 
   function css(name) {

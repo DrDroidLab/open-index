@@ -56,6 +56,13 @@
   </div>
 </div>
 
+{% endif %}
+{% endblock %}
+
+{# In the scripts block, not the body: the body renders above #tip, so map.js
+   loading there found no tooltip element and every hover threw. #}
+{% block scripts %}
+{% if populated %}
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script>
 window.OI_MAP = {
@@ -66,6 +73,5 @@ window.OI_MAP = {
 };
 </script>
 <script src="/static/map.js"></script>
-
 {% endif %}
 {% endblock %}
