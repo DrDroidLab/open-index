@@ -74,6 +74,40 @@
   </div>
 {% endif %}
 
+{% if retrievals %}
+  <details class="block" style="margin-top:20px">
+    <summary>What retrieved this ({{ retrievals | length }})</summary>
+    <div class="body">
+      <p class="muted">Queries that returned this document, most recent first —
+        the trail to follow when it keeps appearing in an agent's context and
+        should not.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>when</th><th>client</th><th>query</th><th>#</th>
+                     <th>match</th><th>score</th><th>trace</th></tr></thead>
+          <tbody>
+            {% for r in retrievals %}
+              <tr>
+                <td class="mono">{{ r.fetched_at[:19] }}</td>
+                <td>{{ r.source }}</td>
+                <td>{{ r.query or r.operation }}</td>
+                <td>{{ r.rank }}</td>
+                <td>{{ r.match_type or "—" }}</td>
+                <td>{{ "—" if r.score is none else r.score }}</td>
+                <td class="mono">
+                  {% if r.trace_id %}
+                    <a href="{{ base }}/analytics?trace={{ r.trace_id | urlencode }}">{{ r.trace_id }}</a>
+                  {% else %}—{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </details>
+{% endif %}
+
 <p style="margin-top:18px">
   <a class="btn" href="{{ base }}/map?focus={{ entity.id | urlencode }}">Show on the map →</a>
 </p>

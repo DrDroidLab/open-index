@@ -19,6 +19,7 @@ from open_index.schema import DocType
 from open_index.storage import get_backend
 from open_index.storage.base import SearchBackend, SearchResults
 from open_index.analytics import AnalyticsStore, NullAnalyticsStore
+from open_index.tracing import current_trace_id
 
 
 @dataclass
@@ -306,6 +307,7 @@ class Brain:
                     source=source, operation="search", started=started, query=query,
                     doc_types=doc_types, result_count=results.total,
                     result_doc_types=results.doc_type_counts,
+                    results=results.results,
                 )
             return results
 
@@ -331,10 +333,14 @@ class Brain:
         results.total = len(kept)
         results.doc_type_counts = counts
         if source:
+            # `kept`, not the pre-filter rows: the trail must show what the
+            # caller actually received, or a document dropped by a confidence
+            # or validity filter would look like it was handed over.
             self._record_fetch(
                 source=source, operation="search", started=started, query=query,
                 doc_types=doc_types, result_count=results.total,
                 result_doc_types=results.doc_type_counts,
+                results=kept,
             )
         return results
 
@@ -356,12 +362,24 @@ class Brain:
                 source=source, operation="get_entity", started=started,
                 entity_id=entity_id, result_count=int(entity is not None),
                 result_doc_types=({entity.doc_type: 1} if entity else {}),
+                # A lookup returns a document too, so it belongs in the same
+                # per-result trail as a search — otherwise a trace shows the
+                # searches an agent ran but not the documents it then opened.
+                results=([{"id": entity.id, "doc_type": entity.doc_type,
+                           "score": None,
+                           "match": {"type": "lookup", "keyword_score": None,
+                                     "semantic_score": None}}]
+                         if entity else []),
             )
         return entity
 
     def record_fetch(self, *, started: float, **event: Any) -> None:
         """Keep analytics best-effort so context access remains the priority."""
         try:
+            # The trace id is ambient: it enters once at the edge (an HTTP
+            # header, an MCP tool argument) rather than being threaded through
+            # every read. An explicit one still wins.
+            event.setdefault("trace_id", current_trace_id())
             self.analytics.record(duration_ms=(perf_counter() - started) * 1000, **event)
         except Exception:
             pass
@@ -375,6 +393,14 @@ class Brain:
 
     def analytics_events(self, limit: int = 100) -> list[dict[str, Any]]:
         return self.analytics.recent(limit)
+
+    def analytics_by_trace(self, trace_id: str) -> list[dict[str, Any]]:
+        """Every read made under one trace id, with the documents each returned."""
+        return self.analytics.by_trace(trace_id)
+
+    def retrievals_of(self, entity_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Which queries returned this document, most recent first."""
+        return self.analytics.retrievals_of(entity_id, limit)
 
     def counts(self) -> dict[str, int]:
         return self.backend.counts()
@@ -502,6 +528,29 @@ class Brain:
             "- `get_entity(entity_id)` — one entity plus its incoming *and* outgoing edges.\n"
             "- Start broad with a query, then narrow with `doc_types`. To enumerate a type,\n"
             "  search with an empty query and a `doc_types` filter.",
+            "\n## Choosing how to match",
+            "`search_brain(mode=...)` decides *which* documents can come back at all:\n"
+            "- `hybrid` (default) — keyword matches plus the nearest by meaning.\n"
+            "- `keyword` — literal terms only. Use for an exact name, code or id, where a\n"
+            "  near-miss is worse than no answer.\n"
+            "- `semantic` — meaning only. Use when the right words may not appear in the\n"
+            "  document at all.\n\n"
+            "Every result carries `match`, saying why it came back — `keyword`, `semantic`,\n"
+            "`both`, `filter` or `none` — with each arm's score. Read it before trusting a\n"
+            "result: a semantic-only hit at a low score is a guess, not a fact.",
+            "\n## Exact filtering",
+            '`search_brain(filters={"field": "value"})` is a hard predicate, not a ranking\n'
+            "hint: a document that does not match cannot be returned at any score. Use it\n"
+            "whenever the answer must be scoped to one account, tenant or user.\n\n"
+            "Only fields declared `filterable` can be filtered, and filtering on any other\n"
+            "field is an error rather than being ignored — so a filter never silently\n"
+            "returns everything. The error names the fields you *can* filter.",
+            "\n## Making a retrieval debuggable",
+            "Pass `trace_id=\"<your turn or request id>\"` to `search_brain` and\n"
+            "`get_entity`. Every document returned is then recoverable by that id later,\n"
+            "with its rank, score and match type — which is how a human works out\n"
+            "afterwards what this index actually fed you. Cheap to pass, impossible to\n"
+            "reconstruct if you did not.",
             "\n## Retrieval workflow",
             '1. Start with `search_brain(query="...")` using the user\'s domain terms.\n'
             "2. Narrow with `doc_types=[...]` when the concept is known.\n"

@@ -17,6 +17,65 @@
 <p class="muted">Stored in <code>~/.local/state/open-index/</code>, outside the
   brain checkout. Search text and entity ids stay on that machine.</p>
 
+<div class="card">
+  <h2>Trace lookup</h2>
+  <p class="muted">Every read carries the caller's <code>X-Trace-Id</code> header
+    (or the <code>trace_id</code> argument, over MCP). Paste one to see what that
+    turn retrieved — each query, each document, its rank, score and why it matched.</p>
+  <form method="get" action="{{ base }}/analytics"
+        style="display:flex; gap:10px; flex-wrap:wrap">
+    <input type="search" name="trace" value="{{ trace_query }}" style="flex:1; min-width:220px"
+           placeholder="trace id, e.g. turn-8f21c3">
+    <button class="btn primary" type="submit">Look up</button>
+  </form>
+</div>
+
+{% if trace_events is not none %}
+  {% if not trace_events %}
+    <div class="note">Nothing recorded under <code>{{ trace_query }}</code>.
+      Either that turn made no reads, or it did not send the id.</div>
+  {% else %}
+    <p class="muted">{{ trace_events | length }} read{{ "" if trace_events | length == 1 else "s" }}
+      under <code>{{ trace_query }}</code>.</p>
+    {% for ev in trace_events %}
+      <details class="block" open>
+        <summary>
+          <span class="mono">{{ ev.operation }}</span>
+          <span class="dim" style="font-weight:400">
+            {{ ev.query or ev.entity_id or "—" }} · {{ ev.results | length }} returned
+            · {{ ev.duration_ms }} ms · {{ ev.source }}
+          </span>
+        </summary>
+        <div class="body">
+          {% if ev.results %}
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>#</th><th>document</th><th>type</th><th>match</th>
+                           <th>score</th><th>keyword</th><th>meaning</th></tr></thead>
+                <tbody>
+                  {% for r in ev.results %}
+                    <tr>
+                      <td>{{ r.rank }}</td>
+                      <td class="mono"><a href="{{ base }}/entity/{{ r.entity_id | urlencode }}">{{ r.entity_id }}</a></td>
+                      <td>{{ r.doc_type or "—" }}</td>
+                      <td>{{ r.match_type or "—" }}</td>
+                      <td>{{ "—" if r.score is none else r.score }}</td>
+                      <td>{{ "—" if r.keyword_score is none else r.keyword_score }}</td>
+                      <td>{{ "—" if r.semantic_score is none else r.semantic_score }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="muted">Returned nothing.</p>
+          {% endif %}
+        </div>
+      </details>
+    {% endfor %}
+  {% endif %}
+{% endif %}
+
 <div class="grid cols-4" style="margin:14px 0 18px">
   <div class="stat"><div class="n">{{ stats.total_fetches | comma }}</div><div class="k">fetches</div></div>
   <div class="stat"><div class="n">{{ stats.failed_fetches | comma }}</div><div class="k">failed</div></div>

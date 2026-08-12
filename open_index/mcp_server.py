@@ -53,6 +53,20 @@ def _load_server_class():
         ) from exc
 
 
+def _trace_scope(trace_id: Optional[str]):
+    """Bind a caller-supplied trace id, or leave any ambient one alone.
+
+    nullcontext rather than trace(None) when absent: entering the context with
+    None would *clear* a trace already set at the transport edge, so an omitted
+    argument would silently detach the read from its turn.
+    """
+    from contextlib import nullcontext
+
+    from open_index.tracing import trace
+
+    return trace(trace_id) if trace_id else nullcontext()
+
+
 def build_server(brain: Brain, read_only: bool = False):
     """Construct an MCP server bound to an open brain.
 
@@ -101,6 +115,7 @@ def build_server(brain: Brain, read_only: bool = False):
         limit: int = 20,
         mode: str = "hybrid",
         filters: Optional[dict[str, Any]] = None,
+        trace_id: Optional[str] = None,
     ) -> str:
         """Search the brain.
 
@@ -123,11 +138,17 @@ def build_server(brain: Brain, read_only: bool = False):
         Each result carries `match`, saying why it came back: type is
         "keyword", "semantic", "both", "filter" or "none", with the normalised
         score from each arm.
+
+        `trace_id` ties this read to the turn that caused it. Pass your own
+        request or conversation id and every document returned here is
+        recoverable later by that id, with its rank, score and match type —
+        which is how you work out afterwards what the index actually fed you.
         """
-        results = brain.search(
-            query=query, doc_types=doc_types, limit=limit, source="mcp",
-            mode=mode, filters=filters,
-        )
+        with _trace_scope(trace_id):
+            results = brain.search(
+                query=query, doc_types=doc_types, limit=limit, source="mcp",
+                mode=mode, filters=filters,
+            )
         return json.dumps(
             {
                 "query": query,
@@ -141,10 +162,15 @@ def build_server(brain: Brain, read_only: bool = False):
         )
 
     @server.tool()
-    def get_entity(entity_id: str) -> str:
+    def get_entity(entity_id: str, trace_id: Optional[str] = None) -> str:
         """Fetch a single entity by id (e.g. "product:checkout"), including its
-        outgoing and incoming relationships with their edge meanings."""
-        entity = brain.get_entity(entity_id, source="mcp")
+        outgoing and incoming relationships with their edge meanings.
+
+        `trace_id` ties this lookup to the turn that caused it, so it appears
+        alongside the searches in that trace rather than the trail showing what
+        was searched but not what was then opened."""
+        with _trace_scope(trace_id):
+            entity = brain.get_entity(entity_id, source="mcp")
         if entity is None:
             return json.dumps({"error": f"no entity '{entity_id}'"})
         payload = entity.to_json()
