@@ -164,14 +164,28 @@ def test_empty_provenance_block_counts_as_unattributed(brain):
 # -- search modes -------------------------------------------------------------
 
 
-@pytest.mark.parametrize("mode,expected",
-                         [("Hybrid", None), ("Keyword", 0.0), ("Semantic", 1.0)])
-def test_search_mode_weights(mode, expected):
-    assert view.semantic_weight_for(mode) == expected
+@pytest.mark.parametrize("label,expected",
+                         [("Hybrid", "hybrid"), ("Keyword", "keyword"),
+                          ("Semantic", "semantic")])
+def test_search_labels_map_to_backend_modes(label, expected):
+    """These used to map to a semantic_weight, which let 'Keyword' return
+    documents that matched no keyword. The label now selects the mode."""
+    assert view.backend_mode_for(label) == expected
 
 
-def test_unknown_search_mode_falls_back_to_configured(brain):
-    assert view.semantic_weight_for("nonsense") is None
+def test_unknown_search_mode_falls_back_to_hybrid(brain):
+    assert view.backend_mode_for("nonsense") == "hybrid"
+
+
+def test_match_badge_describes_why_a_result_came_back():
+    badge = view.match_badge({"type": "both", "keyword_score": 0.9,
+                              "semantic_score": 0.4})
+    assert "keyword" in badge["label"] and "meaning" in badge["label"]
+    assert badge["keyword_score"] == 0.9
+
+
+def test_match_badge_is_absent_when_the_backend_sent_none():
+    assert view.match_badge(None) is None
 
 
 def test_color_for_unknown_doc_type_is_the_default(brain):

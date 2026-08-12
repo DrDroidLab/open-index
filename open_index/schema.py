@@ -78,6 +78,13 @@ class FieldSpec(BaseModel):
     boost: float = 1.0
     required: bool = False
     description: Optional[str] = None
+    # Opt-in to exact filtering (`filters={"tenant_id": "acme"}`), which is a
+    # hard predicate in the backend query rather than anything ranked. Opt-in
+    # because it is a promise: a filterable field is indexed for equality and
+    # filtering on a field that is not declared filterable raises instead of
+    # quietly returning everything. That failure mode is the whole point when a
+    # filter is carrying a tenant or user boundary.
+    filterable: bool = False
 
     @field_validator("boost")
     @classmethod

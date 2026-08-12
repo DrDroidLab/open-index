@@ -190,11 +190,13 @@ def page_explore(request, name: str, brain: Brain) -> dict[str, Any]:
         try:
             found = brain.search(
                 query=query, doc_types=selected or None, limit=50,
-                semantic_weight=view.semantic_weight_for(mode), source="ui")
+                mode=view.backend_mode_for(mode), source="ui")
             ctx["results"] = {
                 "total": found.total,
                 "rows": [
-                    {**r, "color": view.color_for(brain, r["doc_type"])}
+                    {**r,
+                     "color": view.color_for(brain, r["doc_type"]),
+                     "badge": view.match_badge(r.get("match"))}
                     for r in found.results
                 ],
             }

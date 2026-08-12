@@ -58,6 +58,14 @@
         <a class="row" href="{{ base }}/entity/{{ r.id | urlencode }}">
           <span class="dot" style="background:{{ r.color }}"></span>
           <span class="title">{{ r.name }}</span>
+          {% if r.badge %}
+            {# Why this came back, not just how highly it ranked — the thing you
+               need when an agent retrieved something surprising. #}
+            <span class="badge" style="border-color:{{ r.badge.color }}; color:{{ r.badge.color }}"
+                  title="keyword {{ r.badge.keyword_score }} · meaning {{ r.badge.semantic_score }}">
+              {{ r.badge.label }}
+            </span>
+          {% endif %}
           <span class="meta">{{ r.doc_type }}</span>
         </a>
       {% endfor %}

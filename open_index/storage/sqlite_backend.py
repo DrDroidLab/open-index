@@ -26,8 +26,11 @@ from open_index.models import Entity, Relationship
 from open_index.schema import DocType
 from open_index.storage.base import (
     NO_EMBEDDING_PROVIDER_WARNING,
+    SEARCH_MODES,
     SearchResults,
+    _match_info,
     iter_semantic_entities,
+    resolve_filters,
     semantic_doc_types,
     semantic_fields_in_scope,
     semantic_text_for,
@@ -451,17 +454,45 @@ class SQLiteBackend:
             return ""
         return " OR ".join(f"{t}*" for t in terms)
 
-    def _entities_in_scope(self, doc_types: Optional[list[str]], limit: int) -> list[sqlite3.Row]:
+    @staticmethod
+    def _filter_sql(pairs: list[tuple[str, Any]]) -> tuple[str, list[Any]]:
+        """SQL for an exact-match filter over schema fields.
+
+        json_extract rather than a column because schema fields live inside the
+        stored JSON blob. They sit at its top level, not under a `fields` key —
+        the blob is the flat shape `_fields_of` reads back — so the path is
+        `$.<name>`. A missing field extracts to NULL and `NULL = ?` is never
+        true, so an entity of a doc_type that does not model the field is
+        excluded, which is the safe direction for a filter that may be carrying
+        a tenant boundary.
+        """
+        if not pairs:
+            return "", []
+        sql = "".join(" AND json_extract(e.data, '$.' || ?) = ?" for _ in pairs)
+        params: list[Any] = []
+        for name, value in pairs:
+            params.extend([name, value])
+        return sql, params
+
+    def _entities_in_scope(self, doc_types: Optional[list[str]], limit: int,
+                           filter_pairs: Optional[list[tuple[str, Any]]] = None
+                           ) -> list[sqlite3.Row]:
+        """Rows the semantic arm may consider.
+
+        Filters are applied here too, not only on the keyword query: this is the
+        set the vector scan ranks, and leaving it unfiltered would let a
+        semantic search return exactly the rows a filter was meant to exclude.
+        """
+        filter_sql, filter_params = self._filter_sql(filter_pairs or [])
+        where = ["1=1"]
+        params: list[Any] = []
         if doc_types:
-            placeholders = ",".join("?" * len(doc_types))
-            return self._conn.execute(
-                f"SELECT id, doc_type, name, data FROM entities "
-                f"WHERE doc_type IN ({placeholders}) ORDER BY name LIMIT ?",
-                list(doc_types) + [limit],
-            ).fetchall()
+            where.append("doc_type IN (%s)" % ",".join("?" * len(doc_types)))
+            params.extend(doc_types)
         return self._conn.execute(
-            "SELECT id, doc_type, name, data FROM entities ORDER BY name LIMIT ?",
-            (limit,),
+            f"SELECT id, doc_type, name, data FROM entities e "
+            f"WHERE {' AND '.join(where)}{filter_sql} ORDER BY name LIMIT ?",
+            params + filter_params + [limit],
         ).fetchall()
 
     def search(
@@ -471,13 +502,23 @@ class SQLiteBackend:
         limit: int = 20,
         counts_only: bool = False,
         semantic_weight: Optional[float] = None,
+        mode: str = "hybrid",
+        filters: Optional[dict[str, Any]] = None,
     ) -> SearchResults:
+        if mode not in SEARCH_MODES:
+            raise ValueError(f"unknown search mode {mode!r} — expected one of "
+                             + ", ".join(SEARCH_MODES))
         w = semantic_weight if semantic_weight is not None else (
             self._config.search.semantic_weight if self._config else 0.3)
+        # Raises on an undeclared field rather than filtering nothing.
+        filter_pairs = resolve_filters(self._doc_types, filters, doc_types)
         params: list[Any] = []
         where: list[str] = []
 
-        match_expr = self._fts_query(query) if query else ""
+        # A keyword search must not run the FTS query in semantic mode: the
+        # candidate set is the vector neighbourhood, and a keyword hit that is
+        # not near the query has no business being in it.
+        match_expr = self._fts_query(query) if (query and mode != "semantic") else ""
         if match_expr:
             base = (
                 "FROM entities_fts "
@@ -493,6 +534,12 @@ class SQLiteBackend:
             params.extend(doc_types)
         where_sql = (" AND " + " AND ".join(where)) if where else ""
 
+        # Appended after the doc_type clause so the filter constrains the counts
+        # and every candidate query below, not just the rows finally shown.
+        filter_sql, filter_params = self._filter_sql(filter_pairs)
+        where_sql += filter_sql
+        params += filter_params
+
         # Per-doc_type aggregate counts (always computed — the map's spoke data).
         count_rows = self._conn.execute(
             f"SELECT e.doc_type AS dt, COUNT(*) AS n {base}{where_sql} GROUP BY e.doc_type",
@@ -504,13 +551,20 @@ class SQLiteBackend:
         if counts_only:
             return SearchResults(total=total, results=[], doc_type_counts=doc_type_counts)
 
-        semantic_scope = query and w > 0 and semantic_fields_in_scope(self._doc_types, doc_types)
+        # In semantic mode the vector arm runs whatever the weight says: the
+        # weight blends the two arms in hybrid, and letting a configured 0.0
+        # silence an explicitly semantic search would answer a different
+        # question than the one asked.
+        wants_semantic = mode == "semantic" or (mode == "hybrid" and w > 0)
+        semantic_scope = (query and wants_semantic
+                          and semantic_fields_in_scope(self._doc_types, doc_types))
         provider = self._get_embedding_provider() if semantic_scope else None
         if semantic_scope and provider is not None:
             # Brute-force semantic scan over entities in scope. This is the SQLite
             # equivalent of a vector search; it is intentionally simple and capped
             # so it stays practical until sqlite-vec is adopted.
-            rows = self._entities_in_scope(doc_types, limit=_MAX_SEMANTIC_SCAN)
+            rows = self._entities_in_scope(doc_types, limit=_MAX_SEMANTIC_SCAN,
+                                           filter_pairs=filter_pairs)
             query_emb = provider.encode([query])[0]
             query_terms = [
                 t for t in "".join(c if c.isalnum() else " " for c in query.lower()).split() if t
@@ -553,14 +607,26 @@ class SQLiteBackend:
             # so `total`/`doc_type_counts` mean the same thing on both backends.
             # ((cos+1)/2 is > 0 for virtually every vector, so raw "sem > 0"
             # would count every embedded entity as a match.)
+            # Membership is tracked, not inferred from the scores: cosine is
+            # positive for very nearly every vector, so "sem > 0" would call the
+            # whole index a semantic match. A document is a semantic match when
+            # it is among the K nearest — that is what the arm actually
+            # retrieved.
             K = max(limit, 50)
             candidates: dict[str, tuple[float, float, sqlite3.Row, dict]] = {}
-            for kw, sem, r, data in scored:
-                if kw > 0:
-                    candidates[r["id"]] = (kw, sem, r, data)
-            for kw, sem, r, data in sorted(scored, key=lambda s: -s[1])[:K]:
-                if sem > 0:
-                    candidates.setdefault(r["id"], (kw, sem, r, data))
+            kw_hits: set[str] = set()
+            sem_hits: set[str] = set()
+
+            if mode in ("hybrid", "keyword"):
+                for kw, sem, r, data in scored:
+                    if kw > 0:
+                        candidates[r["id"]] = (kw, sem, r, data)
+                        kw_hits.add(r["id"])
+            if mode in ("hybrid", "semantic"):
+                for kw, sem, r, data in sorted(scored, key=lambda s: -s[1])[:K]:
+                    if sem > 0:
+                        candidates.setdefault(r["id"], (kw, sem, r, data))
+                        sem_hits.add(r["id"])
 
             final = []
             for kw, sem, r, data in candidates.values():
@@ -568,15 +634,22 @@ class SQLiteBackend:
                 # (cos+1)/2 is already bounded to [0, 1]; keep it absolute so a
                 # weak best-match doesn't inflate the semantic arm.
                 sem_norm = sem if sem_max else 0.0
-                score = (1 - w) * kw_norm + w * sem_norm
-                final.append((score, r, data))
+                if mode == "keyword":
+                    score = kw_norm
+                elif mode == "semantic":
+                    score = sem_norm
+                else:
+                    score = (1 - w) * kw_norm + w * sem_norm
+                final.append((score, kw_norm, sem_norm, r, data))
             # Highest combined score first; stable by name for ties.
-            final.sort(key=lambda s: (-s[0], s[1]["name"]))
+            final.sort(key=lambda s: (-s[0], s[3]["name"]))
             picked = final[:limit]
             results = [
                 {"id": r["id"], "doc_type": r["doc_type"], "name": r["name"],
-                 "score": round(score, 3), "entity": data}
-                for (score, r, data) in picked
+                 "score": round(score, 3), "entity": data,
+                 "match": _match_info(r["id"] in kw_hits, r["id"] in sem_hits,
+                                      kw_norm, sem_norm)}
+                for (score, kw_norm, sem_norm, r, data) in picked
             ]
             doc_type_counts = {}
             for _kw, _sem, r, _data in candidates.values():
@@ -611,10 +684,12 @@ class SQLiteBackend:
                 scored.append((score, r, data))
             # Highest weighted score first; stable by name for ties.
             scored.sort(key=lambda s: (-s[0], s[1]["name"]))
+            top = scored[0][0] if scored else 0.0
             picked = scored[:limit]
             results = [
                 {"id": r["id"], "doc_type": r["doc_type"], "name": r["name"],
-                 "score": round(score, 3), "entity": data}
+                 "score": round(score, 3), "entity": data,
+                 "match": _match_info(True, False, score / top if top else 0.0, 0.0)}
                 for (score, r, data) in picked
             ]
         else:
@@ -623,9 +698,13 @@ class SQLiteBackend:
                 f"ORDER BY e.name LIMIT ?",
                 params + [limit],
             ).fetchall()
+            # Nothing was ranked here — this is a listing, or a pure filter.
+            # Saying so beats implying a relevance match that never happened.
             results = [
                 {"id": r["id"], "doc_type": r["doc_type"], "name": r["name"],
-                 "score": 0.0, "entity": json.loads(r["data"])}
+                 "score": 0.0, "entity": json.loads(r["data"]),
+                 "match": _match_info(False, False, 0.0, 0.0,
+                                      filtered=bool(filter_pairs))}
                 for r in rows
             ]
 

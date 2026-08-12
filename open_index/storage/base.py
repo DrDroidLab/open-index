@@ -72,6 +72,13 @@ def iter_semantic_entities(
             yield entity
 
 
+# The three ways a search can be run. `mode` is not sugar over semantic_weight:
+# it decides which candidates exist at all. Weighting alone would let a document
+# that matched no keyword into a keyword search at score 0, which is a wrong
+# answer rather than a low-ranked one.
+SEARCH_MODES = ("hybrid", "keyword", "semantic")
+
+
 @dataclass
 class SearchResults:
     total: int
@@ -79,6 +86,85 @@ class SearchResults:
     # Per-doc_type counts, always populated (the aggregation the map spokes use).
     doc_type_counts: dict[str, int] = field(default_factory=dict)
     limited: bool = False
+
+
+# Every result dict carries `match`, so a caller (and anyone debugging an
+# agent's memory) can see *why* a document came back rather than only how highly
+# it ranked:
+#
+#   {"type": "keyword" | "semantic" | "both" | "filter" | "none",
+#    "keyword_score": float,     # 0.0 when this arm did not match
+#    "semantic_score": float}    # cosine rescaled to [0, 1]
+#
+# "semantic" means the document was among the nearest by vector — NOT that its
+# cosine was above zero, which is true of very nearly every embedded document
+# and would label the entire index a semantic match.
+#
+# "filter" and "none" are the honest answers when nothing was ranked at all: a
+# pure filter, or a plain listing. Calling those a keyword match at score 0
+# would misreport why the document came back, which is the one thing this field
+# exists to get right.
+
+
+def _match_info(keyword: bool, semantic: bool, keyword_score: float,
+                semantic_score: float, filtered: bool = False) -> dict[str, Any]:
+    """The `match` block for one result."""
+    if keyword and semantic:
+        kind = "both"
+    elif keyword:
+        kind = "keyword"
+    elif semantic:
+        kind = "semantic"
+    else:
+        kind = "filter" if filtered else "none"
+    return {
+        "type": kind,
+        "keyword_score": round(float(keyword_score), 3),
+        "semantic_score": round(float(semantic_score), 3),
+    }
+
+
+def resolve_filters(
+    doc_types_map: dict[str, DocType],
+    filters: Optional[dict[str, Any]],
+    scope: Optional[list[str]] = None,
+) -> list[tuple[str, Any]]:
+    """Validate a strict filter against the schema, or raise.
+
+    Fails closed on purpose. A filter is the one search input that may be
+    carrying a security boundary — a tenant, a user, an account — and the
+    dangerous outcome is not an error but a silent one: a typo'd or undeclared
+    field that quietly matches nothing, and so filters nothing, and returns the
+    whole index.
+
+    A field must be declared `filterable: true` on at least one doc_type in
+    scope. Entities of a type that does not carry the field never match, which
+    falls out of the backends comparing a missing value: this is deliberate, and
+    is why a filter cannot leak across doc_types that do not model it.
+    """
+    if not filters:
+        return []
+
+    in_scope = [dt for name, dt in doc_types_map.items()
+                if not scope or name in scope]
+    allowed = {
+        f.name
+        for dt in in_scope
+        for f in dt.fields
+        if f.filterable
+    }
+
+    unknown = [k for k in filters if k not in allowed]
+    if unknown:
+        known = ", ".join(sorted(allowed)) or "none"
+        raise ValueError(
+            "cannot filter on " + ", ".join(f"{k!r}" for k in sorted(unknown))
+            + f" — filterable fields here are: {known}. "
+            "Declare `filterable: true` on the field in its doc_type to filter "
+            "by it. (Refusing rather than ignoring: a filter that is silently "
+            "dropped returns everything.)"
+        )
+    return sorted(filters.items())
 
 
 @runtime_checkable
@@ -126,10 +212,27 @@ class SearchBackend(Protocol):
         limit: int = 20,
         counts_only: bool = False,
         semantic_weight: Optional[float] = None,
+        mode: str = "hybrid",
+        filters: Optional[dict[str, Any]] = None,
     ) -> SearchResults:
-        """Search entities. `semantic_weight` overrides the config's
-        search.semantic_weight for this call: 0.0 = keyword-only,
-        1.0 = semantic-only, None = the brain's configured default."""
+        """Search entities.
+
+        `mode` selects which candidates exist:
+            hybrid    keyword hits UNION the nearest by vector (the default)
+            keyword   keyword hits only
+            semantic  nearest by vector only
+
+        `semantic_weight` blends the two arms *within* hybrid: 0.0 leans
+        keyword, 1.0 leans semantic, None uses the brain's configured default.
+        It does not decide membership — that is `mode`, so that a keyword search
+        cannot return something which matched no keyword.
+
+        `filters` is an exact-match predicate applied in the query itself, never
+        after ranking. Every field in it must be declared `filterable: true`;
+        see `resolve_filters`, which raises rather than ignoring an unknown one.
+
+        Each result dict carries `match` — see the note above SearchResults.
+        """
         ...
 
     def counts(self) -> dict[str, int]:

@@ -99,15 +99,40 @@ def build_server(brain: Brain, read_only: bool = False):
         query: Optional[str] = None,
         doc_types: Optional[list[str]] = None,
         limit: int = 20,
+        mode: str = "hybrid",
+        filters: Optional[dict[str, Any]] = None,
     ) -> str:
-        """Search the brain. `query` is free text; `doc_types` optionally filters
-        to specific concepts (e.g. ["product", "issue"]). Returns matching
-        entities ranked by relevance, plus per-doc_type counts."""
+        """Search the brain.
+
+        `query` is free text. `doc_types` narrows to specific concepts
+        (e.g. ["product", "issue"]).
+
+        `mode` chooses how matching works:
+          hybrid    (default) keyword matches plus the nearest by meaning
+          keyword   literal term matching only — use when the query is an exact
+                    name, code or identifier and a near-miss is not acceptable
+          semantic  meaning only — use when the right words may not appear in
+                    the document at all
+
+        `filters` is an exact-match constraint, e.g. {"tenant_id": "acme"}. It
+        is a hard predicate, not a ranking hint: non-matching documents cannot
+        appear at any score. Only fields declared `filterable` can be used, and
+        filtering on any other field is an error rather than being ignored — so
+        a filter never silently fails open.
+
+        Each result carries `match`, saying why it came back: type is
+        "keyword", "semantic", "both", "filter" or "none", with the normalised
+        score from each arm.
+        """
         results = brain.search(
-            query=query, doc_types=doc_types, limit=limit, source="mcp"
+            query=query, doc_types=doc_types, limit=limit, source="mcp",
+            mode=mode, filters=filters,
         )
         return json.dumps(
             {
+                "query": query,
+                "mode": mode,
+                "filters": filters or {},
                 "total": results.total,
                 "doc_type_counts": results.doc_type_counts,
                 "results": results.results,
@@ -352,6 +377,12 @@ def build_server(brain: Brain, read_only: bool = False):
                 boost      — number > 0, default 1. Search weight: a hit in a
                              boost-6 field outranks a boost-1 hit 6-to-1.
                 required   — true to reject entities missing it
+                filterable — true to allow exact filtering on this field via
+                             search_brain(filters=...). Set it on anything that
+                             identifies *whose* data a document is (a tenant,
+                             account or user id): filtering is refused on fields
+                             that do not declare it, so that a filter can never
+                             fail open.
                 Convention: a high-boost `name` field, plus a `description` field
                 with search "semantic" so entities are findable by meaning.
             relationships: The edge vocabulary for this type, each

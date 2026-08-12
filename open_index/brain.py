@@ -268,8 +268,15 @@ class Brain:
         min_confidence: float = 0.0,
         as_of: Optional[str] = None,
         source: Optional[str] = None,
+        mode: str = "hybrid",
+        filters: Optional[dict[str, Any]] = None,
     ) -> SearchResults:
         """Search, optionally filtered by trust and by validity window.
+
+        `mode` is "hybrid" (default), "keyword" or "semantic", and decides which
+        candidates exist rather than merely how they are weighted. `filters` is
+        an exact-match predicate pushed into the backend query; filtering on a
+        field not declared `filterable` raises.
 
         `min_confidence` drops claims that cannot clear the floor, INCLUDING
         unattributed ones — see `Entity.trusted`. `as_of` drops claims whose
@@ -284,7 +291,8 @@ class Brain:
         started = perf_counter()
         try:
             results = self.backend.search(query, doc_types, limit, counts_only,
-                                          semantic_weight=semantic_weight)
+                                          semantic_weight=semantic_weight,
+                                          mode=mode, filters=filters)
         except Exception as exc:
             if source:
                 self._record_fetch(
