@@ -186,6 +186,35 @@ def build_server(brain: Brain, read_only: bool = False):
         }
         return json.dumps(payload, indent=2)
 
+    @server.tool()
+    def get_entities(entity_ids: list[str], trace_id: Optional[str] = None) -> str:
+        """Fetch several entities by id in one call.
+
+        Prefer this over calling get_entity in a loop: on a remote endpoint the
+        loop costs one round trip per id for the same answer. Ids that do not
+        exist are omitted rather than returned as nulls — check the count."""
+        with _trace_scope(trace_id):
+            found = brain.get_entities(entity_ids, source="mcp")
+        return json.dumps(
+            {"requested": len(entity_ids), "found": len(found),
+             "missing": sorted(set(entity_ids) - {e.id for e in found}),
+             "entities": [e.to_json() for e in found]},
+            indent=2,
+        )
+
+    @server.tool()
+    def lookup_by_external_id(external_id: str, trace_id: Optional[str] = None) -> str:
+        """Find an entity by the id its source system knows it by.
+
+        Use when you hold your own identifier — a ticket key, a CRM record id, a
+        UUID — and do not know this index's `<doc_type>:<slug>` id. Set
+        `external_id` when writing to make an entity findable this way."""
+        with _trace_scope(trace_id):
+            entity = brain.get_by_external_id(external_id, source="mcp")
+        if entity is None:
+            return json.dumps({"error": f"no entity with external_id '{external_id}'"})
+        return json.dumps(entity.to_json(), indent=2)
+
     # ---- write ------------------------------------------------------------ #
 
     if read_only:
@@ -196,6 +225,7 @@ def build_server(brain: Brain, read_only: bool = False):
         doc_type: str,
         id: str,
         name: str = "",
+        external_id: Optional[str] = None,
         fields: Optional[dict[str, Any]] = None,
         # dict[str, Any], not dict[str, str]: an edge may carry a nested
         # "provenance" object. The MCP SDK builds this tool's input schema from
@@ -214,6 +244,10 @@ def build_server(brain: Brain, read_only: bool = False):
             id: Must be "<doc_type>:<slug>", e.g. "issue:payment-declined". The
                 prefix has to match `doc_type`. Chars: a-z A-Z 0-9 . _ -
             name: Human-readable label.
+            external_id: The id the source system knows this by — a ticket key,
+                a CRM record id, a UUID. Free-form, and optional. Set it and
+                `lookup_by_external_id` finds this entity without the caller
+                needing to know or construct the `<doc_type>:<slug>` id.
             fields: The doc_type's schema fields, e.g.
                 {"severity": "high", "status": "open"}. Do NOT put id/doc_type/
                 name/related_to in here — they are separate arguments.
@@ -281,6 +315,7 @@ def build_server(brain: Brain, read_only: bool = False):
                 id=id,
                 doc_type=doc_type,
                 name=name,
+                external_id=external_id,
                 fields=fields or {},
                 related_to=[
                     Relationship(
@@ -375,6 +410,29 @@ def build_server(brain: Brain, read_only: bool = False):
             "errors": errors[:50],
             "paths": [str(p) for p in result.paths],
         }, indent=2)
+
+    @server.tool()
+    def delete_entity(entity_id: str) -> str:
+        """Delete one entity, its edges in both directions, and its file.
+
+        Irreversible, and the file goes too for a `storage: file` doc_type —
+        removing only the index row would resurrect the entity on the next
+        reindex, which is a pause, not a delete.
+
+        Edges pointing *at* it are removed as well: an edge left dangling still
+        renders on the map and in neighbour lists, and reads as corruption
+        rather than as a deletion.
+
+        Prefer correcting an entity with put_entity over deleting it — an id
+        that once resolved and now 404s breaks anything holding a reference."""
+        try:
+            deleted = brain.delete_entity(entity_id, source="mcp")
+        except RuntimeError as exc:
+            return json.dumps({"error": str(exc)})
+        if not deleted:
+            return json.dumps({"deleted": False,
+                               "error": f"no entity '{entity_id}'"})
+        return json.dumps({"deleted": True, "entity_id": entity_id})
 
     @server.tool()
     def create_doc_type(

@@ -336,3 +336,40 @@ def test_model_guide_distinguishes_schema_from_data():
     assert "schema" in text
 
 
+
+
+# -- the help tab's tool list must match the server's actual tools -------------
+
+
+def _documented_tool_names():
+    """Tool names as the help tab lists them, e.g. 'search_brain(...)'."""
+    return {name.split("(")[0]
+            for name, _ in list(view.READ_TOOLS) + list(view.WRITE_TOOLS)}
+
+
+def test_the_help_tab_lists_exactly_the_tools_the_server_registers(brain):
+    """A stale tool list on the page is worse than none: it tells a reader an
+    agent can do something it cannot, or hides something it can. This assertion
+    is the only thing keeping the two in step.
+    """
+    pytest.importorskip("mcp")
+    import asyncio
+
+    from open_index.mcp_server import build_server
+
+    server = build_server(brain)
+    registered = {t.name for t in asyncio.run(server.list_tools())}
+    # navigation_guidelines is described in prose on the page, not as a row.
+    assert _documented_tool_names() | {"navigation_guidelines"} == registered
+
+
+def test_the_read_only_tools_are_exactly_the_documented_read_ones(brain):
+    pytest.importorskip("mcp")
+    import asyncio
+
+    from open_index.mcp_server import build_server
+
+    server = build_server(brain, read_only=True)
+    registered = {t.name for t in asyncio.run(server.list_tools())}
+    documented = {name.split("(")[0] for name, _ in view.READ_TOOLS}
+    assert documented | {"navigation_guidelines"} == registered

@@ -46,8 +46,8 @@ logger = logging.getLogger("open_index.storage.opensearch")
 # Reserved top-level keys; everything else on an entity is a schema field.
 # `embedding` is reserved so user schema fields can never collide with the vector
 # payload stored at the top level of each OpenSearch document.
-_RESERVED_KEYS = {"id", "doc_type", "name", "related_to", "embedding",
-                  "provenance", "valid_from", "valid_to"}
+_RESERVED_KEYS = {"id", "doc_type", "name", "external_id", "related_to",
+                  "embedding", "provenance", "valid_from", "valid_to"}
 _MAX_ALL = 10_000  # cap for all_entities / relationship scans
 
 
@@ -110,6 +110,9 @@ class OpenSearchBackend:
                 "date_detection": False,
                 "properties": {
                     "id": {"type": "keyword"},
+                    # Exact-match only: it is an identifier a caller looks up
+                    # by, never something to tokenise and rank.
+                    "external_id": {"type": "keyword"},
                     "doc_type": {"type": "keyword"},
                     "name": {"type": "text", "fields": {"kw": {"type": "keyword"}}},
                     "related_to": {
@@ -152,6 +155,9 @@ class OpenSearchBackend:
                 "date_detection": False,
                 "properties": {
                     "id": {"type": "keyword"},
+                    # Exact-match only: it is an identifier a caller looks up
+                    # by, never something to tokenise and rank.
+                    "external_id": {"type": "keyword"},
                     "doc_type": {"type": "keyword"},
                     "name": {"type": "text", "fields": {"kw": {"type": "keyword"}}},
                     "related_to": {
@@ -207,6 +213,11 @@ class OpenSearchBackend:
             ],
             "fields": dict(entity.fields),
         }
+        # This backend maps fields explicitly, so anything not named here is
+        # dropped on write — which for an id a caller looks entities up by would
+        # be a lookup that silently never matches.
+        if entity.external_id:
+            doc["external_id"] = entity.external_id
         if entity.provenance is not None:
             doc["provenance"] = entity.provenance.model_dump(exclude_none=True)
         # Validity bounds decide whether a claim holds at a given instant; drop
@@ -247,7 +258,7 @@ class OpenSearchBackend:
                 for r in source.get("related_to", [])
             ],
         }
-        for key in ("provenance", "valid_from", "valid_to"):
+        for key in ("external_id", "provenance", "valid_from", "valid_to"):
             if source.get(key):
                 flat[key] = source[key]
         flat.update(source.get("fields", {}))
@@ -716,6 +727,50 @@ class OpenSearchBackend:
         return SearchResults(
             total=total, results=results, doc_type_counts=doc_type_counts, limited=total > limit,
         )
+
+    def get_by_external_id(self, external_id: str) -> Optional[Entity]:
+        if not external_id:
+            return None
+        res = self._client.search(index=self.index, body={
+            "size": 1,
+            "query": {"term": {"external_id": external_id}},
+            # Deterministic when a caller has reused an external id: the same
+            # lookup must give the same answer twice.
+            "sort": [{"id": "asc"}],
+        })
+        hits = res["hits"]["hits"]
+        return self.doc_to_entity(hits[0]["_source"]) if hits else None
+
+    def delete_entity(self, entity_id: str) -> bool:
+        from opensearchpy.exceptions import NotFoundError
+
+        try:
+            self._client.delete(index=self.index, id=entity_id, refresh=True)
+        except NotFoundError:
+            return False
+        # Edges live on the source document, so removing an entity does not
+        # remove the edges pointing *at* it. Strip those too, or the deleted id
+        # keeps appearing as an incoming neighbour on documents that survive.
+        self._client.update_by_query(
+            index=self.index,
+            body={
+                "query": {"nested": {
+                    "path": "related_to",
+                    "query": {"term": {"related_to.target": entity_id}},
+                    "ignore_unmapped": True,
+                }},
+                "script": {
+                    "source": (
+                        "if (ctx._source.related_to != null) {"
+                        "  ctx._source.related_to.removeIf(r -> r.target == params.t) }"
+                    ),
+                    "params": {"t": entity_id},
+                },
+            },
+            refresh=True,
+            conflicts="proceed",
+        )
+        return True
 
     def delete_by_doc_type(self, doc_types: list[str]) -> None:
         if not doc_types:

@@ -1,0 +1,131 @@
+---
+title: HTTP API
+description: The JSON API over a brain — the same operations MCP exposes, for everything that is not an agent.
+---
+
+MCP is how agents talk to an index. This is how everything else does: a script,
+a cron job, a service, `curl`.
+
+It mirrors the MCP tools rather than inventing a second vocabulary, and calls the
+same `Brain` methods underneath — so the two cannot disagree about what a search
+means or what a write validates.
+
+The API is served by `open-index ui`, alongside the explorer, so one process and
+one port serve the UI, the API and the MCP endpoint for every index on the host.
+
+```
+https://<host>/<index>/api/v1/...     one of several indexes
+http://localhost:8501/api/v1/...      a single brain
+```
+
+## Reading
+
+### Search
+
+```bash
+curl "$HOST/api/v1/search?q=payment+declined&mode=hybrid&limit=10"
+```
+
+| Parameter | |
+|---|---|
+| `q` | free text; omit it to list |
+| `mode` | `hybrid` (default), `keyword`, `semantic` |
+| `doc_type` | repeatable — `&doc_type=issue&doc_type=product` |
+| `filter.<field>` | exact match, e.g. `filter.tenant_id=acme` |
+| `limit` | default 20 |
+
+Every result carries `match`, saying **why** it came back:
+
+```json
+{
+  "id": "issue:payment-declined",
+  "score": 0.937,
+  "match": { "type": "both", "keyword_score": 1.0, "semantic_score": 0.79 }
+}
+```
+
+`type` is `keyword`, `semantic`, `both`, `filter` or `none`. Read it before
+trusting a result — a semantic-only hit at a low score is a guess, not a fact.
+
+**Filters are hard predicates, not ranking hints.** A document that does not
+match cannot be returned at any score, in any mode. Only fields declared
+`filterable: true` can be filtered, and filtering on any other field returns
+`400` rather than being ignored — so a filter never silently fails open. This
+matters when the filter is carrying a tenant or user boundary.
+
+### Entities
+
+```bash
+curl "$HOST/api/v1/entities/issue:payment-declined"
+curl "$HOST/api/v1/entities?id=issue:a&id=issue:b"        # batch
+curl "$HOST/api/v1/entities/by-external-id/CRM-4471"      # your own id
+curl "$HOST/api/v1/schema"
+```
+
+A single entity comes back with its relationships in **both** directions —
+incoming answers "what else points at this?", which the entity's own document
+cannot.
+
+The batch endpoint reports `missing` rather than padding the list with nulls.
+
+### Traces
+
+```bash
+curl "$HOST/api/v1/traces/turn-8f21c3"
+```
+
+Every read records the `X-Trace-Id` header it arrived with. Send one and you can
+later recover exactly which documents that turn retrieved, at what rank, with
+what score, and on what kind of match — which is how you work out afterwards what
+the index actually fed an agent.
+
+## Writing
+
+```bash
+curl -X PUT "$HOST/api/v1/entities/issue:payment-declined" \
+  -H 'Content-Type: application/json' \
+  -d '{"doc_type": "issue", "name": "Payment declined", "severity": "high",
+       "external_id": "CRM-4471"}'
+
+curl -X DELETE "$HOST/api/v1/entities/issue:payment-declined"
+```
+
+`PUT` is an upsert. The id in the URL wins: a body id that disagrees is a `400`,
+so `PUT /entities/a` can never write entity `b`.
+
+`DELETE` removes the entity, its file (for a `storage: file` doc_type), and every
+edge naming it in either direction. Deleting only the index row would leave the
+file to resurrect it on the next reindex — a pause, not a delete.
+
+Prefer correcting an entity over deleting it: an id that once resolved and now
+404s breaks anything still holding a reference.
+
+## Authentication
+
+Off unless a token is configured. Set `OPEN_INDEX_TOKEN` (or a per-index
+`OPEN_INDEX_TOKEN_<NAME>`) and **writes** require it:
+
+```bash
+curl -X PUT "$HOST/api/v1/entities/issue:x" \
+  -H "Authorization: Bearer $OPEN_INDEX_TOKEN" ...
+```
+
+Reads stay open either way, matching how the MCP endpoint already behaves. A
+deployment holding real data sets a token; one serving public demo data does not,
+and nothing changes for it.
+
+<Warning>
+With no token set, anyone who can reach the endpoint can write to it and delete
+from it. That is the right default for disposable demo data and the wrong one for
+anything you would miss.
+</Warning>
+
+## Status codes
+
+| | |
+|---|---|
+| `400` | your request — bad mode, unfilterable field, malformed body, id mismatch |
+| `401` | a write without a valid token, when one is configured |
+| `404` | unknown index, entity, or external id |
+| `422` | a well-formed entity that failed schema validation |
+| `500` | the write could not complete; the message says what state things are in |

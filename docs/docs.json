@@ -48,7 +48,8 @@
           {
             "group": "Reference",
             "pages": [
-              "reference/cli"
+              "reference/cli",
+              "reference/http-api"
             ]
           }
         ]
